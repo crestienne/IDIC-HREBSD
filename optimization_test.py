@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import warp
 from get_homography_cpu import dp_norm, window_and_normalize, FMT
 import conversions
-from Data import process_pattern
+from Data import process_pattern_no_class
 
 np.set_printoptions(
     linewidth=125,
@@ -21,8 +21,8 @@ init_type = "partial"  # Type of initial guess: "partial" or "full"
 max_iter = 50  # Maximum number of iterations
 conv_tol = 1e-3  # Convergence tolerance
 subset_size = 300  # Size of the subset cropped out from the center of the images for the optimization
-target_path = "/Users/jameslamb/Downloads/deformed.jpeg"
-reference_path = "/Users/jameslamb/Downloads/reference.jpeg"
+target_path = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/target_pattern.png"
+reference_path = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/reference_pattern.png"
 
 # ACTUAL HOMOGRAPHY: h = [0.01, 0.02, -2.0, -0.02, -0.01, 3.0, 0.0001, 0.0003]
 #####################################################
@@ -32,8 +32,11 @@ reference_path = "/Users/jameslamb/Downloads/reference.jpeg"
 # Load the images
 T = io.imread(target_path).astype(float)
 R = io.imread(reference_path)
-T = process_pattern(T, 0.0, 101, 3.0)
-R = process_pattern(R, 0.0, 101, 0.0)
+
+#normalize the patterns
+T = process_pattern_no_class(T)
+R = process_pattern_no_class(R
+                             )
 print(f"Reference - Min: {R.min()}, Max: {R.max()}, Mean: {R.mean()}, Shape: {R.shape}")
 print(f"Target - Min: {T.min()}, Max: {T.max()}, Mean: {T.mean()}, Shape: {T.shape}")
 

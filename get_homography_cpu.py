@@ -26,6 +26,7 @@ class InitType(Enum):
     PARTIAL: str = "partial"
 
 
+
 # Context manager to patch joblib to report into tqdm progress bar given as argument
 @contextlib.contextmanager
 def tqdm_joblib(tqdm_object):
@@ -164,8 +165,12 @@ def optimize(
             slice(row_start, row_start + _s),
             slice(col_start, col_start + _s),
         )
+
+
+    
         # Get the FMT-FCC initial guess precomputed items
         r_init = window_and_normalize(R[init_guess_subset_slice])
+  
         # Get the dimensions of the image
         height, width = r_init.shape
         # Create a mesh grid of log-polar coordinates
@@ -192,6 +197,7 @@ def optimize(
                     idx,
                     get_pat,
                     init_type,
+                    init_guess_subset_slice if init_type is not InitType.NONE else None,
                     r_init if init_type is not InitType.NONE else None,
                     r_fmt if init_type is not InitType.NONE else None,
                     X_fmt if init_type is not InitType.NONE else None,
@@ -215,6 +221,7 @@ def optimize(
                 idx,
                 get_pat,
                 init_type,
+                init_guess_subset_slice,  # pass the slice directly
                 r_init if init_type is not InitType.NONE else None,
                 r_fmt if init_type is not InitType.NONE else None,
                 X_fmt if init_type is not InitType.NONE else None,
@@ -265,6 +272,7 @@ def _process_single_pattern(
     idx,
     get_pat,
     init_type,
+    init_subset_slice,  # add parameter
     r_init,
     r_fmt,
     X_fmt,
@@ -286,7 +294,7 @@ def _process_single_pattern(
         h = np.zeros(8, dtype=float)
     else:
         measurement = initial_guess_run(
-            get_pat, idx, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
+            get_pat, idx, init_subset_slice, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
         )
         if init_type == InitType.FULL:
             h = conversions.xyt2h(measurement, h0)
@@ -419,6 +427,7 @@ def dp_norm(dp, xi) -> float:
 def initial_guess_run(
     get_pat: Callable,
     idx: int,
+    init_subset_slice: tuple[slice, slice],
     r_init: np.ndarray,
     r_fmt: np.ndarray,
     X_fmt: np.ndarray,
@@ -426,28 +435,16 @@ def initial_guess_run(
     x_fmt: np.ndarray,
     y_fmt: np.ndarray,
 ) -> np.ndarray:
-    """Run the initial guess optimization for a single point.
-
-    Args:
-        get_pat (Callable): Function to get the target image.
-        idx (int): Index of the target image.
-        r_init (np.ndarray): The reference subset.
-        r_FMT (np.ndarray): The Fourier-Mellin Transform of the reference subset.
-        X_fmt (np.ndarray): The x-coordinates of the reference subset in log-polar coordinates.
-        Y_fmt (np.ndarray): The y-coordinates of the reference subset in log-polar coordinates.
-        x_fmt (np.ndarray): The x-coordinates of the output image in log-polar coordinates.
-        y_fmt (np.ndarray): The y-coordinates of the output image in log-polar coordinates.
-
-    Returns:
-        measurement (np.ndarray): An initial guess of the shift and rotation of the target image. [shift[0], shift[1], theta]
-    """
+    """Run the initial guess optimization for a single point."""
     # Get the target image
     T = get_pat(idx)
+
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    t_init = window_and_normalize(T)
+    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]])
+
     # Do the angle search first
     t_init_fft = np.fft.fftshift(np.fft.fft2(t_init))
-    t_init_FMT, _ = FMT(t_init_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
+    t_init_FMT, _ = FMT(t_init_fft, X_fmt, Y_fmt, x_fmt, y_fmt, )
     cc = signal.fftconvolve(r_fmt, t_init_FMT[::-1], mode="same").real
     theta = (np.argmax(cc) - len(cc) / 2) * np.pi / len(cc)
     # Apply the rotation
@@ -527,6 +524,7 @@ def FMT(image, X, Y, x, y):
     Returns:
         np.ndarray: The signal of the Fourier-Mellin Transform. (1D array of length 2**n)
     """
+
     spline = interpolate.RectBivariateSpline(X, Y, image.real, kx=2, ky=2)
     image_polar = np.abs(spline(x, y, grid=False).reshape(image.shape))
     sig = window_and_normalize(image_polar.mean(axis=1))

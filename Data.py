@@ -152,6 +152,55 @@ class UP2:
 
         return img
 
+def process_pattern_no_class(
+    
+        img: np.ndarray,
+    ) -> np.ndarray:
+        """Cleans patterns by equalizing the histogram and normalizing.
+        Applies a bandpass filter to the patterns and truncates the extreme values.
+        Images will be in the range [0, 1].
+
+        Args:
+            img (np.ndarray): The patterns to clean. (H, W)
+            low_pass_sigma (float): The sigma for the low pass filter.
+            high_pass_sigma (float): The sigma for the high pass filter.
+            truncate_std_scale (float): The number of standard deviations to truncate.
+        Returns:
+            np.ndarray: The cleaned patterns. (N, H, W)"""
+        
+        low_pass_sigma = 2.0
+        high_pass_sigma = 101.0
+        truncate_std_scale = 3.0
+
+        # Correct dtype
+        img = img.astype(np.float32)
+
+        # Normalize
+        img = (img - img.min()) / (img.max() - img.min())
+
+        # Low pass filter
+        if low_pass_sigma > 0:
+            img = ndimage.gaussian_filter(img, low_pass_sigma)
+
+        # High pass filter
+        if high_pass_sigma > 0:
+            background = ndimage.gaussian_filter(img, high_pass_sigma)
+            img = img - background
+
+        # Truncate step
+        if truncate_std_scale > 0:
+            mean, std = img.mean(), img.std()
+            img = np.clip(
+                img,
+                mean - truncate_std_scale * std,
+                mean + truncate_std_scale * std,
+            )
+
+        # Re normalize
+        img = (img - img.min()) / (img.max() - img.min())
+
+        return img
+
 
 if __name__ == "__main__":
     up2_path = "E:/SiGe/a-C03-scan/ScanA_1024x1024.up2"
