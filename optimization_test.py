@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import warp
 from get_homography_cpu import dp_norm, window_and_normalize, FMT
 import conversions
+import ErnouldsMethod
 from Data import process_pattern_no_class
 
 np.set_printoptions(
@@ -21,8 +22,44 @@ init_type = "partial"  # Type of initial guess: "partial" or "full"
 max_iter = 50  # Maximum number of iterations
 conv_tol = 1e-3  # Convergence tolerance
 subset_size = 300  # Size of the subset cropped out from the center of the images for the optimization
+
+
+
+#======================================================
+#                    Seting Fe
+#======================================================
+# w1 = w32 , w2 = 13, w3 = 23 #make rotation in the sample frame 
+w = np.array([0, 0.0, 0.0])  # No rotation
+e = np.array([[ 0.0, 0.0, 0.0], [0.0, 0.0, 0.005], [0.0, 0.005, 0]])
+Fe = ErnouldsMethod.determineF(e , w)
+
+print('Fe is', Fe)
+
+
+EMEBSDfilename = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/EBSDpattern_Al_July222025.h5'
+EMEBSD_pattern = ErnouldsMethod.read_EMEBSD(EMEBSDfilename)
+detector_shape = ([1200, 1200])
+PCval = np.array([600, 600, 16*1000/20]) #pattern center values in pixels, defined from the upper left corner of the image, z is in mm
+#determine the reference pattern coordinates need to pass in PC and detector shape
+ref_coords = ErnouldsMethod.pattern_coords(PCval, detector_shape)
+#Read in the test cases from a csv file
+
+
+print ('-----Reference pattern generation first----')
+print(' ')
+Reference = ErnouldsMethod.generate_patterns(np.eye(3, dtype=np.float32), PCval, ref_coords, EMEBSD_pattern).astype(float)
+print('-----Target pattern generation next----')
+Target = ErnouldsMethod.generate_patterns(Fe, PCval, ref_coords, EMEBSD_pattern).astype(float)
+
+
+
+
 target_path = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/target_pattern.png"
 reference_path = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/reference_pattern.png"
+
+#save the generated patterns for visualization
+io.imsave(target_path, Target.astype(np.uint16))
+io.imsave(reference_path, Reference.astype(np.uint16))
 
 # ACTUAL HOMOGRAPHY: h = [0.01, 0.02, -2.0, -0.02, -0.01, 3.0, 0.0001, 0.0003]
 #####################################################
@@ -152,7 +189,7 @@ t_init_rot = warp.deform_image(t_init, h, h0)
 cc = signal.fftconvolve(
     r_init, t_init_rot[::-1, ::-1], mode="same"
 ).real
-shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
+shift = np.unravel_index(np.argmax(cc), cc.shape, order='F') - np.array(cc.shape) / 2
 
 fig, ax = plt.subplots(1, 3, figsize=(12, 4))
 for a in ax.ravel():
@@ -172,6 +209,8 @@ plt.close()
 
 # Store the homography
 measurement = np.array([[-shift[0], -shift[1], -theta]])
+
+print (f"Initial guess ({init_type}): {measurement}")
 # Convert the measurements to homographies
 if init_type == "full":
     p = conversions.xyt2h(measurement, h0)
