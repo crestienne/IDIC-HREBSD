@@ -250,11 +250,11 @@ def F2strain(Fe: np.ndarray, C: np.ndarray = None, small_strain: bool = False) -
     omega[..., 2, 0] = -omega[..., 0, 2]
     omega[..., 2, 1] = -omega[..., 1, 2]
 
-    # Convert to sample frame rotation
-    if Fe.ndim == 3:
-        omega = np.transpose(omega, (0, 2, 1))
-    elif Fe.ndim == 4:
-        omega = np.transpose(omega, (0, 1, 3, 2))
+    # Convert to sample frame rotation, not helpful bc working in detector frame
+    # if Fe.ndim == 3:
+    #     omega = np.transpose(omega, (0, 2, 1))
+    # elif Fe.ndim == 4:
+    #     omega = np.transpose(omega, (0, 1, 3, 2))
 
     # Apply a tolerance
     # epsilon[np.abs(epsilon) < 1e-4] = 0
@@ -321,3 +321,144 @@ def F2strain(Fe: np.ndarray, C: np.ndarray = None, small_strain: bool = False) -
         # stress[np.abs(stress) < 1e-4] = 0
 
         return epsilon, omega, stress
+    
+def F2h_CDmod(Fe: np.ndarray, x0):
+    """
+    Calculate the homography from a deformation gradient using the projection geometry.
+
+    Args:
+        Fe (np.ndarray): deformation gradient, shape (3,3) or (N,3,3)
+        x0: (x01, x02, DD)
+
+    Returns:
+        np.ndarray of shape (8,) or (N,8)
+        
+        C created on Nov20
+    """
+
+    # Convert to array
+    Fe = np.asarray(Fe)
+
+    # Handle single-matrix case
+    single_input = (Fe.ndim == 2)
+    if single_input:
+        Fe = Fe[None, ...]   # → shape (1,3,3)
+
+    # Extract pattern center offsets
+    x01, x02, DD = x0
+
+    # Pull out deformation gradient components
+    F11 = Fe[..., 0, 0]
+    F12 = Fe[..., 0, 1]
+    F13 = Fe[..., 0, 2]
+
+    F21 = Fe[..., 1, 0]
+    F22 = Fe[..., 1, 1]
+    F23 = Fe[..., 1, 2]
+
+    F31 = Fe[..., 2, 0]
+    F32 = Fe[..., 2, 1]
+
+    # Compute intermediates
+    g0 = DD + F31 * x01 + F32 * x02
+
+    g11 = DD * F11 - F31 * x01 - g0
+    g22 = DD * F22 - F32 * x02 - g0
+
+    g13 = DD * (((F11 - 1) * x01) + F12 * x02 + F13 * DD) + x01 * (DD - g0)
+    g23 = DD * (F21 * x01 + (F22 - 1) * x02 + F23 * DD) + x02 * (DD - g0)
+
+    # Homography entries
+    h11 = g11 / g0
+    h12 = (DD * F12 - F32 * x01) / g0
+    h13 = g13 / g0
+
+    h21 = (DD * F21 - F31 * x02) / g0
+    h22 = g22 / g0
+    h23 = g23 / g0
+
+    h31 = F31 / g0
+    h32 = F32 / g0
+
+    # Stack consistently into (N,8)
+    H = np.stack([h11, h12, h13, h21, h22, h23, h31, h32], axis=-1)
+
+    # If single, remove batch dim
+    if single_input:
+        return H[0]
+
+    return H
+
+def h2F_CDmod(H: np.ndarray, PC: np.ndarray):
+    """
+    Calculate the deviatoric deformation gradient from a homography.
+
+    Args:
+        H  (np.ndarray): Homography (8,) or (N,8)
+        PC (np.ndarray): Pattern center (3,) or (N,3)
+
+    Returns:
+        np.ndarray: Deformation gradient, shape (3,3) or (N,3,3)
+    C added on Nov20
+    """
+
+    # ---------- Shape normalization ----------
+    H = np.asarray(H)
+    single = (H.ndim == 1)
+    if single:
+        H = H[None, :]      # => shape (1,8)
+
+    PC = np.asarray(PC)
+    if PC.ndim == 1:
+        PC = PC[None, :]    # => shape (1,3)
+
+    # Broadcast PC to match H batch size
+    if PC.shape[0] == 1 and H.shape[0] > 1:
+        PC = np.repeat(PC, H.shape[0], axis=0)
+
+    x01 = PC[:, 0]
+    x02 = PC[:, 1]
+    DD  = PC[:, 2]
+
+    # Extract H components
+    h11, h12, h13 = H[:, 0], H[:, 1], H[:, 2]
+    h21, h22, h23 = H[:, 3], H[:, 4], H[:, 5]
+    h31, h32      = H[:, 6], H[:, 7]
+
+    # ---------- Core calculations (your math preserved) ----------
+    beta0 = 1 - h31 * x01 - h32 * x02
+
+    Fe11 = 1 + h11 + h31 * x01
+    Fe12 = h12 + h32 * x01
+    Fe13 = (h13 - h11*x01 - h12*x02 + x01*(beta0 - 1)) / DD
+
+    Fe21 = h21 + h31 * x02
+    Fe22 = 1 + h22 + h32 * x02
+    Fe23 = (h23 - h21*x01 - h22*x02 + x02*(beta0 - 1)) / DD
+
+    Fe31 = DD * h31
+    Fe32 = DD * h32
+    Fe33 = beta0
+
+    # ---------- Stack cleanly into (N,3,3) ----------
+    Fe = np.stack([
+        np.stack([Fe11, Fe12, Fe13], axis=-1),
+        np.stack([Fe21, Fe22, Fe23], axis=-1),
+        np.stack([Fe31, Fe32, Fe33], axis=-1)
+    ], axis=-2)   # (N,3,3)
+
+    # Apply deviatoric normalization
+    Fe = Fe / beta0[:, None, None]
+
+    # ---------- Optional inversion block ----------
+    # If these F describe target→reference and you need reference→target:
+    #
+    # Fe = np.linalg.inv(Fe)
+    #
+    # Just uncomment if needed.
+
+    # ---------- Restore single input ----------
+    if single:
+        return Fe[0]
+
+    return Fe
