@@ -3,6 +3,7 @@ import numpy as np
 from skimage import io
 from scipy import linalg, interpolate, signal
 import matplotlib.pyplot as plt
+import sys
 
 # Local imports
 import warp
@@ -10,6 +11,9 @@ from get_homography_cpu import dp_norm, window_and_normalize, FMT
 import conversions
 import ErnouldsMethod
 from Data import process_pattern_no_class
+from conversions import F2h, h2F, F2strain
+from tabulate import tabulate
+
 
 np.set_printoptions(
     linewidth=125,
@@ -29,8 +33,8 @@ subset_size = 300  # Size of the subset cropped out from the center of the image
 #                    Seting Fe
 #======================================================
 # w1 = w32 , w2 = 13, w3 = 23 #make rotation in the sample frame 
-w = np.array([0, 0.0, 0.0])  # No rotation
-e = np.array([[ 0.0, 0.0, 0.0], [0.0, 0.0, 0.005], [0.0, 0.005, 0]])
+w = np.array([0.0, 12.0, 0.0])  # No rotation
+e = np.array([[ 0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0]])
 Fe = ErnouldsMethod.determineF(e , w)
 
 print('Fe is', Fe)
@@ -149,8 +153,11 @@ print(H)
 # Compute the Cholesky decomposition of the Hessian
 (c, L) = linalg.cho_factor(H)
 
-# Compute initial guess reference stuff
-guess_subset_slice = (slice(int(h0[1] - 128), int(h0[1] + 128)), slice(int(h0[0] - 128), int(h0[0] + 128)))
+#### Initial Guess
+initguesssize = 512  # Size of the subset used for the initial guess
+guess_subset_slice = (slice(int(h0[1] - initguesssize // 2), int(h0[1] + initguesssize // 2)),
+                     slice(int(h0[0] - initguesssize // 2), int(h0[0] + initguesssize // 2)))
+
 # Get the FMT-FCC initial guess precomputed items
 r_init = window_and_normalize(R[guess_subset_slice])
 # Get the dimensions of the image
@@ -158,7 +165,7 @@ height, width = r_init.shape
 # Create a mesh grid of log-polar coordinates
 theta = np.linspace(0, np.pi, int(height), endpoint=False)
 radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
-radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="xy")
+radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
 radius_grid = radius_grid.flatten()
 theta_grid = theta_grid.flatten()
 # Convert log-polar coordinates to Cartesian coordinates
@@ -177,19 +184,22 @@ r_fmt, _ = FMT(r_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
 
 # Window and normalize the target
 t_init = window_and_normalize(T[guess_subset_slice])
+
 # Do the angle search first
 t_init_fft = np.fft.fftshift(np.fft.fft2(t_init))
 t_init_FMT, _ = FMT(t_init_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
 cc = signal.fftconvolve(r_fmt, t_init_FMT[::-1], mode="same").real
 theta = (np.argmax(cc) - len(cc) / 2) * np.pi / len(cc)
 # Apply the rotation
+
+print(f"Initial angle guess: {theta * 180 / np.pi:.2f} degrees")
 h = conversions.xyt2h_partial(np.array([[0, 0, -theta]]))[0]
 t_init_rot = warp.deform_image(t_init, h, h0)
 # Do the translation search
 cc = signal.fftconvolve(
     r_init, t_init_rot[::-1, ::-1], mode="same"
 ).real
-shift = np.unravel_index(np.argmax(cc), cc.shape, order='F') - np.array(cc.shape) / 2
+shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2 #this output is always in (y, x) format
 
 fig, ax = plt.subplots(1, 3, figsize=(12, 4))
 for a in ax.ravel():
@@ -207,8 +217,8 @@ plt.tight_layout()
 plt.savefig("debug/initial_guess.jpg")
 plt.close()
 
-# Store the homography
-measurement = np.array([[-shift[0], -shift[1], -theta]])
+# Store the homography, in (x, y, theta) format, which requires negating the shifts
+measurement = np.array([[-shift[1], -shift[0], -theta]]) 
 
 print (f"Initial guess ({init_type}): {measurement}")
 # Convert the measurements to homographies
@@ -217,9 +227,13 @@ if init_type == "full":
 else:
     p = conversions.xyt2h_partial(measurement)
 
+p_init = p.copy()
+
 #####################################################
 # IC-GN algorithm
 #####################################################
+
+
 
 # Fit the spline to the unormalized deformed image
 T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5)
@@ -305,3 +319,22 @@ ax[1, 2].set_title("Residuals")
 plt.tight_layout()
 plt.savefig("debug/results.jpg")
 plt.close()
+
+# Example: 3 homography arrays, each shape (8,)
+input_h = F2h(Fe, np.array([0, 0, 800])).flatten()
+final_opt = p.flatten()
+
+
+#make sure that the initial guess is also only has 6 sigfis
+p_init = p_init.flatten()
+# Stack them horizontally and convert to a list of lists
+table = [ ['Actual Homography'] + input_h.tolist(),
+            ['Initial Guess Homography'] + p_init.tolist(),
+          ['Final Optimized Homography'] + final_opt.tolist()]
+
+
+print(tabulate(
+    table,
+    headers=['Homography', "h11", "h12", "h13", "h21", "h22", "h23", "h31", "h32"],
+    floatfmt=".6f"
+))
