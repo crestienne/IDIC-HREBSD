@@ -176,7 +176,7 @@ def optimize(
         # Create a mesh grid of log-polar coordinates
         theta = np.linspace(0, np.pi, int(height), endpoint=False)
         radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
-        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="xy")
+        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
         radius_grid = radius_grid.flatten()
         theta_grid = theta_grid.flatten()
         # Convert log-polar coordinates to Cartesian coordinates
@@ -454,7 +454,7 @@ def initial_guess_run(
     cc = signal.fftconvolve(r_init, t_init_rot[::-1, ::-1], mode="same").real
     shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
     # Store the homography
-    measurement = np.array([[-shift[0], -shift[1], -theta]])
+    measurement = np.array([[-shift[1], -shift[0], -theta]])
 
     return measurement
 
