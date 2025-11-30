@@ -146,12 +146,12 @@ def h2F(H, PC):
     return Fe
 
 
-def F2h(Fe: np.ndarray, PC: tuple | list | np.ndarray) -> np.ndarray:
+def F2h(Fe: np.ndarray, X0: tuple | list | np.ndarray) -> np.ndarray:
     """Calculate the homography from a deformation gradient using the projection geometry (pattern center).
 
     Args:
         Fe (np.ndarray): The deformation gradient.
-        PC (tuple | list | np.ndarray): The pattern center.
+        X0 (tuple | list | np.ndarray): The distance from the pattern center to the homography center (x01, x02, DD), per Ernould's method.
 
     Returns:
         np.ndarray: The homography matrix."""
@@ -162,7 +162,7 @@ def F2h(Fe: np.ndarray, PC: tuple | list | np.ndarray) -> np.ndarray:
         Fe = Fe[None, None, ...]
 
     # Extract the data from the inputs
-    x01, x02, DD = PC
+    x01, x02, DD = X0
     F11, F12, F13, F21, F22, F23, F31, F32 = Fe[..., 0, 0], Fe[..., 0, 1], Fe[..., 0, 2], Fe[..., 1, 0], Fe[..., 1, 1], Fe[..., 1, 2], Fe[..., 2, 0], Fe[..., 2, 1]
 
     # Negate the detector distance becase our coordinates have +z pointing from the sample towards the detector
