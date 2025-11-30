@@ -96,7 +96,7 @@ def xyt2h(shifts: np.ndarray, PC: tuple | list | np.ndarray) -> np.ndarray:
     return np.squeeze(homographies)
 
 
-def h2F(H, PC):
+def h2F(H, X0):
     """Calculate the deviatoric deformation gradient from a homography using the projection geometry (pattern center).
     Note that the deformation gradient is insensitive to hydrostatic dilation.
     Within the PC, the detector distance, DD (PC[2]), must be positive. The calculation requires the distance to be negative,
@@ -113,11 +113,11 @@ def h2F(H, PC):
         H.reshape(1, 8)
 
     # Extract the data from the inputs
-    if np.asarray(PC).ndim == 1:
-        input_pc = np.array(PC)
-        PC = np.ones(H.shape[:-1] + (3,))
-        PC[..., :3] = input_pc[:3]
-    x01, x02, DD = PC[..., 0], PC[..., 1], PC[..., 2]
+    if np.asarray(X0).ndim == 1:
+        input_pc = np.array(X0)
+        X0 = np.ones(H.shape[:-1] + (3,))
+        X0[..., :3] = input_pc[:3]
+    x01, x02, DD = X0[..., 0], X0[..., 1], X0[..., 2]
     h11, h12, h13, h21, h22, h23, h31, h32 = H[..., 0], H[..., 1], H[..., 2], H[..., 3], H[..., 4], H[..., 5], H[..., 6], H[..., 7]
 
     # Negate the detector distance becase our coordinates have +z pointing from the sample towards the detector
