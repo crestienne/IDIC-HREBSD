@@ -132,16 +132,35 @@ def optimize(
     x = np.arange(R.shape[1]) - h0[0] 
     y = np.arange(R.shape[0]) - h0[1]
     X, Y = np.meshgrid(x, y, indexing="xy")
-    xi = np.array([Y[subset_slice].flatten(), X[subset_slice].flatten()])
+
+    #changing 
+    xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()]) #(y,x) ordering
 
     # Compute the intensity gradients of the subset
-    ref_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5)
+    ref_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5) #(y, x) ordering
     GRx = ref_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
     GRy = ref_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
-    GR = np.vstack((GRy, GRx)).reshape(2, 1, -1).transpose(1, 0, 2)  # 2x1xN
-    r = ref_spline(xi[0], xi[1], grid=False).flatten()
+    # GRy, GRx = np.gradient(R[subset_slice], axis=(0, 1))
+
+    
+    GR = np.vstack((GRx, GRy)).reshape(2, 1, -1).transpose(1, 0, 2)  # 2x1xN
+
+
+    r = ref_spline(xi[0], xi[1], grid=False).flatten() #(y, x) ordering 
     r_zmsv = np.sqrt(((r - r.mean()) ** 2).sum())
     r = (r - r.mean()) / r_zmsv
+
+    # Aggreement between optimization test and get homography cpu for gradients check
+    # fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    # for a in ax.ravel():
+    #     a.axis("off")
+    # ax[0].imshow(GRx.reshape(1082, 1082), cmap="Greys_r")
+    # ax[0].set_title("Gradient (x)")
+    # ax[1].imshow(GRy.reshape(1082, 1082), cmap="Greys_r")
+    # ax[1].set_title("Gradient (y)")
+    # plt.tight_layout()
+    # plt.savefig("debug/gradients_cpu.jpg")
+    # plt.close()
 
     # Compute the jacobian of the shape function
     _1 = np.ones(xi.shape[1])
@@ -149,10 +168,13 @@ def optimize(
     out0 = np.array([[xi[0], xi[1], _1, _0, _0, _0, -xi[0] ** 2, -xi[1] * xi[0]]])
     out1 = np.array([[_0, _0, _0, xi[0], xi[1], _1, -xi[0] * xi[1], -xi[1] ** 2]])
     Jac = np.vstack((out0, out1))  # 2x8xN
+    #print(f"Jacobian - Min: {Jac.min():.5f}, Max: {Jac.max():.5f}, Mean: {Jac.mean():.5f}, Shape: {Jac.shape}")
 
     # Multiply the gradients by the jacobian
     NablaR_dot_Jac = np.einsum("ilk,ljk->ijk", GR, Jac)[0]  # 1x8xN -> 8xN
     H = 2 / r_zmsv**2 * NablaR_dot_Jac.dot(NablaR_dot_Jac.T)
+
+
 
     # Compute the Cholesky decomposition
     cho_params = linalg.cho_factor(H)
@@ -166,7 +188,7 @@ def optimize(
         row_start = (patshape[0] - _s) // 2
         col_start = (patshape[1] - _s) // 2
         init_guess_subset_slice = (
-            slice(row_start, row_start + _s),
+            slice(row_start, row_start + _s), 
             slice(col_start, col_start + _s),
         )
 
