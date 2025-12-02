@@ -25,7 +25,7 @@ np.set_printoptions(
 init_type = "partial"  # Type of initial guess: "partial" or "full"
 max_iter = 50  # Maximum number of iterations
 conv_tol = 1e-3  # Convergence tolerance
-subset_size = 300  # Size of the subset cropped out from the center of the images for the optimization
+subset_size = 1082  # Size of the subset cropped out from the center of the images for the optimization
 
 
 
@@ -33,8 +33,8 @@ subset_size = 300  # Size of the subset cropped out from the center of the image
 #                    Seting Fe
 #======================================================
 # w1 = w32 , w2 = 13, w3 = 23 #make rotation in the sample frame 
-w = np.array([0.0, 12.0, 0.0])  # No rotation
-e = np.array([[ 0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0]])
+w = np.array([0.0, 0.0, 0.0])  # No rotation
+e = np.array([[ 0.0, 0.0, 0.05], [0.0, 0.0, 0.0], [0.05, 0.0, 0]])
 Fe = ErnouldsMethod.determineF(e , w)
 
 print('Fe is', Fe)
@@ -88,7 +88,7 @@ print(f"Reference (rescaled) - Min: {R.min()}, Max: {R.max()}, Mean: {R.mean()},
 print(f"Target (rescaled) - Min: {T.min()}, Max: {T.max()}, Mean: {T.mean()}, Shape: {T.shape}")
 
 # Set the homography center and create the subset slice that we use to crop the images
-h0 = (R.shape[1] / 2, R.shape[0] / 2)
+h0 = (R.shape[1] / 2, R.shape[0] / 2) # (x, y format)
 r0 = int(max(0, h0[1] - subset_size // 2))
 r1 = int(min(R.shape[0], h0[1] + subset_size // 2))
 c0 = int(max(0, h0[0] - subset_size // 2))
@@ -100,6 +100,8 @@ x = np.arange(R.shape[1]) - h0[0]
 y = np.arange(R.shape[0]) - h0[1]
 print(f"X: {x.shape}, Y: {y.shape}")
 X, Y = np.meshgrid(x, y, indexing="xy")
+
+
 xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()])
 
 #####################################################
@@ -107,7 +109,7 @@ xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()])
 #####################################################
 
 # Fit the spline to the unormalized reference image
-R_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5)
+R_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5) 
 
 # Normalize the reference image
 r = R_spline(xi[0], xi[1], grid=False).flatten()
@@ -119,6 +121,8 @@ print(f"R_zmsv: {r_zmsv}")
 # Create gradients
 GRx = R_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
 GRy = R_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
+
+
 # GRy, GRx = np.gradient(R[subset_slice], axis=(0, 1))
 print(f"Gradients (x) - Min: {GRx.min()}, Max: {GRx.max()}, Mean: {GRx.mean()}, Shape: {GRx.shape}")
 print(f"Gradients (y) - Min: {GRy.min()}, Max: {GRy.max()}, Mean: {GRy.mean()}, Shape: {GRy.shape}")
@@ -149,6 +153,7 @@ print(f"NablaR_dot_Jac - Min: {NablaR_dot_Jac.min():.5f}, Max: {NablaR_dot_Jac.m
 H = 2 / r_zmsv**2 * NablaR_dot_Jac.dot(NablaR_dot_Jac.T)
 print("Hessian")
 print(H)
+print('the shape of H is', H.shape)
 
 # Compute the Cholesky decomposition of the Hessian
 (c, L) = linalg.cho_factor(H)
@@ -163,7 +168,7 @@ r_init = window_and_normalize(R[guess_subset_slice])
 # Get the dimensions of the image
 height, width = r_init.shape
 # Create a mesh grid of log-polar coordinates
-theta = np.linspace(0, np.pi, int(height), endpoint=False)
+theta = np.linspace(0, 2*np.pi, int(height), endpoint=False)
 radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
 radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
 radius_grid = radius_grid.flatten()

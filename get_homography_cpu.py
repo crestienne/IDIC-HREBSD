@@ -202,7 +202,7 @@ def optimize(
         # Create a mesh grid of log-polar coordinates
         theta = np.linspace(0, np.pi, int(height), endpoint=False)
         radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
-        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="xy")
+        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
         radius_grid = radius_grid.flatten()
         theta_grid = theta_grid.flatten()
         # Convert log-polar coordinates to Cartesian coordinates
@@ -385,7 +385,7 @@ def optimize_run(
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
     x = np.arange(T.shape[1]) - h0[0]
     y = np.arange(T.shape[0]) - h0[1]
-    T_spline = interpolate.RectBivariateSpline(x, y, T, kx=5, ky=5)
+    T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5) #patterns read in (y, x) ordering
 
     # Run the optimization
     num_iter = 0
@@ -480,7 +480,8 @@ def initial_guess_run(
     cc = signal.fftconvolve(r_init, t_init_rot[::-1, ::-1], mode="same").real
     shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
     # Store the homography
-    measurement = np.array([[-shift[0], -shift[1], -theta]])
+    measurement = np.array([[-shift[1], -shift[0], -theta]])
+    print( f"Initial guess for pattern {idx}: translation ({-shift[1]:.2f}, {-shift[0]:.2f}), rotation {-theta:.4f} rad")
 
     return measurement
 
