@@ -12,6 +12,7 @@ from joblib import Parallel, delayed
 import warp
 import conversions
 import Data
+import matplotlib.pyplot as plt
 
 
 # Type hints
@@ -118,22 +119,25 @@ def optimize(
     h0 = (patshape[1] // 2, patshape[0] // 2)
     crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
     crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
-    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col))
+    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col)) #(y, x format)
 
     ### Reference precompute ###
     # Get the reference image
     R = get_pat(x0)
 
+    #save the reference pattern for debugging as a png
+    plt.imsave("/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/debug/reference_pattern.png", R, cmap='gray')
+
     # Get coordinates
-    x = np.arange(R.shape[1]) - h0[0]
+    x = np.arange(R.shape[1]) - h0[0] 
     y = np.arange(R.shape[0]) - h0[1]
     X, Y = np.meshgrid(x, y, indexing="xy")
     xi = np.array([Y[subset_slice].flatten(), X[subset_slice].flatten()])
 
     # Compute the intensity gradients of the subset
-    ref_spline = interpolate.RectBivariateSpline(x, y, R, kx=5, ky=5)
-    GRx = ref_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
-    GRy = ref_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
+    ref_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5)
+    GRx = ref_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
+    GRy = ref_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
     GR = np.vstack((GRy, GRx)).reshape(2, 1, -1).transpose(1, 0, 2)  # 2x1xN
     r = ref_spline(xi[0], xi[1], grid=False).flatten()
     r_zmsv = np.sqrt(((r - r.mean()) ** 2).sum())
@@ -176,7 +180,7 @@ def optimize(
         # Create a mesh grid of log-polar coordinates
         theta = np.linspace(0, np.pi, int(height), endpoint=False)
         radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
-        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
+        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="xy")
         radius_grid = radius_grid.flatten()
         theta_grid = theta_grid.flatten()
         # Convert log-polar coordinates to Cartesian coordinates
@@ -454,7 +458,7 @@ def initial_guess_run(
     cc = signal.fftconvolve(r_init, t_init_rot[::-1, ::-1], mode="same").real
     shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
     # Store the homography
-    measurement = np.array([[-shift[1], -shift[0], -theta]])
+    measurement = np.array([[-shift[0], -shift[1], -theta]])
 
     return measurement
 
