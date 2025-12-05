@@ -136,38 +136,64 @@ def read_ang(
     header_lines = 0
     with open(path, "r") as ang:
         for line in ang:
+            header_lines += 1
             if "x-star" in line:
                 xstar = float(re.findall(NUMERIC, line)[0])
+ 
             elif "y-star" in line:
                 ystar = float(re.findall(NUMERIC, line)[0])
+
             elif "z-star" in line:
                 zstar = float(re.findall(NUMERIC, line)[0])
+
             elif "NROWS" in line:
                 rows = int(re.findall(NUMERIC, line)[0])
+
             elif "NCOLS_ODD" in line:
                 cols = int(re.findall(NUMERIC, line)[0])
+
             elif "XSTEP" in line:
                 step_size = float(re.findall(NUMERIC, line)[0])
+                print(f"X-step size: {step_size}")
             elif "COLUMN_HEADERS" in line:
                 names = line.replace("\n", "").split(":")[1].strip().split(", ")
             elif "HEADER: End" in line:
                 break
-            header_lines += 1
+            #header_lines += 1
 
     # Package the header data
     if patshape is not None:
         PC = convert_pc((xstar, ystar, zstar), patshape)
+        print(f"Pattern center (converted): {PC}")
     else:
         PC = (xstar, ystar, zstar)
+        print(f"Pattern center (original): {PC}")
     shape = (rows, cols)
-    names.extend(["eulers", "quats", "shape", "pc", "step_size", "pidx"])
-    if segment_grain_threshold is not None:
-        names.extend(["ids", "kam"])
+
+    # Clean and drop Euler column names
     names = [
         name.replace(" ", "_").lower()
         for name in names
         if name.lower() not in ["phi1", "phi", "phi2"]
     ]
+
+    # Now add extra values you append later
+    names.extend(["eulers", "quats", "shape", "pc", "step_size", "pidx"])
+
+
+
+    # if segment_grain_threshold is not None:
+    #     names.extend(["ids", "kam"])
+
+    # names.extend(["eulers", "quats", "shape", "pc", "step_size", "pidx"])
+    # if segment_grain_threshold is not None:
+    #     names.extend(["ids", "kam"])
+    # names = [
+    #     name.replace(" ", "_").lower()
+    #     for name in names
+    #     if name.lower() not in ["phi1", "phi", "phi2"]
+    # ]
+    # print(f"Len Names: {len(names)}")
 
     # Read in the data
     ang_data = np.genfromtxt(path, skip_header=header_lines)
@@ -182,6 +208,10 @@ def read_ang(
     else:
         args = (euler, qu, shape, PC, step_size, pidx)
     ang_data = np.moveaxis(ang_data, 2, 0)
+
+    print("FIELD COUNT:", len(names))
+    print("VALUES COUNT:", len(ang_data) + len(args))
+
 
     # Package everything into a namedtuple
     out = namedtuple("ang_file", names)(*ang_data, *args)
@@ -854,7 +884,7 @@ def rotate_elastic_constants(C, A, tol=1e-6):
     A = np.asarray(A)
 
     # Is this a rotation matrix?
-    if np.sometrue(
+    if np.any(
         np.abs(np.dot(np.array(A), np.transpose(np.array(A))) - np.eye(3, dtype=float))
         > tol
     ):

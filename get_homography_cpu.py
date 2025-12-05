@@ -12,6 +12,7 @@ from joblib import Parallel, delayed
 import warp
 import conversions
 import Data
+import matplotlib.pyplot as plt
 
 
 # Type hints
@@ -24,6 +25,7 @@ class InitType(Enum):
     NONE: str = "none"
     FULL: str = "full"
     PARTIAL: str = "partial"
+
 
 
 # Context manager to patch joblib to report into tqdm progress bar given as argument
@@ -117,26 +119,48 @@ def optimize(
     h0 = (patshape[1] // 2, patshape[0] // 2)
     crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
     crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
-    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col))
+    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col)) #(y, x format)
 
     ### Reference precompute ###
     # Get the reference image
     R = get_pat(x0)
 
+    #save the reference pattern for debugging as a png
+    plt.imsave("/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/debug/reference_pattern.png", R, cmap='gray')
+
     # Get coordinates
-    x = np.arange(R.shape[1]) - h0[0]
+    x = np.arange(R.shape[1]) - h0[0] 
     y = np.arange(R.shape[0]) - h0[1]
     X, Y = np.meshgrid(x, y, indexing="xy")
-    xi = np.array([Y[subset_slice].flatten(), X[subset_slice].flatten()])
+
+    #changing 
+    xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()]) #(y,x) ordering
 
     # Compute the intensity gradients of the subset
-    ref_spline = interpolate.RectBivariateSpline(x, y, R, kx=5, ky=5)
-    GRx = ref_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
-    GRy = ref_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
-    GR = np.vstack((GRy, GRx)).reshape(2, 1, -1).transpose(1, 0, 2)  # 2x1xN
-    r = ref_spline(xi[0], xi[1], grid=False).flatten()
+    ref_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5) #(y, x) ordering
+    GRx = ref_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
+    GRy = ref_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
+    # GRy, GRx = np.gradient(R[subset_slice], axis=(0, 1))
+
+    
+    GR = np.vstack((GRx, GRy)).reshape(2, 1, -1).transpose(1, 0, 2)  # 2x1xN
+
+
+    r = ref_spline(xi[0], xi[1], grid=False).flatten() #(y, x) ordering 
     r_zmsv = np.sqrt(((r - r.mean()) ** 2).sum())
     r = (r - r.mean()) / r_zmsv
+
+    # Aggreement between optimization test and get homography cpu for gradients check
+    # fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    # for a in ax.ravel():
+    #     a.axis("off")
+    # ax[0].imshow(GRx.reshape(1082, 1082), cmap="Greys_r")
+    # ax[0].set_title("Gradient (x)")
+    # ax[1].imshow(GRy.reshape(1082, 1082), cmap="Greys_r")
+    # ax[1].set_title("Gradient (y)")
+    # plt.tight_layout()
+    # plt.savefig("debug/gradients_cpu.jpg")
+    # plt.close()
 
     # Compute the jacobian of the shape function
     _1 = np.ones(xi.shape[1])
@@ -144,10 +168,13 @@ def optimize(
     out0 = np.array([[xi[0], xi[1], _1, _0, _0, _0, -xi[0] ** 2, -xi[1] * xi[0]]])
     out1 = np.array([[_0, _0, _0, xi[0], xi[1], _1, -xi[0] * xi[1], -xi[1] ** 2]])
     Jac = np.vstack((out0, out1))  # 2x8xN
+    #print(f"Jacobian - Min: {Jac.min():.5f}, Max: {Jac.max():.5f}, Mean: {Jac.mean():.5f}, Shape: {Jac.shape}")
 
     # Multiply the gradients by the jacobian
     NablaR_dot_Jac = np.einsum("ilk,ljk->ijk", GR, Jac)[0]  # 1x8xN -> 8xN
     H = 2 / r_zmsv**2 * NablaR_dot_Jac.dot(NablaR_dot_Jac.T)
+
+
 
     # Compute the Cholesky decomposition
     cho_params = linalg.cho_factor(H)
@@ -161,17 +188,21 @@ def optimize(
         row_start = (patshape[0] - _s) // 2
         col_start = (patshape[1] - _s) // 2
         init_guess_subset_slice = (
-            slice(row_start, row_start + _s),
+            slice(row_start, row_start + _s), 
             slice(col_start, col_start + _s),
         )
+
+
+    
         # Get the FMT-FCC initial guess precomputed items
         r_init = window_and_normalize(R[init_guess_subset_slice])
+  
         # Get the dimensions of the image
         height, width = r_init.shape
         # Create a mesh grid of log-polar coordinates
         theta = np.linspace(0, np.pi, int(height), endpoint=False)
         radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
-        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="xy")
+        radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
         radius_grid = radius_grid.flatten()
         theta_grid = theta_grid.flatten()
         # Convert log-polar coordinates to Cartesian coordinates
@@ -192,6 +223,7 @@ def optimize(
                     idx,
                     get_pat,
                     init_type,
+                    init_guess_subset_slice if init_type is not InitType.NONE else None,
                     r_init if init_type is not InitType.NONE else None,
                     r_fmt if init_type is not InitType.NONE else None,
                     X_fmt if init_type is not InitType.NONE else None,
@@ -215,6 +247,7 @@ def optimize(
                 idx,
                 get_pat,
                 init_type,
+                init_guess_subset_slice,  # pass the slice directly
                 r_init if init_type is not InitType.NONE else None,
                 r_fmt if init_type is not InitType.NONE else None,
                 X_fmt if init_type is not InitType.NONE else None,
@@ -265,6 +298,7 @@ def _process_single_pattern(
     idx,
     get_pat,
     init_type,
+    init_subset_slice,  # add parameter
     r_init,
     r_fmt,
     X_fmt,
@@ -286,7 +320,7 @@ def _process_single_pattern(
         h = np.zeros(8, dtype=float)
     else:
         measurement = initial_guess_run(
-            get_pat, idx, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
+            get_pat, idx, init_subset_slice, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
         )
         if init_type == InitType.FULL:
             h = conversions.xyt2h(measurement, h0)
@@ -351,7 +385,7 @@ def optimize_run(
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
     x = np.arange(T.shape[1]) - h0[0]
     y = np.arange(T.shape[0]) - h0[1]
-    T_spline = interpolate.RectBivariateSpline(x, y, T, kx=5, ky=5)
+    T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5) #patterns read in (y, x) ordering
 
     # Run the optimization
     num_iter = 0
@@ -419,6 +453,7 @@ def dp_norm(dp, xi) -> float:
 def initial_guess_run(
     get_pat: Callable,
     idx: int,
+    init_subset_slice: tuple[slice, slice],
     r_init: np.ndarray,
     r_fmt: np.ndarray,
     X_fmt: np.ndarray,
@@ -426,28 +461,16 @@ def initial_guess_run(
     x_fmt: np.ndarray,
     y_fmt: np.ndarray,
 ) -> np.ndarray:
-    """Run the initial guess optimization for a single point.
-
-    Args:
-        get_pat (Callable): Function to get the target image.
-        idx (int): Index of the target image.
-        r_init (np.ndarray): The reference subset.
-        r_FMT (np.ndarray): The Fourier-Mellin Transform of the reference subset.
-        X_fmt (np.ndarray): The x-coordinates of the reference subset in log-polar coordinates.
-        Y_fmt (np.ndarray): The y-coordinates of the reference subset in log-polar coordinates.
-        x_fmt (np.ndarray): The x-coordinates of the output image in log-polar coordinates.
-        y_fmt (np.ndarray): The y-coordinates of the output image in log-polar coordinates.
-
-    Returns:
-        measurement (np.ndarray): An initial guess of the shift and rotation of the target image. [shift[0], shift[1], theta]
-    """
+    """Run the initial guess optimization for a single point."""
     # Get the target image
     T = get_pat(idx)
+
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    t_init = window_and_normalize(T)
+    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]])
+
     # Do the angle search first
     t_init_fft = np.fft.fftshift(np.fft.fft2(t_init))
-    t_init_FMT, _ = FMT(t_init_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
+    t_init_FMT, _ = FMT(t_init_fft, X_fmt, Y_fmt, x_fmt, y_fmt, )
     cc = signal.fftconvolve(r_fmt, t_init_FMT[::-1], mode="same").real
     theta = (np.argmax(cc) - len(cc) / 2) * np.pi / len(cc)
     # Apply the rotation
@@ -457,7 +480,8 @@ def initial_guess_run(
     cc = signal.fftconvolve(r_init, t_init_rot[::-1, ::-1], mode="same").real
     shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
     # Store the homography
-    measurement = np.array([[-shift[0], -shift[1], -theta]])
+    measurement = np.array([[-shift[1], -shift[0], -theta]])
+    print( f"Initial guess for pattern {idx}: translation ({-shift[1]:.2f}, {-shift[0]:.2f}), rotation {-theta:.4f} rad")
 
     return measurement
 
@@ -527,6 +551,7 @@ def FMT(image, X, Y, x, y):
     Returns:
         np.ndarray: The signal of the Fourier-Mellin Transform. (1D array of length 2**n)
     """
+
     spline = interpolate.RectBivariateSpline(X, Y, image.real, kx=2, ky=2)
     image_polar = np.abs(spline(x, y, grid=False).reshape(image.shape))
     sig = window_and_normalize(image_polar.mean(axis=1))

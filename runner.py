@@ -5,37 +5,41 @@ import Data
 import utilities
 import get_homography_cpu as core
 
-name = "GaN27238_512"
+
+name = "TestRun"
+date = "Nov262025"
 up2 = (
-    "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_256x256_flipX.up2"
+   '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/E13_Ernould_Nov102025.up2' 
 )
 # up2 = "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_512x512_flipX.up2"
-ang = "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_flipX.ang"
-x0 = (100, 100)
+ang = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/ErnouldMethod_ang.ang"
+x0 = (0, 0)
 
 pat_obj = Data.UP2(up2)
+print(pat_obj.patshape)
 ang_data = utilities.read_ang(ang, pat_obj.patshape, segment_grain_threshold=None)
 x0 = np.ravel_multi_index(x0, ang_data.shape)
 print(x0)
 
-h, iterations, residuals, dp_norms = core.optimize(
-    pat_obj, x0, crop_fraction=0.9, max_iter=25, n_jobs=19, verbose=True
+h, h_guess, iterations, residuals, dp_norms = core.optimize(
+    pat_obj, x0, init_type='partial', crop_fraction=0.9, max_iter=25, n_jobs=19, verbose=True
 )
 
+
 np.save(
-    "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_256x256_flipX_homographies.npy",
+    f"/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{name}_homographies_{date}.npy",
     h,
 )
 np.save(
-    "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_256x256_flipX_iterations.npy",
+    f"/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{name}_iterations_{date}.npy",
     iterations,
 )
 np.save(
-    "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_256x256_flipX_residuals.npy",
+    f"/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{name}_residuals_{date}.npy",
     residuals,
 )
 np.save(
-    "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_256x256_flipX_dp_norms.npy",
+    f"/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{name}_dp_norms_{date}.npy",
     dp_norms,
 )
 

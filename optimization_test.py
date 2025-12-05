@@ -3,12 +3,17 @@ import numpy as np
 from skimage import io
 from scipy import linalg, interpolate, signal
 import matplotlib.pyplot as plt
+import sys
 
 # Local imports
 import warp
 from get_homography_cpu import dp_norm, window_and_normalize, FMT
 import conversions
-from Data import process_pattern
+import ErnouldsMethod
+from Data import process_pattern_no_class
+from conversions import F2h, h2F, F2strain
+from tabulate import tabulate
+
 
 np.set_printoptions(
     linewidth=125,
@@ -20,9 +25,45 @@ np.set_printoptions(
 init_type = "partial"  # Type of initial guess: "partial" or "full"
 max_iter = 50  # Maximum number of iterations
 conv_tol = 1e-3  # Convergence tolerance
-subset_size = 300  # Size of the subset cropped out from the center of the images for the optimization
-target_path = "/Users/jameslamb/Downloads/deformed.jpeg"
-reference_path = "/Users/jameslamb/Downloads/reference.jpeg"
+subset_size = 1082  # Size of the subset cropped out from the center of the images for the optimization
+
+
+
+#======================================================
+#                    Seting Fe
+#======================================================
+# w1 = w32 , w2 = 13, w3 = 23 #make rotation in the sample frame 
+w = np.array([0.0, 0.0, 0.0])  # No rotation
+e = np.array([[ 0.0, 0.0, 0.05], [0.0, 0.0, 0.0], [0.05, 0.0, 0]])
+Fe = ErnouldsMethod.determineF(e , w)
+
+print('Fe is', Fe)
+
+
+EMEBSDfilename = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/EBSDpattern_Al_July222025.h5'
+EMEBSD_pattern = ErnouldsMethod.read_EMEBSD(EMEBSDfilename)
+detector_shape = ([1200, 1200])
+PCval = np.array([600, 600, 16*1000/20]) #pattern center values in pixels, defined from the upper left corner of the image, z is in mm
+#determine the reference pattern coordinates need to pass in PC and detector shape
+ref_coords = ErnouldsMethod.pattern_coords(PCval, detector_shape)
+#Read in the test cases from a csv file
+
+
+print ('-----Reference pattern generation first----')
+print(' ')
+Reference = ErnouldsMethod.generate_patterns(np.eye(3, dtype=np.float32), PCval, ref_coords, EMEBSD_pattern).astype(float)
+print('-----Target pattern generation next----')
+Target = ErnouldsMethod.generate_patterns(Fe, PCval, ref_coords, EMEBSD_pattern).astype(float)
+
+
+
+
+target_path = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/target_pattern.png"
+reference_path = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/reference_pattern.png"
+
+#save the generated patterns for visualization
+io.imsave(target_path, Target.astype(np.uint16))
+io.imsave(reference_path, Reference.astype(np.uint16))
 
 # ACTUAL HOMOGRAPHY: h = [0.01, 0.02, -2.0, -0.02, -0.01, 3.0, 0.0001, 0.0003]
 #####################################################
@@ -32,8 +73,11 @@ reference_path = "/Users/jameslamb/Downloads/reference.jpeg"
 # Load the images
 T = io.imread(target_path).astype(float)
 R = io.imread(reference_path)
-T = process_pattern(T, 0.0, 101, 3.0)
-R = process_pattern(R, 0.0, 101, 0.0)
+
+#normalize the patterns
+T = process_pattern_no_class(T)
+R = process_pattern_no_class(R
+                             )
 print(f"Reference - Min: {R.min()}, Max: {R.max()}, Mean: {R.mean()}, Shape: {R.shape}")
 print(f"Target - Min: {T.min()}, Max: {T.max()}, Mean: {T.mean()}, Shape: {T.shape}")
 
@@ -44,7 +88,7 @@ print(f"Reference (rescaled) - Min: {R.min()}, Max: {R.max()}, Mean: {R.mean()},
 print(f"Target (rescaled) - Min: {T.min()}, Max: {T.max()}, Mean: {T.mean()}, Shape: {T.shape}")
 
 # Set the homography center and create the subset slice that we use to crop the images
-h0 = (R.shape[1] / 2, R.shape[0] / 2)
+h0 = (R.shape[1] / 2, R.shape[0] / 2) # (x, y format)
 r0 = int(max(0, h0[1] - subset_size // 2))
 r1 = int(min(R.shape[0], h0[1] + subset_size // 2))
 c0 = int(max(0, h0[0] - subset_size // 2))
@@ -56,6 +100,8 @@ x = np.arange(R.shape[1]) - h0[0]
 y = np.arange(R.shape[0]) - h0[1]
 print(f"X: {x.shape}, Y: {y.shape}")
 X, Y = np.meshgrid(x, y, indexing="xy")
+
+
 xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()])
 
 #####################################################
@@ -63,7 +109,7 @@ xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()])
 #####################################################
 
 # Fit the spline to the unormalized reference image
-R_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5)
+R_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5) 
 
 # Normalize the reference image
 r = R_spline(xi[0], xi[1], grid=False).flatten()
@@ -75,6 +121,8 @@ print(f"R_zmsv: {r_zmsv}")
 # Create gradients
 GRx = R_spline(xi[0], xi[1], dx=1, dy=0, grid=False)
 GRy = R_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
+
+
 # GRy, GRx = np.gradient(R[subset_slice], axis=(0, 1))
 print(f"Gradients (x) - Min: {GRx.min()}, Max: {GRx.max()}, Mean: {GRx.mean()}, Shape: {GRx.shape}")
 print(f"Gradients (y) - Min: {GRy.min()}, Max: {GRy.max()}, Mean: {GRy.mean()}, Shape: {GRy.shape}")
@@ -105,20 +153,24 @@ print(f"NablaR_dot_Jac - Min: {NablaR_dot_Jac.min():.5f}, Max: {NablaR_dot_Jac.m
 H = 2 / r_zmsv**2 * NablaR_dot_Jac.dot(NablaR_dot_Jac.T)
 print("Hessian")
 print(H)
+print('the shape of H is', H.shape)
 
 # Compute the Cholesky decomposition of the Hessian
 (c, L) = linalg.cho_factor(H)
 
-# Compute initial guess reference stuff
-guess_subset_slice = (slice(int(h0[1] - 128), int(h0[1] + 128)), slice(int(h0[0] - 128), int(h0[0] + 128)))
+#### Initial Guess
+initguesssize = 512  # Size of the subset used for the initial guess
+guess_subset_slice = (slice(int(h0[1] - initguesssize // 2), int(h0[1] + initguesssize // 2)),
+                     slice(int(h0[0] - initguesssize // 2), int(h0[0] + initguesssize // 2)))
+
 # Get the FMT-FCC initial guess precomputed items
 r_init = window_and_normalize(R[guess_subset_slice])
 # Get the dimensions of the image
 height, width = r_init.shape
 # Create a mesh grid of log-polar coordinates
-theta = np.linspace(0, np.pi, int(height), endpoint=False)
+theta = np.linspace(0, 2*np.pi, int(height), endpoint=False)
 radius = np.linspace(0, height / 2, int(height + 1), endpoint=False)[1:]
-radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="xy")
+radius_grid, theta_grid = np.meshgrid(radius, theta, indexing="ij")
 radius_grid = radius_grid.flatten()
 theta_grid = theta_grid.flatten()
 # Convert log-polar coordinates to Cartesian coordinates
@@ -137,19 +189,22 @@ r_fmt, _ = FMT(r_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
 
 # Window and normalize the target
 t_init = window_and_normalize(T[guess_subset_slice])
+
 # Do the angle search first
 t_init_fft = np.fft.fftshift(np.fft.fft2(t_init))
 t_init_FMT, _ = FMT(t_init_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
 cc = signal.fftconvolve(r_fmt, t_init_FMT[::-1], mode="same").real
 theta = (np.argmax(cc) - len(cc) / 2) * np.pi / len(cc)
 # Apply the rotation
+
+print(f"Initial angle guess: {theta * 180 / np.pi:.2f} degrees")
 h = conversions.xyt2h_partial(np.array([[0, 0, -theta]]))[0]
 t_init_rot = warp.deform_image(t_init, h, h0)
 # Do the translation search
 cc = signal.fftconvolve(
     r_init, t_init_rot[::-1, ::-1], mode="same"
 ).real
-shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
+shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2 #this output is always in (y, x) format
 
 fig, ax = plt.subplots(1, 3, figsize=(12, 4))
 for a in ax.ravel():
@@ -167,17 +222,23 @@ plt.tight_layout()
 plt.savefig("debug/initial_guess.jpg")
 plt.close()
 
-# Store the homography
-measurement = np.array([[-shift[0], -shift[1], -theta]])
+# Store the homography, in (x, y, theta) format, which requires negating the shifts
+measurement = np.array([[-shift[1], -shift[0], -theta]]) 
+
+print (f"Initial guess ({init_type}): {measurement}")
 # Convert the measurements to homographies
 if init_type == "full":
     p = conversions.xyt2h(measurement, h0)
 else:
     p = conversions.xyt2h_partial(measurement)
 
+p_init = p.copy()
+
 #####################################################
 # IC-GN algorithm
 #####################################################
+
+
 
 # Fit the spline to the unormalized deformed image
 T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5)
@@ -263,3 +324,22 @@ ax[1, 2].set_title("Residuals")
 plt.tight_layout()
 plt.savefig("debug/results.jpg")
 plt.close()
+
+# Example: 3 homography arrays, each shape (8,)
+input_h = F2h(Fe, np.array([0, 0, 800])).flatten()
+final_opt = p.flatten()
+
+
+#make sure that the initial guess is also only has 6 sigfis
+p_init = p_init.flatten()
+# Stack them horizontally and convert to a list of lists
+table = [ ['Actual Homography'] + input_h.tolist(),
+            ['Initial Guess Homography'] + p_init.tolist(),
+          ['Final Optimized Homography'] + final_opt.tolist()]
+
+
+print(tabulate(
+    table,
+    headers=['Homography', "h11", "h12", "h13", "h21", "h22", "h23", "h31", "h32"],
+    floatfmt=".6f"
+))

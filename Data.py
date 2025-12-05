@@ -38,16 +38,18 @@ class UP2:
         tmp = self.read(chunk_size)
         self.FirstEntryUpFile = struct.unpack("i", tmp)[0]
         tmp = self.read(chunk_size)
-        sz1 = struct.unpack("i", tmp)[0]
+        sz1 = struct.unpack("i", tmp)[0] # pattern width, x 
         tmp = self.read(chunk_size)
-        sz2 = struct.unpack("i", tmp)[0]
+        sz2 = struct.unpack("i", tmp)[0] # pattern height, y 
         tmp = self.read(chunk_size)
         self.bitsPerPixel = struct.unpack("i", tmp)[0]
         sizeBytes = os.path.getsize(self.path) - 16
         self.filesize = str(round(sizeBytes / 1e6, 1)) + " MB"
         bytesPerPixel = 2
         self.nPatterns = int((sizeBytes / bytesPerPixel) / (sz1 * sz2))
-        self.patshape = (sz1, sz2)
+        self.patshape = (sz1, sz2) #(width, height)
+
+
         self.pattern_bytes = np.int64(self.patshape[0] * self.patshape[1] * 2)
 
     def set_processing(
@@ -82,10 +84,10 @@ class UP2:
         # Read in the patterns
         seek_pos = np.int64(self.start_byte + np.int64(i) * self.pattern_bytes)
         buffer = self.read(chunks=self.pattern_bytes, i=seek_pos)
-        pat = np.frombuffer(buffer, dtype=np.uint16).reshape(self.patshape)
+        pat = np.frombuffer(buffer, dtype=np.uint16).reshape(self.patshape) #order should be y,x
         if process:
             pat = self.process_pattern(pat)
-        return pat
+        return pat #pretty sure the patterns are in (x, y) format
 
     def read_patterns(self, idx=-1, process=False):
         if type(idx) == int:
@@ -149,6 +151,55 @@ class UP2:
 
         # Re normalize
         img = (img - img.min()) / (img.max() - img.min())
+
+        return img
+
+def process_pattern_no_class(
+    
+        img: np.ndarray,
+    ) -> np.ndarray:
+        """Cleans patterns by equalizing the histogram and normalizing.
+        Applies a bandpass filter to the patterns and truncates the extreme values.
+        Images will be in the range [0, 1].
+
+        Args:
+            img (np.ndarray): The patterns to clean. (H, W)
+            low_pass_sigma (float): The sigma for the low pass filter.
+            high_pass_sigma (float): The sigma for the high pass filter.
+            truncate_std_scale (float): The number of standard deviations to truncate.
+        Returns:
+            np.ndarray: The cleaned patterns. (N, H, W)"""
+        
+        low_pass_sigma = 2.0
+        high_pass_sigma = 101.0
+        truncate_std_scale = 3.0
+
+        # Correct dtype
+        img = img.astype(np.float32)
+
+        # Normalize
+        img = (img - img.min()) / (img.max() - img.min())
+
+        # # Low pass filter
+        # if low_pass_sigma > 0:
+        #     img = ndimage.gaussian_filter(img, low_pass_sigma)
+
+        # # High pass filter
+        # if high_pass_sigma > 0:
+        #     background = ndimage.gaussian_filter(img, high_pass_sigma)
+        #     img = img - background
+
+        # # Truncate step
+        # if truncate_std_scale > 0:
+        #     mean, std = img.mean(), img.std()
+        #     img = np.clip(
+        #         img,
+        #         mean - truncate_std_scale * std,
+        #         mean + truncate_std_scale * std,
+        #     )
+
+        # # Re normalize
+        # img = (img - img.min()) / (img.max() - img.min())
 
         return img
 
