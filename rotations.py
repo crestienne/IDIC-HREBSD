@@ -194,24 +194,24 @@ def om2eu(om):
 
 def om2ax(om):
     """Rotation matrix to axis angle pair."""
-    return qu2ax(om2qu(om)) # HOTFIX
-    # diag_delta = -P*np.block([om[...,1,2:3]-om[...,2,1:2],
-    #                            om[...,2,0:1]-om[...,0,2:3],
-    #                            om[...,0,1:2]-om[...,1,0:1]
-    #                          ])
-    # t = 0.5*(om.trace(axis2=-2,axis1=-1) -1.0).reshape(om.shape[:-2]+(1,))
-    # w,vr = np.linalg.eig(om)
-    # # mask duplicated real eigenvalues
-    # w[np.isclose(w[...,0],1.0+0.0j),1:] = 0.
-    # w[np.isclose(w[...,1],1.0+0.0j),2:] = 0.
-    # vr = np.swapaxes(vr,-1,-2)
-    # ax = np.where(np.abs(diag_delta)<1e-12,
-    #                      np.real(vr[np.isclose(w,1.0+0.0j)]).reshape(om.shape[:-2]+(3,)),
-    #               np.abs(np.real(vr[np.isclose(w,1.0+0.0j)]).reshape(om.shape[:-2]+(3,))) \
-    #               *np.sign(diag_delta))
-    # ax = np.block([ax,np.arccos(np.clip(t,-1.0,1.0))])
-    # ax[np.abs(ax[...,3])<1.e-8] = [ 0.0, 0.0, 1.0, 0.0]
-    # return ax
+    #return qu2ax(om2qu(om)) # HOTFIX
+    diag_delta = -P*np.block([om[...,1,2:3]-om[...,2,1:2],
+                               om[...,2,0:1]-om[...,0,2:3],
+                               om[...,0,1:2]-om[...,1,0:1]
+                             ])
+    t = 0.5*(om.trace(axis2=-2,axis1=-1) -1.0).reshape(om.shape[:-2]+(1,))
+    w,vr = np.linalg.eig(om)
+    # mask duplicated real eigenvalues
+    w[np.isclose(w[...,0],1.0+0.0j),1:] = 0.
+    w[np.isclose(w[...,1],1.0+0.0j),2:] = 0.
+    vr = np.swapaxes(vr,-1,-2)
+    ax = np.where(np.abs(diag_delta)<1e-12,
+                         np.real(vr[np.isclose(w,1.0+0.0j)]).reshape(om.shape[:-2]+(3,)),
+                  np.abs(np.real(vr[np.isclose(w,1.0+0.0j)]).reshape(om.shape[:-2]+(3,))) \
+                  *np.sign(diag_delta))
+    ax = np.block([ax,np.arccos(np.clip(t,-1.0,1.0))])
+    ax[np.abs(ax[...,3])<1.e-8] = [ 0.0, 0.0, 1.0, 0.0]
+    return ax
 
 
 def om2ro(om):
