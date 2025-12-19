@@ -107,7 +107,7 @@ def optimize(
         N = pats.nPatterns
         out_shape = (pats.nPatterns,)
         patshape = pats.patshape
-        get_pat = lambda idx: pats.read_pattern(idx, process=True)
+        get_pat = lambda idx: pats.read_pattern(idx) #removed the process=True argument here
     elif type(pats) == np.ndarray:
         N = np.prod(pats.shape[:-2])
         out_shape = pats.shape[:-2]
@@ -407,7 +407,7 @@ def optimize_run(
         dp = linalg.cho_solve(cho_params, -dC_IC_ZNSSD.reshape(-1, 1))[:, 0]
         # Update the parameters
         norm = dp_norm(dp, xi)
-        Wp = warp.W(h)
+        Wp = warp.W(h) 
         Wdp = warp.W(dp)
         Wpdp = np.matmul(Wp, np.linalg.inv(Wdp))
         h = ((Wpdp / Wpdp[2, 2]) - np.eye(3)).reshape(9)[:8]
@@ -538,6 +538,38 @@ def window_and_normalize(images, alpha=0.4):
         variance = variance[..., None]
     out = new_normalized_windowed / np.sqrt(variance)
     return out
+
+#C added new version of window and normalize that is ZNSSD style
+def window_and_normalize_new(images, alpha=0.4):
+    """
+    Apply Tukey window and zero-mean, unit-variance normalization
+    over the last two axes.
+    """
+    if images.ndim < 2:
+        raise ValueError("images must be at least 2D")
+
+    axis = (-2, -1)
+
+    # get window only
+    _, window = Tukey_Hanning_window(images, alpha, return_window=True)
+
+    # apply window
+    windowed = images * window
+
+    # mean over windowed image
+    mean = windowed.mean(axis=axis, keepdims=True)
+
+    # zero-mean
+    zm = windowed - mean
+
+    # variance (ZNSSD-style, unbiased optional)
+    num = np.prod(images.shape[-2:])
+    var = (zm**2).sum(axis=axis, keepdims=True) / (num - 1)
+
+    std = np.sqrt(var)
+    std = np.where(std == 0, 1.0, std)
+
+    return zm / std
 
 
 def FMT(image, X, Y, x, y):
