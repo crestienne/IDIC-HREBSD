@@ -1,6 +1,7 @@
 import itertools
 import numpy as np
 import rotations
+from scipy.linalg import polar
 
 
 def xyt2h_partial(measurements: np.ndarray):
@@ -128,10 +129,10 @@ def h2F(H, X0):
     beta0 = 1 - h31 * x01 - h32 * x02
     Fe11 = 1 + h11 + h31 * x01
     Fe12 = h12 + h32 * x01
-    Fe13 = (h13 - h11*x01 - h12*x02 + x01*(beta0 - 1))/DD
+    Fe13 = (h13 - (h11 * x01) - (h12 * x02) + x01*(beta0 - 1))/DD
     Fe21 = h21 + h31 * x02
-    Fe22 = 1 + h22 + h32 * x02
-    Fe23 = (h23 - h21*x01 - h22*x02 + x02*(beta0 - 1))/DD
+    Fe22 = 1 + h22 + (h32 * x02)
+    Fe23 = (h23 - (h21 * x01) - (h22 * x02) + x02*(beta0 - 1))/DD
     Fe31 = DD * h31
     Fe32 = DD * h32
     Fe33 = beta0
@@ -141,7 +142,8 @@ def h2F(H, X0):
     if Fe.ndim == 4:
         Fe = np.moveaxis(Fe, (0, 1, 2, 3), (2, 3, 0, 1))
     elif Fe.ndim == 3:
-        Fe = np.squeeze(np.moveaxis(Fe, (0, 1, 2), (1, 2, 0)))
+        #Fe = np.squeeze(np.moveaxis(Fe, (0, 1, 2), (1, 2, 0)))
+        Fe = np.moveaxis(Fe, -1, 0)  # move last axis (N) to first
 
     return Fe
 
@@ -193,9 +195,93 @@ def F2h(Fe: np.ndarray, X0: tuple | list | np.ndarray) -> np.ndarray:
 
     return H
 
+def F2strain(
+    Fe: np.ndarray,
+    C: np.ndarray = None,
+    small_strain: bool = False,
+):
+    """
+    Compute elastic strain and lattice rotation from deformation gradient.
 
-def F2strain(Fe: np.ndarray, C: np.ndarray = None, small_strain: bool = False) -> tuple:
-    """Calculate the elastic strain tensor from the deformation gradient.
+    NOTE:
+    This code is implemented exactly as perscribed in Ernould's optical distortions paper
+    -shown to be correct and matches ATEX RESULTS - do not edit this code!! 
+    """
+
+    Fe = np.asarray(Fe)
+    if Fe.shape[-2:] != (3, 3):
+        raise ValueError("Fe must have shape (..., 3, 3)")
+
+    I = np.eye(3)
+
+    # -------------------------
+    # Small strain formulation
+    # -------------------------
+    if small_strain:
+        d = Fe - I
+        epsilon = 0.5 * (d + np.swapaxes(d, -1, -2))
+        omega   = 0.5 * (d - np.swapaxes(d, -1, -2))
+        return epsilon, omega
+
+    # -------------------------
+    # Finite strain formulation
+    # -------------------------
+
+    # Polar decomposition via SVD
+    U, S, Vt = np.linalg.svd(Fe)
+    R = U @ Vt
+
+    # -------------------------
+    # Extract rotation angles (unchanged math)
+    # -------------------------
+    w2 = np.arctan2(
+        -R[..., 2, 0],
+        np.sqrt(R[..., 0, 0]**2 + R[..., 1, 0]**2)
+    )
+
+    w1 = np.arctan2(R[..., 2, 1], R[..., 2, 2])
+
+    s1 = np.sin(w1)
+    c1 = np.cos(w1)
+
+    w3 = np.arctan2(
+        s1 * R[..., 0, 2] - c1 * R[..., 0, 1],
+        c1 * R[..., 1, 1] - s1 * R[..., 1, 2]
+    )
+
+    # -------------------------
+    # HR-EBSD elastic strain
+    # -------------------------
+    # Build diagonal stretch tensor from S
+    Sigma = np.zeros_like(Fe)
+    idx = np.arange(3)
+    Sigma[..., idx, idx] = S
+
+    v_stretch = U @ Sigma @ np.swapaxes(U, -1, -2)
+
+    epsilon = (v_stretch - v_stretch[..., 2, 2][..., None, None] * I) / v_stretch[..., 2, 2][..., None, None]
+
+    # -------------------------
+    # Lattice rotation tensor
+    # -------------------------
+    omega = np.zeros_like(Fe)
+    omega[..., 0, 1] = -w3
+    omega[..., 0, 2] =  w2
+    omega[..., 1, 0] =  w3
+    omega[..., 1, 2] = -w1
+    omega[..., 2, 0] = -w2
+    omega[..., 2, 1] =  w1
+
+    return epsilon, omega
+
+
+
+
+
+def F2strain_depreciated(Fe: np.ndarray, C: np.ndarray = None, small_strain: bool = False) -> tuple:
+    """
+    Strain calculation code is incorrect and should not be used. -----
+    Calculate the elastic strain tensor from the deformation gradient.
     Also calculates the lattice rotation matrix.
 
     Args:
@@ -206,121 +292,161 @@ def F2strain(Fe: np.ndarray, C: np.ndarray = None, small_strain: bool = False) -
         epsilon (np.ndarray): The elastic strain tensor
         omega (np.ndarray): The lattice rotation matrix
         stress (np.ndarray): The stress tensor. Only returned if the stiffness tensor is provided."""
-    if Fe.ndim == 4:
-        I = np.eye(3)[None, None, ...]
-    elif Fe.ndim == 3:
-        I = np.squeeze(np.eye(3)[None, ...])
-    elif Fe.ndim == 2:
-        I = np.eye(3)
+    # if Fe.ndim == 4:
+    #     I = np.eye(3)[None, None, ...]
+    # elif Fe.ndim == 3:
+    #     I = np.squeeze(np.eye(3)[None, ...])
+    # elif Fe.ndim == 2:
+    #     I = np.eye(3)
 
 
-    # Calculate the rotation tensor
-    # Use the polar decomposition of the deformation gradient to decompose it into the rotation matrix and the stretch tensor
-    W, S, V = np.linalg.svd(Fe, full_matrices=True)
-    omega_finite = np.matmul(W, V)
+    # # # Calculate the rotation tensor
+    # # # Use the polar decomposition of the deformation gradient to decompose it into the rotation matrix and the stretch tensor
+    # W, S, V = np.linalg.svd(Fe, full_matrices=True)
+    # omega_finite = np.matmul(W, V)
+    # print(omega_finite)
 
-    # Calculate the small strain tensor
-    # Use small strain theory to decompose the deformation gradient into the elastic strain tensor and the rotation matrix
-    if small_strain:
-        d = Fe - I
-        if Fe.ndim == 2:
-            dT = d.T
-        elif Fe.ndim == 3:
-            dT = d.transpose(0, 2, 1)
-        elif Fe.ndim == 4:
-            dT = d.transpose(0, 1, 3, 2)
-        epsilon = 0.5 * (d + dT)
-    else:
-        Sigma = np.einsum('...i,ij->...ij', S, np.eye(3))
-        if Fe.ndim == 2:
-            epsilon = np.matmul(W, np.matmul(Sigma, W.T)) - I
-        elif Fe.ndim == 3:
-            epsilon = np.matmul(W, np.matmul(Sigma, W.transpose(0, 2, 1))) - I
-        elif Fe.ndim == 4:
-            epsilon = np.matmul(W, np.matmul(Sigma, W.transpose(0, 1, 3, 2))) - I
 
-    # Convert finite rotation matrix to a lattice rotation matrix
-    v = rotations.om2ax(omega_finite)
-    rotation_vector = v[..., :3] * v[..., 3][..., None]
-    omega = np.zeros_like(omega_finite)
-    omega[..., 0, 1] = -rotation_vector[..., 2]
-    omega[..., 0, 2] = rotation_vector[..., 1]
-    omega[..., 1, 2] = rotation_vector[..., 0]
-    omega[..., 1, 0] = -omega[..., 0, 1]
-    omega[..., 2, 0] = -omega[..., 0, 2]
-    omega[..., 2, 1] = -omega[..., 1, 2]
+    # # print('omega_finite shape:', omega_finite)
 
-    # Convert to sample frame rotation, not helpful bc working in detector frame
-    # if Fe.ndim == 3:
-    #     omega = np.transpose(omega, (0, 2, 1))
-    # elif Fe.ndim == 4:
-    #     omega = np.transpose(omega, (0, 1, 3, 2))
+    # # w2 = np.zeros_like(omega_finite.shape[:-2])
 
-    # Apply a tolerance
-    # epsilon[np.abs(epsilon) < 1e-4] = 0
-    # omega[np.abs(omega) < 1e-4] = 0
 
-    if C is None:
-        return epsilon, omega
-    else:
-        """Assume the surface normal stress is zero to separate e11, e22, e33
-        Solve the following system of equations:
-         0 = C3311*e11 + C3322*e22 + C3333*e33
-         X =     1*e11 +     0*e22 -     1*e33
-         Y =     0*e11 +     1*e22 -     1*e33
-        where X the 11 strain from the deformation gradient (technically e11 - e33) and 
-        Y is the 22 strain from the deformation gradient (technically e22 - e33)"""
-        # Grab elastic constants
-        # C3333 = C[..., 2, 2]  # C33 = C11 for cubic
-        # C3311 = C[..., 0, 2]  # C13 = C12 for cubic
-        # C3322 = C[..., 1, 2]  # C23 = C12 for cubic
-        # # Construct the dependent variables vector
-        # _0 = np.zeros_like(C3333)
-        # _1 = np.ones_like(C3333)
-        # b = np.array([_0, epsilon[..., 0, 0], epsilon[..., 1, 1]])
-        # b = np.moveaxis(b, 0, -1)
-        # # Construct the coefficient matrix and repeat it for broadcasting
-        # A = np.array([[C3311, C3322, C3333], [_1, _0, -1*_1], [_0, _1, -1*_1]])
-        # A = np.transpose(A, (2, 3, 0, 1))
-        # # Solve the system of equations
-        # x = np.linalg.solve(A, b)
-        # # Store the results
-        # epsilon[..., 0, 0] = x[..., 0]
-        # epsilon[..., 1, 1] = x[..., 1]
-        # epsilon[..., 2, 2] = x[..., 2]
+    # # w2 = np.arctan(-omega_finite[..., 0, 2] / np.sqrt(omega_finite[..., 0, 0]**2 + omega_finite[..., 1, 0]**2))  # W13
+    # # w1 = np.arctan(omega_finite[..., 2, 1] /omega_finite[..., 2, 2])  # w32
+    # # s1 = np.sin(w1)
+    # # c1 = np.cos(w1)
+    # # w3 = np.arctan((s1*omega_finite[..., 1, 2] + c1*omega_finite[..., 0, 1]) /(c1*omega_finite[..., 1, 1] - s1*omega_finite[..., 0, 2]))  # w21
 
-        ### Original method for using zero surface traction to get e33
-        C3311Xep11 = C[..., 0, 1] * epsilon[..., 0, 0]  #C12 * epsilon11
-        C3322Xep22 = C[..., 1, 2] * epsilon[..., 1, 1]  #C23 * epsilon22
-        C3323Xep23 = C[..., 2, 3] * epsilon[..., 1, 2]  #C34 * epsilon23
-        C3331Xep31 = C[..., 2, 4] * epsilon[..., 2, 0]  #C35 * epsilon31
-        C3312Xep12 = C[..., 0, 5] * epsilon[..., 0, 1]  #C36 * epsilon12
-        e33 = - (C3311Xep11 + C3322Xep22 + 2*(C3323Xep23 + C3331Xep31 + C3312Xep12)) / C[..., 2, 2]
-        epsilon[..., 2, 2] = e33
-        epsilon[..., 0, 0] += e33
-        epsilon[..., 1, 1] += e33
+    # # Calculate the small strain tensor
+    # # Use small strain theory to decompose the deformation gradient into the elastic strain tensor and the rotation matrix
+    # if small_strain:
+    #     d = Fe - I
+    #     if Fe.ndim == 2:
+    #         dT = d.T
+    #     elif Fe.ndim == 3:
+    #         dT = d.transpose(0, 2, 1)
+    #     elif Fe.ndim == 4:
+    #         dT = d.transpose(0, 1, 3, 2)
+    #     epsilon = 0.5 * (d + dT)
+    # else:
+    #     Sigma = np.einsum('...i,ij->...ij', S, np.eye(3))
 
-        # Calculate the stress tensor using Hooke's law
-        epsilon_voigt = np.zeros(Fe.shape[:-2] + (6,))
-        epsilon_voigt[..., 0] = epsilon[..., 0, 0]
-        epsilon_voigt[..., 1] = epsilon[..., 1, 1]
-        epsilon_voigt[..., 2] = epsilon[..., 2, 2]
-        epsilon_voigt[..., 3] = epsilon[..., 1, 2] * 2
-        epsilon_voigt[..., 4] = epsilon[..., 0, 2] * 2
-        epsilon_voigt[..., 5] = epsilon[..., 0, 1] * 2
-        stress_voigt = np.einsum('...ij,...j', C, epsilon_voigt)
-        stress = np.zeros(Fe.shape[:-2] + (3, 3))
-        stress[..., 0, 0] = stress_voigt[..., 0]
-        stress[..., 1, 1] = stress_voigt[..., 1]
-        stress[..., 2, 2] = stress_voigt[..., 2]
-        stress[..., 1, 2] = stress_voigt[..., 3]
-        stress[..., 0, 2] = stress_voigt[..., 4]
-        stress[..., 0, 1] = stress_voigt[..., 5]
 
-        # Apply a tolerance
-        # stress[np.abs(stress) < 1e-4] = 0
+    #     if Fe.ndim == 2:
+    #         epsilon = np.matmul(W, np.matmul(Sigma, W.T)) - I
+    #     elif Fe.ndim == 3:
+    #         #epsilon = np.matmul(W, np.matmul(Sigma, W.transpose(0, 2, 1))) - I
+    #         epsilon = Sigma - I
+    #     elif Fe.ndim == 4:
+    #         epsilon = np.matmul(W, np.matmul(Sigma, W.transpose(0, 1, 3, 2))) - I
 
-        return epsilon, omega, stress
+    # # Convert finite rotation matrix to a lattice rotation matrix
+    # v = rotations.om2ax(omega_finite)
+
+    # print ('v:', v)
+
+
+    # rotation_vector = v[..., :3] * v[..., 3][..., None]  # axis * angle
+
+    # # # build skew-symmetric matrix
+    # omega = np.zeros_like(omega_finite)
+    # omega[..., 0, 1] = -rotation_vector[..., 2]
+    # omega[..., 0, 2] =  rotation_vector[..., 1]
+    # omega[..., 1, 0] =  rotation_vector[..., 2]
+    # omega[..., 1, 2] = -rotation_vector[..., 0]
+    # omega[..., 2, 0] = -rotation_vector[..., 1]
+    # omega[..., 2, 1] =  rotation_vector[..., 0]
+
+    #     # build skew-symmetric matrix
+    # # omega = np.zeros_like(omega_finite)
+    # # omega[..., 0, 1] = -w3
+    # # omega[..., 1, 0] = w3
+
+    # # omega[..., 0, 2] = w2
+    # # omega[..., 2, 0] = -w2
+
+    # # omega[..., 1, 2] = -w1
+    # # omega[..., 2, 1] =  w1
+
+    # # omega[..., 0, 2] =  w2[..., 1]
+    # # omega[..., 1, 0] =  w1[..., 2]
+    # # omega[..., 1, 2] = w1[..., 0]
+    # # omega[..., 2, 0] = -rotation_vector[..., 1]
+    # # omega[..., 2, 1] =  rotation_vector[..., 0]
+
+
+    # # #Convert to sample frame rotation, not helpful bc working in detector frame
+    # # if Fe.ndim == 3:
+    # #     omega = np.transpose(omega, (0, 2, 1))
+    # # elif Fe.ndim == 4:
+    # #     omega = np.transpose(omega, (0, 1, 3, 2))
+
+    # # #Apply a tolerance
+    # # epsilon[np.abs(epsilon) < 1e-4] = 0
+    # # omega[np.abs(omega) < 1e-4] = 0
+
+    # if C is None:
+    #     return epsilon, omega
+    # else:
+    #     """Assume the surface normal stress is zero to separate e11, e22, e33
+    #     Solve the following system of equations:
+    #      0 = C3311*e11 + C3322*e22 + C3333*e33
+    #      X =     1*e11 +     0*e22 -     1*e33
+    #      Y =     0*e11 +     1*e22 -     1*e33
+    #     where X the 11 strain from the deformation gradient (technically e11 - e33) and 
+    #     Y is the 22 strain from the deformation gradient (technically e22 - e33)"""
+    #     # Grab elastic constants
+    #     # C3333 = C[..., 2, 2]  # C33 = C11 for cubic
+    #     # C3311 = C[..., 0, 2]  # C13 = C12 for cubic
+    #     # C3322 = C[..., 1, 2]  # C23 = C12 for cubic
+    #     # # Construct the dependent variables vector
+    #     # _0 = np.zeros_like(C3333)
+    #     # _1 = np.ones_like(C3333)
+    #     # b = np.array([_0, epsilon[..., 0, 0], epsilon[..., 1, 1]])
+    #     # b = np.moveaxis(b, 0, -1)
+    #     # # Construct the coefficient matrix and repeat it for broadcasting
+    #     # A = np.array([[C3311, C3322, C3333], [_1, _0, -1*_1], [_0, _1, -1*_1]])
+    #     # A = np.transpose(A, (2, 3, 0, 1))
+    #     # # Solve the system of equations
+    #     # x = np.linalg.solve(A, b)
+    #     # # Store the results
+    #     # epsilon[..., 0, 0] = x[..., 0]
+    #     # epsilon[..., 1, 1] = x[..., 1]
+    #     # epsilon[..., 2, 2] = x[..., 2]
+
+    #     ### Original method for using zero surface traction to get e33
+    #     C3311Xep11 = C[..., 0, 1] * epsilon[..., 0, 0]  #C12 * epsilon11
+    #     C3322Xep22 = C[..., 1, 2] * epsilon[..., 1, 1]  #C23 * epsilon22
+    #     C3323Xep23 = C[..., 2, 3] * epsilon[..., 1, 2]  #C34 * epsilon23
+    #     C3331Xep31 = C[..., 2, 4] * epsilon[..., 2, 0]  #C35 * epsilon31
+    #     C3312Xep12 = C[..., 0, 5] * epsilon[..., 0, 1]  #C36 * epsilon12
+    #     e33 = - (C3311Xep11 + C3322Xep22 + 2*(C3323Xep23 + C3331Xep31 + C3312Xep12)) / C[..., 2, 2]
+    #     epsilon[..., 2, 2] = e33
+    #     epsilon[..., 0, 0] += e33
+    #     epsilon[..., 1, 1] += e33
+
+    #     # Calculate the stress tensor using Hooke's law
+    #     epsilon_voigt = np.zeros(Fe.shape[:-2] + (6,))
+    #     epsilon_voigt[..., 0] = epsilon[..., 0, 0]
+    #     epsilon_voigt[..., 1] = epsilon[..., 1, 1]
+    #     epsilon_voigt[..., 2] = epsilon[..., 2, 2]
+    #     epsilon_voigt[..., 3] = epsilon[..., 1, 2] * 2
+    #     epsilon_voigt[..., 4] = epsilon[..., 0, 2] * 2
+    #     epsilon_voigt[..., 5] = epsilon[..., 0, 1] * 2
+    #     stress_voigt = np.einsum('...ij,...j', C, epsilon_voigt)
+    #     stress = np.zeros(Fe.shape[:-2] + (3, 3))
+    #     stress[..., 0, 0] = stress_voigt[..., 0]
+    #     stress[..., 1, 1] = stress_voigt[..., 1]
+    #     stress[..., 2, 2] = stress_voigt[..., 2]
+    #     stress[..., 1, 2] = stress_voigt[..., 3]
+    #     stress[..., 0, 2] = stress_voigt[..., 4]
+    #     stress[..., 0, 1] = stress_voigt[..., 5]
+
+    #     # Apply a tolerance
+    #     # stress[np.abs(stress) < 1e-4] = 0
+
+    #     return epsilon, omega, stress
     
 def F2h_CDmod(Fe: np.ndarray, x0):
     """
@@ -462,3 +588,8 @@ def h2F_CDmod(H: np.ndarray, PC: np.ndarray):
         return Fe[0]
 
     return Fe
+
+
+
+
+
