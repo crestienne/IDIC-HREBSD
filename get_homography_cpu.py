@@ -125,9 +125,7 @@ def optimize(
     # Get the reference image
     R = get_pat(x0)
 
-    #save the reference pattern for debugging as a png
-    plt.imsave("/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/debug/reference_pattern.png", R, cmap='gray')
-
+    
     # Get coordinates
     x = np.arange(R.shape[1]) - h0[0] 
     y = np.arange(R.shape[0]) - h0[1]
