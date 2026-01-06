@@ -9,25 +9,25 @@ import os
 
 ########## USER INPUTS ##########
 
-### List of all the up2 filepaths that need to be processed
-paths = [
-    "E:/SiGe/a-C03-scan/ScanA_2048x2048.up2",
-    "E:/SiGe/b-C04-scan/ScanB_2048x2048.up2",
-]
+# ### List of all the up2 filepaths that need to be processed
+# paths = [
+#     "E:/SiGe/a-C03-scan/ScanA_2048x2048.up2",
+#     "E:/SiGe/b-C04-scan/ScanB_2048x2048.up2",
+# ]
 
-### List of the save paths for the processed up2 files
-save_paths = [
-    "E:/SiGe/a-C03-scan/ScanA_1024x1024.up2",
-    "E:/SiGe/b-C04-scan/ScanB_1024x1024.up2",
-]
+# ### List of the save paths for the processed up2 files
+# save_paths = [
+#     "E:/SiGe/a-C03-scan/ScanA_1024x1024.up2",
+#     "E:/SiGe/b-C04-scan/ScanB_1024x1024.up2",
+# ]
 
-### Processing parameters
-bin_pats = True  # Whether to bin the patterns
-binning = 2  # Binning factor
-binning_mode = "mean"  # Binning mode, "mean" or "sum"
+# ### Processing parameters
+# bin_pats = True  # Whether to bin the patterns
+# binning = 2  # Binning factor
+# binning_mode = "mean"  # Binning mode, "mean" or "sum"
 
-flip_pats = True  # Whether to flip the patterns
-flip = "lr"  # Flip mode, "lr", "ud", or "both"
+# flip_pats = True  # Whether to flip the patterns
+# flip = "lr"  # Flip mode, "lr", "ud", or "both"
 
 ######### END USER INPUTS #########
 
@@ -237,15 +237,15 @@ def flip_patterns(patterns: np.ndarray, mode: str = None) -> np.ndarray:
         raise ValueError("mode must be 'lr' or 'ud'.")
 
 
-# Actually do the work
-for i in range(len(paths)):
-    print("Processing", paths[i])
-    pat_obj = read_up2(paths[i])
-    pats = get_patterns(pat_obj)
+# # Actually do the work
+# for i in range(len(paths)):
+#     print("Processing", paths[i])
+#     pat_obj = read_up2(paths[i])
+#     pats = get_patterns(pat_obj)
 
-    if bin_pats:
-        pats_out = bin_patterns(pats, binning, mode=binning_mode)
-    if flip_pats:
-        pats_out = flip_patterns(pats_out, mode=flip)
-    write_up2(pats_out, save_paths[i], bit_depth=16)
-    print("\tSaved to", save_paths[i])
+#     if bin_pats:
+#         pats_out = bin_patterns(pats, binning, mode=binning_mode)
+#     if flip_pats:
+#         pats_out = flip_patterns(pats_out, mode=flip)
+#     write_up2(pats_out, save_paths[i], bit_depth=16)
+#     print("\tSaved to", save_paths[i])
