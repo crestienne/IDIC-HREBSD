@@ -131,26 +131,26 @@ class UP2:
         # Normalize
         img = (img - img.min()) / (img.max() - img.min())
 
-        # Low pass filter
-        if self.low_pass_sigma > 0:
-            img = ndimage.gaussian_filter(img, self.low_pass_sigma)
+        # # Low pass filter
+        # if self.low_pass_sigma > 0:
+        #     img = ndimage.gaussian_filter(img, self.low_pass_sigma)
 
-        # High pass filter
-        if self.high_pass_sigma > 0:
-            background = ndimage.gaussian_filter(img, self.high_pass_sigma)
-            img = img - background
+        # # High pass filter
+        # if self.high_pass_sigma > 0:
+        #     background = ndimage.gaussian_filter(img, self.high_pass_sigma)
+        #     img = img - background
 
-        # Truncate step
-        if self.truncate_std_scale > 0:
-            mean, std = img.mean(), img.std()
-            img = np.clip(
-                img,
-                mean - self.truncate_std_scale * std,
-                mean + self.truncate_std_scale * std,
-            )
+        # # Truncate step
+        # if self.truncate_std_scale > 0:
+        #     mean, std = img.mean(), img.std()
+        #     img = np.clip(
+        #         img,
+        #         mean - self.truncate_std_scale * std,
+        #         mean + self.truncate_std_scale * std,
+        #     )
 
-        # Re normalize
-        img = (img - img.min()) / (img.max() - img.min())
+        # # Re normalize
+        # img = (img - img.min()) / (img.max() - img.min())
 
         return img
 
