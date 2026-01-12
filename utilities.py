@@ -134,6 +134,7 @@ def read_ang(
                       (i.e. x, y, iq, ci, sem, phase_index, etc.)
     """
     header_lines = 0
+    #print('names', names)
     with open(path, "r") as ang:
         for line in ang:
             header_lines += 1
@@ -170,6 +171,8 @@ def read_ang(
         print(f"Pattern center (original): {PC}")
     shape = (rows, cols)
 
+    print('names', names)
+    
     # Clean and drop Euler column names
     names = [
         name.replace(" ", "_").lower()
