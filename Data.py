@@ -4,6 +4,7 @@ import struct
 from skimage import io
 from scipy import ndimage
 import numpy as np
+from sympy import gamma
 
 
 class UP2:
@@ -55,9 +56,9 @@ class UP2:
 
     def set_processing(
         self,
-        low_pass_sigma: float = 0.0,
-        high_pass_sigma: float = 0.0,
-        truncate_std_scale: float = 0.0,
+        low_pass_sigma: float = 0.75,
+        high_pass_sigma: float = 110.0,
+        truncate_std_scale: float = 2.5,
     ):
         """Set the parameters for processing the patterns.
         Values of 0.0 will skip the step.
@@ -70,6 +71,7 @@ class UP2:
         self.low_pass_sigma = low_pass_sigma
         self.high_pass_sigma = high_pass_sigma
         self.truncate_std_scale = truncate_std_scale
+        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}")
 
     def read(self, chunks, i=None):
         """Read the next `chunks` bytes from the file. If `i` is not None, read from the current position."""
@@ -132,27 +134,34 @@ class UP2:
         # Normalize
         img = (img - img.min()) / (img.max() - img.min())
 
-        # # Low pass filter
-        # if self.low_pass_sigma > 0:
-        #     img = ndimage.gaussian_filter(img, self.low_pass_sigma)
+        # Low pass filter
+        if self.low_pass_sigma > 0:
+            img = ndimage.gaussian_filter(img, self.low_pass_sigma)
+        #copy img and conver to a usable format to save
+        img_copy = np.around(255 * (img - img.min()) / (img.max() - img.min())).astype(np.uint8)
+        # save intermediate result 
+        io.imsave("debug/low_pass_filtered.png", img_copy)
+        # High pass filter
+        if self.high_pass_sigma > 0:
+            background = ndimage.gaussian_filter(img, self.high_pass_sigma)
+            img = img - background
+        img_copy = np.around(255 * (img - img.min()) / (img.max() - img.min())).astype(np.uint8)
+        io.imsave("debug/high_pass_filtered.png", img_copy)
 
-        # # High pass filter
-        # if self.high_pass_sigma > 0:
-        #     background = ndimage.gaussian_filter(img, self.high_pass_sigma)
-        #     img = img - background
+        # Truncate step
+        if self.truncate_std_scale > 0:
+            mean, std = img.mean(), img.std()
+            img = np.clip(
+                img,
+                mean - self.truncate_std_scale * std,
+                mean + self.truncate_std_scale * std,
+            )
+        
 
-        # # Truncate step
-        # if self.truncate_std_scale > 0:
-        #     mean, std = img.mean(), img.std()
-        #     img = np.clip(
-        #         img,
-        #         mean - self.truncate_std_scale * std,
-        #         mean + self.truncate_std_scale * std,
-        #     )
+        # Re normalize
+        img = (img - img.min()) / (img.max() - img.min())
 
-        # # Re normalize
-        # img = (img - img.min()) / (img.max() - img.min())
-
+        img = img**1.1  # gamma correction
         return img
 
 def process_pattern_no_class(
