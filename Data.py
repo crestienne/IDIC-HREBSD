@@ -11,7 +11,7 @@ class UP2:
         self.path = path
         self.data = None
         self.i = 0
-        self.start_byte = np.int64(16)
+        self.start_byte = np.int64(16) #start byte acutally defined in header (C editied on Jan 21, 2026)
         self.header()
         self.set_processing()
 
@@ -43,6 +43,7 @@ class UP2:
         sz2 = struct.unpack("i", tmp)[0] # pattern height, y 
         tmp = self.read(chunk_size)
         self.bitsPerPixel = struct.unpack("i", tmp)[0]
+        self.start_byte = self.bitsPerPixel #unclear where bits per pixel is being used so leaving for right now 
         sizeBytes = os.path.getsize(self.path) - 16
         self.filesize = str(round(sizeBytes / 1e6, 1)) + " MB"
         bytesPerPixel = 2
@@ -202,6 +203,8 @@ def process_pattern_no_class(
         # img = (img - img.min()) / (img.max() - img.min())
 
         return img
+
+#------ New clasee to read a region of interest from UP2 files -------
 
 
 if __name__ == "__main__":
