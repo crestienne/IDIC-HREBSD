@@ -59,6 +59,7 @@ def optimize(
     conv_tol: float = 1e-3,
     n_jobs: int = -1,
     verbose: bool = False,
+    roi_slice: tuple[slice, slice] = None,
 ) -> np.ndarray:
     """Routine for running the inverse composition gauss-newton algorithm.
 
@@ -102,12 +103,23 @@ def optimize(
     if n_jobs == -1:
         n_jobs = os.cpu_count() - 1
 
+    #removed hardcoded pattern shape later 
+    nrows = 175
+    ncols = 434
+
+
     # Prepare the patterns
     if type(pats) == Data.UP2:
-        N = pats.nPatterns
-        out_shape = (pats.nPatterns,)
+        if roi_slice is not None:
+            N = (roi_slice[0].stop - roi_slice[0].start) * (roi_slice[1].stop - roi_slice[1].start)
+            out_shape = (N, )
+            roi_indices = roi_indices_from_rect(roi_slice, (nrows, ncols))
+
+        else:
+            N = pats.nPatterns
+            out_shape = (pats.nPatterns,)
+        get_pat = lambda idx: pats.read_pattern(idx, process=True) #removed the process=True argument here
         patshape = pats.patshape
-        get_pat = lambda idx: pats.read_pattern(idx) #removed the process=True argument here
     elif type(pats) == np.ndarray:
         N = np.prod(pats.shape[:-2])
         out_shape = pats.shape[:-2]
@@ -116,10 +128,21 @@ def optimize(
         get_pat = lambda idx: pats[idx]
     else:
         raise TypeError("pats must be a Data.UP2 object or a numpy array.")
+
+    # print (out_shape)  
+    # # # for a region of interest 
+    # if roi_slice is not None:
+    #     print("Using ROI slice for optimization:", roi_slice)
+    #     N = (roi_slice[0].stop - roi_slice[0].start) * (roi_slice[1].stop - roi_slice[1].start)
+    #     patshape = (roi_slice[0].stop - roi_slice[0].start, roi_slice[1].stop - roi_slice[1].start)
+    #     old_get_pat = get_pat
+    #     get_pat = lambda idx: old_get_pat(idx)[roi_slice[0], roi_slice[1]]
+
     h0 = (patshape[1] // 2, patshape[0] // 2)
     crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
     crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
     subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col)) #(y, x format)
+
 
     ### Reference precompute ###
     # Get the reference image
@@ -212,7 +235,7 @@ def optimize(
         # FFT the reference and get the signal
         r_fft = np.fft.fftshift(np.fft.fft2(r_init))
         r_fmt, _ = FMT(r_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
-
+    idx_list = roi_indices if roi_indices is not None else range(N)
     ### Run the optimization in parallel ###
     if verbose:
         with tqdm_joblib(tqdm(total=N, desc="Patterns optimized")) as progress_bar:
@@ -237,7 +260,7 @@ def optimize(
                     max_iter,
                     conv_tol,
                 )
-                for idx in range(N)
+                for idx in idx_list
             )
     else:
         results = Parallel(n_jobs=n_jobs)(
@@ -261,7 +284,7 @@ def optimize(
                 max_iter,
                 conv_tol,
             )
-            for idx in range(N)
+            for idx in idx_list
         )
 
     # Unpack results
@@ -312,6 +335,7 @@ def _process_single_pattern(
     max_iter,
     conv_tol,
 ):
+    
     """Helper function to process a single pattern for parallel execution."""
     # Run initial guess
     if init_type == InitType.NONE:
@@ -343,6 +367,29 @@ def _process_single_pattern(
     )
 
     return h, initial_guess, num_iter, residual, dp_norm
+
+def roi_indices_from_rect(roi_slice, patshape):
+    """
+    Return a 1D array of flat pattern indices for a rectangular ROI.
+
+    Parameters
+    ----------
+    roi_slice : tuple of slice
+        (row_slice, col_slice)
+    patshape : tuple
+        (total_rows, total_cols) of the full scan
+    """
+    row_slice, col_slice = roi_slice
+    Ny, Nx = patshape
+
+    rows = np.arange(row_slice.start, row_slice.stop)
+    cols = np.arange(col_slice.start, col_slice.stop)
+
+    rr, cc = np.meshgrid(rows, cols, indexing="ij")
+
+    # row-major (C-order): pattern_id = row * Nx + col
+    return (rr * Nx + cc).ravel()
+
 
 
 def optimize_run(
@@ -380,6 +427,11 @@ def optimize_run(
     """
     # Get the target image
     T = get_pat(idx)
+
+    savepat = True
+    if savepat:
+        plt.imsave(f'debug/pat/target_pattern_{idx}_cpu.png', T, cmap='Greys_r')
+
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
     x = np.arange(T.shape[1]) - h0[0]
     y = np.arange(T.shape[0]) - h0[1]
@@ -464,7 +516,11 @@ def initial_guess_run(
     T = get_pat(idx)
 
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]])
+    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]], alpha=0.2)
+
+    savepat = True
+    if savepat:
+       plt.imsave(f'debug/pat/target_pattern_{idx}_init_guess_cpu.png', t_init, cmap='Greys_r')
 
     # Do the angle search first
     t_init_fft = np.fft.fftshift(np.fft.fft2(t_init))
@@ -479,7 +535,7 @@ def initial_guess_run(
     shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
     # Store the homography
     measurement = np.array([[-shift[1], -shift[0], -theta]])
-    print( f"Initial guess for pattern {idx}: translation ({-shift[1]:.2f}, {-shift[0]:.2f}), rotation {-theta:.4f} rad")
+    
 
     return measurement
 
@@ -586,3 +642,4 @@ def FMT(image, X, Y, x, y):
     image_polar = np.abs(spline(x, y, grid=False).reshape(image.shape))
     sig = window_and_normalize(image_polar.mean(axis=1))
     return sig, image_polar
+
