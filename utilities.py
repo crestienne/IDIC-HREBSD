@@ -67,6 +67,7 @@ def convert_pc(
     xpc = PC[0] * patshape[1]
     ypc = PC[1] * patshape[0]
     DD = PC[2] * patshape[0]
+    print('note to self convert_pc: has error')
     return (xpc, ypc, DD)
 
 
