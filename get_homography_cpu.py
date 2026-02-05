@@ -116,6 +116,7 @@ def optimize(
             roi_indices = roi_indices_from_rect(roi_slice, (nrows, ncols))
 
         else:
+            roi_indices = None
             N = pats.nPatterns
             out_shape = (pats.nPatterns,)
         get_pat = lambda idx: pats.read_pattern(idx, process=True) #removed the process=True argument here
