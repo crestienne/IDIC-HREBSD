@@ -9,3 +9,14 @@ debug/*
 .DS_Store
 4debsd_joint.py
 results/.DS_Store
+.venv/
+*.up2
+*.csv
+*.xlsx
+results/
+AlteredPC-Jan5/
+AlteredPC-Jan22/
+Inputs/Patterns/
+Inputs/EBSDpattern_Al_July222025.h5
+Inputs/ErnouldMethod_ang.ang
+Inputs/UP2 files/EBSDpattern_Al_July222025.h5
