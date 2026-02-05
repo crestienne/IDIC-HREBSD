@@ -8,15 +8,16 @@ import os
 import datetime
 
 
-component = "PC_Sensitivity_PCx"
-date = "Jan212026" 
+component = "Al-x150to250y75to150"
+date = "Jan222025" 
 up2 = (
-   '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/PCsensitivity_pcx_Jan22.up2' 
+   '/Volumes/Extreme SSD/DONOTEDIT_originaldata/Zehua-Recrystallized Al/HR.up2' 
 )
 # up2 = "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_512x512_flipX.up2"
-ang = "/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/ErnouldMethod_ang.ang"
-x0 = (0, 0)
-
+ang = '/Volumes/Extreme SSD/DONOTEDIT_originaldata/Zehua-Recrystallized Al/HR.ang'
+x0 = (110, 200) #order is y,x
+#order for roi_slice: [slice(y_start, y_stop), slice(x_start, x_stop)], set to none if want to look at whole pattern 
+roi_slice= [slice(75, 150), slice(150, 250)]
 
 base_folder_name = f'{component}_{date}_npyfiles'
 foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{base_folder_name}/'
@@ -32,7 +33,7 @@ print("Initial index and coordinates:")
 print(x0)
 
 h, h_guess, iterations, residuals, dp_norms = core.optimize(
-    pat_obj, x0, init_type='partial', crop_fraction=0.9, max_iter=70, n_jobs=19, verbose=True, roi_slice = None
+    pat_obj, x0, init_type='partial', crop_fraction=0.9, max_iter=25, n_jobs=19, verbose=True, roi_slice=roi_slice
 )
 
 
