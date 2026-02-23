@@ -168,7 +168,7 @@ def interpolate_pattern(deformed_coords, reference_pattern, PC):
         y_ref,  # y (rows)
         x_ref,  # x (cols)
         reference_pattern,
-        kx=5, ky=5,
+        kx=3, ky=3,
         )
         
     interpolated_pattern = spline(
