@@ -16,7 +16,7 @@ from skimage import exposure, filters
 import joblib
 from joblib import Parallel, delayed
 
-import torch
+
 import kornia
 
 import segment
@@ -317,6 +317,7 @@ def get_sharpness(imgs: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: The sharpness of the images. float, (N,) or (N0, N1) for example."""
     # Process inputs
+    import torch
     reshape = None
     if imgs.ndim == 2:
         imgs = imgs[None, ...]
@@ -368,6 +369,7 @@ def process_patterns_gpu(
 
     Returns:
         np.ndarray: The cleaned patterns. (N, H, W)"""
+    import torch
     # Process inputs
     reshape = None
     if imgs.ndim == 2:
