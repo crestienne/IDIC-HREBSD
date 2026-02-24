@@ -83,7 +83,7 @@ def optimize(
     # Check the crop fraction
     if crop_fraction <= 0 or crop_fraction >= 1:
         raise ValueError("Crop fraction must be between 0 and 1.")
-
+    
     # Check convergence parameters
     if max_iter <= 0:
         raise ValueError("Maximum number of iterations must be greater than 0.")
@@ -119,7 +119,7 @@ def optimize(
             roi_indices = None
             N = pats.nPatterns
             out_shape = (pats.nPatterns,)
-        get_pat = lambda idx: pats.read_pattern(idx, process=True) #removed the process=True argument here
+        get_pat = lambda idx: pats.read_pattern(idx) #removed the process=True argument here
         patshape = pats.patshape
     elif type(pats) == np.ndarray:
         N = np.prod(pats.shape[:-2])
@@ -340,7 +340,9 @@ def _process_single_pattern(
     """Helper function to process a single pattern for parallel execution."""
     # Run initial guess
     if init_type == InitType.NONE:
-        h = np.zeros(8, dtype=float)
+        # h = np.zeros(8, dtype=float)
+         h = 1e-5 * (2*np.random.rand(8) - 1)
+         print(f"Initial guess for pattern {idx}: {h}")
     else:
         measurement = initial_guess_run(
             get_pat, idx, init_subset_slice, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
