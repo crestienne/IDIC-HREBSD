@@ -136,8 +136,10 @@ def write_up2(pats_array: np.ndarray, filename: str, bit_depth: int = 16):
         pats_array = np.around((pats_array - mns) / (mxs - mns) * 65535).astype(
             np.uint16
         )
+        # pats_array = np.clip(pats_array, 0, 65535).astype(np.uint16) #just clipping patterns so that thier are no deviations in intensity
     else:
         raise ValueError("bit_depth must be 8 or 16.")
+
 
     # Check the file extension
     if ".up2" not in filename and ".up1" not in filename:
