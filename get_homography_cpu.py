@@ -340,9 +340,9 @@ def _process_single_pattern(
     """Helper function to process a single pattern for parallel execution."""
     # Run initial guess
     if init_type == InitType.NONE:
-        # h = np.zeros(8, dtype=float)
-         h = 1e-5 * (2*np.random.rand(8) - 1)
-         print(f"Initial guess for pattern {idx}: {h}")
+         h = np.zeros(8, dtype=float)
+         #h = 1e-5 * (2*np.random.rand(8) - 1)
+         #print(f"Initial guess for pattern {idx}: {h}")
     else:
         measurement = initial_guess_run(
             get_pat, idx, init_subset_slice, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
