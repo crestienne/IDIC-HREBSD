@@ -144,6 +144,9 @@ def h2F(H, X0):
     elif Fe.ndim == 3:
         #Fe = np.squeeze(np.moveaxis(Fe, (0, 1, 2), (1, 2, 0)))
         Fe = np.moveaxis(Fe, -1, 0)  # move last axis (N) to first
+    # Apply a tolerance to avoid numerical issues with very small values esp negative 0  
+    eps = 1e-12
+    Fe = np.where(np.abs(Fe) < eps, 0.0, Fe)
 
     return Fe
 
@@ -271,6 +274,11 @@ def F2strain(
     omega[..., 1, 2] = -w1
     omega[..., 2, 0] = -w2
     omega[..., 2, 1] =  w1
+
+    #just making sure that we don't end up with negative 0 (added Feb25, 2026)
+    eps = 1e-12
+    epsilon = np.where(np.abs(epsilon) < eps, 0.0, epsilon)
+    omega = np.where(np.abs(omega) < eps, 0.0, omega)
 
     return epsilon, omega
 
