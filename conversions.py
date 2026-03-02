@@ -153,7 +153,7 @@ def h2F(H, X0):
 
 def F2h(Fe: np.ndarray, X0: tuple | list | np.ndarray) -> np.ndarray:
     """Calculate the homography from a deformation gradient using the projection geometry (pattern center).
-
+    'currently inaccurate when more than one Fe value is passed at a time - do not use for batch calculations'
     Args:
         Fe (np.ndarray): The deformation gradient.
         X0 (tuple | list | np.ndarray): The distance from the pattern center to the homography center (x01, x02, DD), per Ernould's method.
