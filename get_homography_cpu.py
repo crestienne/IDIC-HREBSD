@@ -5,6 +5,7 @@ import contextlib
 
 import numpy as np
 from scipy import linalg, interpolate, signal
+from scipy.ndimage import gaussian_filter
 from tqdm.auto import tqdm
 import joblib
 from joblib import Parallel, delayed
@@ -148,11 +149,18 @@ def optimize(
     ### Reference precompute ###
     # Get the reference image
     R = get_pat(x0)
+    #add a small guassian blur to the reference pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
+    R = gaussian_filter(R, sigma= 0.7)
 
     
-    # Get coordinates
-    x = np.arange(R.shape[1]) - h0[0] 
-    y = np.arange(R.shape[0]) - h0[1]
+    # # Get coordinates
+    # x = np.arange(R.shape[1]) - h0[0] 
+    # y = np.arange(R.shape[0]) - h0[1]
+
+    # test: use pixel-center convention consistently
+    x = (np.arange(R.shape[1]) + 0.5) - h0[0]
+    y = (np.arange(R.shape[0]) + 0.5) - h0[1]
+
     X, Y = np.meshgrid(x, y, indexing="xy")
 
     #changing 
@@ -203,6 +211,16 @@ def optimize(
 
     # Store the precomputed values
     del GR, GRx, GRy, Jac, H, X, Y, ref_spline
+
+    ### Create debug folder to save patterns
+
+    debug_dir = os.path.join("debug", "pat")
+    os.makedirs(debug_dir, exist_ok=True)
+
+    for name in os.listdir(debug_dir):
+        p = os.path.join(debug_dir, name)
+        if os.path.isfile(p):
+            os.remove(p)
 
     #### Precompute the FMT-FCC initial guess ###
     if init_type is not InitType.NONE:
@@ -354,6 +372,8 @@ def _process_single_pattern(
 
     initial_guess = h.copy()
 
+    #clear the image saving folder
+
     # Run the optimization
     h, num_iter, residual, dp_norm = optimize_run(
         get_pat,
@@ -431,13 +451,22 @@ def optimize_run(
     # Get the target image
     T = get_pat(idx)
 
+    #add a small guassian blur to the target pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
+    T = gaussian_filter(T, sigma= 0.7)
+
     savepat = True
     if savepat:
         plt.imsave(f'debug/pat/target_pattern_{idx}_cpu.png', T, cmap='Greys_r')
 
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    x = np.arange(T.shape[1]) - h0[0]
-    y = np.arange(T.shape[0]) - h0[1]
+    #trying a different spline definition here 
+    # test: use pixel-center convention consistently
+    x = (np.arange(T.shape[1]) + 0.5) - h0[0]
+    y = (np.arange(T.shape[0]) + 0.5) - h0[1]
+
+
+    # x = np.arange(T.shape[1]) - h0[0]
+    # y = np.arange(T.shape[0]) - h0[1]
     T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5) #patterns read in (y, x) ordering
 
     # Run the optimization
@@ -449,7 +478,8 @@ def optimize_run(
         num_iter += 1
         t_deformed = warp.deform(xi, T_spline, h)
         t_mean = t_deformed.mean()
-        t_deformed = (t_deformed - t_mean) / np.sqrt(((t_deformed - t_mean) ** 2).sum())
+        # t_deformed = (t_deformed - t_mean) / np.sqrt(((t_deformed - t_mean) ** 2).sum())
+        t_deformed = (t_deformed - t_mean) / r_zmsv #testing snapping
         # Compute the residuals
         e = r - t_deformed
         residuals.append(np.abs(e).mean())
