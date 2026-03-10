@@ -208,9 +208,9 @@ def read_ang(
     pidx = np.arange(np.prod(shape)).reshape(shape)
     if segment_grain_threshold is not None:
         ids, kam = segment.segment_grains(qu, segment_grain_threshold)
-        args = (euler, qu, shape, PC, step_size, pidx, ids, kam)
-    else:
-        args = (euler, qu, shape, PC, step_size, pidx)
+        #args = (euler, qu, shape, PC, step_size, pidx, ids, kam)
+  
+    args = (euler, qu, shape, PC, step_size, pidx)
     ang_data = np.moveaxis(ang_data, 2, 0)
 
     print("FIELD COUNT:", len(names))
@@ -219,7 +219,13 @@ def read_ang(
 
     # Package everything into a namedtuple
     out = namedtuple("ang_file", names)(*ang_data, *args)
-    return out
+    if segment_grain_threshold is not None:
+        print(
+            f"Segmented grains with threshold {segment_grain_threshold}. Number of grains: {len(np.unique(ids))}"
+        )
+        return out, ids, kam
+    else:
+        return out
 
 
 def get_scan_data(up2: str, ang: str) -> tuple:
