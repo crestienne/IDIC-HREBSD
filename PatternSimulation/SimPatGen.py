@@ -38,8 +38,8 @@ class patternSimulation():
         self.dtype = torch.float32  # Specify the data type
 
         #Defining the size/shape of detector
-        self.detector_height = 2400
-        self.detector_width = 2400
+        self.detector_height = 516
+        self.detector_width = 516
         self.det_shape = (self.detector_height, self.detector_width)
         self.detector_tilt_deg = 70
 
@@ -85,7 +85,7 @@ class patternSimulation():
         #convert the pattern center and tilt angles to SE3 vector
         rotation, translation = bruker_geometry_to_SE3(
             pattern_centers= self.pattern_centerInit,
-            primary_tilt_deg = torch.tensor([-70], device= self.device, dtype=self.dtype),
+            primary_tilt_deg = torch.tensor([-72], device= self.device, dtype=self.dtype),
             secondary_tilt_deg=torch.tensor([self.azimuthal_deg], device=self.device, dtype=self.dtype),
             detector_shape= self.det_shape,
         )
