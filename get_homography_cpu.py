@@ -5,6 +5,7 @@ import contextlib
 
 import numpy as np
 from scipy import linalg, interpolate, signal
+from scipy.ndimage import gaussian_filter
 from tqdm.auto import tqdm
 import joblib
 from joblib import Parallel, delayed
@@ -59,6 +60,7 @@ def optimize(
     conv_tol: float = 1e-3,
     n_jobs: int = -1,
     verbose: bool = False,
+    roi_slice: tuple[slice, slice] = None,
 ) -> np.ndarray:
     """Routine for running the inverse composition gauss-newton algorithm.
 
@@ -82,7 +84,7 @@ def optimize(
     # Check the crop fraction
     if crop_fraction <= 0 or crop_fraction >= 1:
         raise ValueError("Crop fraction must be between 0 and 1.")
-
+    
     # Check convergence parameters
     if max_iter <= 0:
         raise ValueError("Maximum number of iterations must be greater than 0.")
@@ -102,12 +104,24 @@ def optimize(
     if n_jobs == -1:
         n_jobs = os.cpu_count() - 1
 
+    #removed hardcoded pattern shape later 
+    nrows = 175
+    ncols = 434
+
+
     # Prepare the patterns
     if type(pats) == Data.UP2:
-        N = pats.nPatterns
-        out_shape = (pats.nPatterns,)
+        if roi_slice is not None:
+            N = (roi_slice[0].stop - roi_slice[0].start) * (roi_slice[1].stop - roi_slice[1].start)
+            out_shape = (N, )
+            roi_indices = roi_indices_from_rect(roi_slice, (nrows, ncols))
+
+        else:
+            roi_indices = None
+            N = pats.nPatterns
+            out_shape = (pats.nPatterns,)
+        get_pat = lambda idx: pats.read_pattern(idx, process=True) #removed the process=True argument here
         patshape = pats.patshape
-        get_pat = lambda idx: pats.read_pattern(idx) #removed the process=True argument here
     elif type(pats) == np.ndarray:
         N = np.prod(pats.shape[:-2])
         out_shape = pats.shape[:-2]
@@ -116,19 +130,39 @@ def optimize(
         get_pat = lambda idx: pats[idx]
     else:
         raise TypeError("pats must be a Data.UP2 object or a numpy array.")
+
+    # print (out_shape)  
+    # # # for a region of interest 
+    # if roi_slice is not None:
+    #     print("Using ROI slice for optimization:", roi_slice)
+    #     N = (roi_slice[0].stop - roi_slice[0].start) * (roi_slice[1].stop - roi_slice[1].start)
+    #     patshape = (roi_slice[0].stop - roi_slice[0].start, roi_slice[1].stop - roi_slice[1].start)
+    #     old_get_pat = get_pat
+    #     get_pat = lambda idx: old_get_pat(idx)[roi_slice[0], roi_slice[1]]
+
     h0 = (patshape[1] // 2, patshape[0] // 2)
     crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
     crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
     subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col)) #(y, x format)
 
+
     ### Reference precompute ###
     # Get the reference image
     R = get_pat(x0)
+    #add a small guassian blur to the reference pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
+    #R = gaussian_filter(R, sigma= 0.8)
+
+    print('the shape of the reference pattern is:', R.shape)
 
     
-    # Get coordinates
+    # # Get coordinates
     x = np.arange(R.shape[1]) - h0[0] 
     y = np.arange(R.shape[0]) - h0[1]
+
+    # # test: use pixel-center convention consistently
+    # x = (np.arange(R.shape[1]) + 0.5) - h0[0]
+    # y = (np.arange(R.shape[0]) + 0.5) - h0[1]
+
     X, Y = np.meshgrid(x, y, indexing="xy")
 
     #changing 
@@ -149,16 +183,36 @@ def optimize(
     r = (r - r.mean()) / r_zmsv
 
     # Aggreement between optimization test and get homography cpu for gradients check
-    # fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-    # for a in ax.ravel():
-    #     a.axis("off")
-    # ax[0].imshow(GRx.reshape(1082, 1082), cmap="Greys_r")
-    # ax[0].set_title("Gradient (x)")
-    # ax[1].imshow(GRy.reshape(1082, 1082), cmap="Greys_r")
-    # ax[1].set_title("Gradient (y)")
-    # plt.tight_layout()
-    # plt.savefig("debug/gradients_cpu.jpg")
-    # plt.close()
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    for a in ax.ravel():
+        a.axis("off")
+    ax[0].imshow(GRx.reshape(466, 466), cmap="Greys_r")
+    ax[0].set_title("Gradient (x)")
+    ax[1].imshow(GRy.reshape(466, 466), cmap="Greys_r")
+    ax[1].set_title("Gradient (y)")
+    plt.tight_layout()
+    plt.savefig("debug/gradients_cpu.jpg")
+    plt.close()
+
+    # compute gradient magnitude
+    grad_mag = np.sqrt(GRx**2 + GRy**2)
+
+    fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+    for a in ax.ravel():
+        a.axis("off")
+
+    ax[0].imshow(GRx.reshape(466, 466), cmap="RdBu")
+    ax[0].set_title("Gradient X", fontweight="bold")
+
+    ax[1].imshow(GRy.reshape(466, 466), cmap="RdBu")
+    ax[1].set_title("Gradient Y", fontweight="bold")
+
+    ax[2].imshow(grad_mag.reshape(466, 466), cmap="inferno")
+    ax[2].set_title("Gradient Magnitude", fontweight="bold")
+
+    plt.tight_layout()
+    plt.savefig("debug/gradients_silicon.jpg")
+    plt.close()
 
     # Compute the jacobian of the shape function
     _1 = np.ones(xi.shape[1])
@@ -179,6 +233,16 @@ def optimize(
 
     # Store the precomputed values
     del GR, GRx, GRy, Jac, H, X, Y, ref_spline
+
+    ### Create debug folder to save patterns
+
+    debug_dir = os.path.join("debug", "pat")
+    os.makedirs(debug_dir, exist_ok=True)
+
+    for name in os.listdir(debug_dir):
+        p = os.path.join(debug_dir, name)
+        if os.path.isfile(p):
+            os.remove(p)
 
     #### Precompute the FMT-FCC initial guess ###
     if init_type is not InitType.NONE:
@@ -212,7 +276,7 @@ def optimize(
         # FFT the reference and get the signal
         r_fft = np.fft.fftshift(np.fft.fft2(r_init))
         r_fmt, _ = FMT(r_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
-
+    idx_list = roi_indices if roi_indices is not None else range(N)
     ### Run the optimization in parallel ###
     if verbose:
         with tqdm_joblib(tqdm(total=N, desc="Patterns optimized")) as progress_bar:
@@ -237,7 +301,7 @@ def optimize(
                     max_iter,
                     conv_tol,
                 )
-                for idx in range(N)
+                for idx in idx_list
             )
     else:
         results = Parallel(n_jobs=n_jobs)(
@@ -261,7 +325,7 @@ def optimize(
                 max_iter,
                 conv_tol,
             )
-            for idx in range(N)
+            for idx in idx_list
         )
 
     # Unpack results
@@ -312,10 +376,13 @@ def _process_single_pattern(
     max_iter,
     conv_tol,
 ):
+    
     """Helper function to process a single pattern for parallel execution."""
     # Run initial guess
     if init_type == InitType.NONE:
-        h = np.zeros(8, dtype=float)
+         h = np.zeros(8, dtype=float)
+         #h = 1e-5 * (2*np.random.rand(8) - 1)
+         #print(f"Initial guess for pattern {idx}: {h}")
     else:
         measurement = initial_guess_run(
             get_pat, idx, init_subset_slice, r_init, r_fmt, X_fmt, Y_fmt, x_fmt, y_fmt
@@ -326,6 +393,8 @@ def _process_single_pattern(
             h = conversions.xyt2h_partial(measurement)
 
     initial_guess = h.copy()
+
+    #clear the image saving folder
 
     # Run the optimization
     h, num_iter, residual, dp_norm = optimize_run(
@@ -343,6 +412,29 @@ def _process_single_pattern(
     )
 
     return h, initial_guess, num_iter, residual, dp_norm
+
+def roi_indices_from_rect(roi_slice, patshape):
+    """
+    Return a 1D array of flat pattern indices for a rectangular ROI.
+
+    Parameters
+    ----------
+    roi_slice : tuple of slice
+        (row_slice, col_slice)
+    patshape : tuple
+        (total_rows, total_cols) of the full scan
+    """
+    row_slice, col_slice = roi_slice
+    Ny, Nx = patshape
+
+    rows = np.arange(row_slice.start, row_slice.stop)
+    cols = np.arange(col_slice.start, col_slice.stop)
+
+    rr, cc = np.meshgrid(rows, cols, indexing="ij")
+
+    # row-major (C-order): pattern_id = row * Nx + col
+    return (rr * Nx + cc).ravel()
+
 
 
 def optimize_run(
@@ -380,7 +472,21 @@ def optimize_run(
     """
     # Get the target image
     T = get_pat(idx)
+
+    #add a small guassian blur to the target pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
+    #T = gaussian_filter(T, sigma= 0.8)
+
+    savepat = True
+    if savepat:
+        plt.imsave(f'debug/pat/target_pattern_{idx}_cpu.jpg', T, cmap='Greys_r')
+
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
+    #trying a different spline definition here 
+    # test: use pixel-center convention consistently
+    # x = (np.arange(T.shape[1]) + 0.5) - h0[0]
+    # y = (np.arange(T.shape[0]) + 0.5) - h0[1]
+
+
     x = np.arange(T.shape[1]) - h0[0]
     y = np.arange(T.shape[0]) - h0[1]
     T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5) #patterns read in (y, x) ordering
@@ -394,7 +500,8 @@ def optimize_run(
         num_iter += 1
         t_deformed = warp.deform(xi, T_spline, h)
         t_mean = t_deformed.mean()
-        t_deformed = (t_deformed - t_mean) / np.sqrt(((t_deformed - t_mean) ** 2).sum())
+        # t_deformed = (t_deformed - t_mean) / np.sqrt(((t_deformed - t_mean) ** 2).sum())
+        t_deformed = (t_deformed - t_mean) / r_zmsv #testing snapping
         # Compute the residuals
         e = r - t_deformed
         residuals.append(np.abs(e).mean())
@@ -464,7 +571,11 @@ def initial_guess_run(
     T = get_pat(idx)
 
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]])
+    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]], alpha=0.2)
+
+    savepat = True
+    if savepat:
+       plt.imsave(f'debug/pat/target_pattern_{idx}_init_guess_cpu.png', t_init, cmap='Greys_r')
 
     # Do the angle search first
     t_init_fft = np.fft.fftshift(np.fft.fft2(t_init))
@@ -479,7 +590,7 @@ def initial_guess_run(
     shift = np.unravel_index(np.argmax(cc), cc.shape) - np.array(cc.shape) / 2
     # Store the homography
     measurement = np.array([[-shift[1], -shift[0], -theta]])
-    print( f"Initial guess for pattern {idx}: translation ({-shift[1]:.2f}, {-shift[0]:.2f}), rotation {-theta:.4f} rad")
+    
 
     return measurement
 
@@ -586,3 +697,4 @@ def FMT(image, X, Y, x, y):
     image_polar = np.abs(spline(x, y, grid=False).reshape(image.shape))
     sig = window_and_normalize(image_polar.mean(axis=1))
     return sig, image_polar
+

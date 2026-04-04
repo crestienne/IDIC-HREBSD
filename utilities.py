@@ -16,7 +16,7 @@ from skimage import exposure, filters
 import joblib
 from joblib import Parallel, delayed
 
-import torch
+
 import kornia
 
 import segment
@@ -67,6 +67,7 @@ def convert_pc(
     xpc = PC[0] * patshape[1]
     ypc = PC[1] * patshape[0]
     DD = PC[2] * patshape[0]
+    print('note to self convert_pc: has error')
     return (xpc, ypc, DD)
 
 
@@ -134,6 +135,7 @@ def read_ang(
                       (i.e. x, y, iq, ci, sem, phase_index, etc.)
     """
     header_lines = 0
+    #print('names', names)
     with open(path, "r") as ang:
         for line in ang:
             header_lines += 1
@@ -170,6 +172,8 @@ def read_ang(
         print(f"Pattern center (original): {PC}")
     shape = (rows, cols)
 
+    print('names', names)
+    
     # Clean and drop Euler column names
     names = [
         name.replace(" ", "_").lower()
@@ -204,9 +208,9 @@ def read_ang(
     pidx = np.arange(np.prod(shape)).reshape(shape)
     if segment_grain_threshold is not None:
         ids, kam = segment.segment_grains(qu, segment_grain_threshold)
-        args = (euler, qu, shape, PC, step_size, pidx, ids, kam)
-    else:
-        args = (euler, qu, shape, PC, step_size, pidx)
+        #args = (euler, qu, shape, PC, step_size, pidx, ids, kam)
+  
+    args = (euler, qu, shape, PC, step_size, pidx)
     ang_data = np.moveaxis(ang_data, 2, 0)
 
     print("FIELD COUNT:", len(names))
@@ -215,7 +219,13 @@ def read_ang(
 
     # Package everything into a namedtuple
     out = namedtuple("ang_file", names)(*ang_data, *args)
-    return out
+    if segment_grain_threshold is not None:
+        print(
+            f"Segmented grains with threshold {segment_grain_threshold}. Number of grains: {len(np.unique(ids))}"
+        )
+        return out, ids, kam
+    else:
+        return out
 
 
 def get_scan_data(up2: str, ang: str) -> tuple:
@@ -313,6 +323,7 @@ def get_sharpness(imgs: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: The sharpness of the images. float, (N,) or (N0, N1) for example."""
     # Process inputs
+    import torch
     reshape = None
     if imgs.ndim == 2:
         imgs = imgs[None, ...]
@@ -364,6 +375,7 @@ def process_patterns_gpu(
 
     Returns:
         np.ndarray: The cleaned patterns. (N, H, W)"""
+    import torch
     # Process inputs
     reshape = None
     if imgs.ndim == 2:

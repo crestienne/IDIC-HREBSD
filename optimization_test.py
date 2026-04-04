@@ -33,11 +33,13 @@ subset_size = 1082  # Size of the subset cropped out from the center of the imag
 #                    Seting Fe
 #======================================================
 # w1 = w32 , w2 = 13, w3 = 23 #make rotation in the sample frame 
-w = np.array([0.0, 0.0, 0.0])  # No rotation
-e = np.array([[ 0.0, 0.0, 0.05], [0.0, 0.0, 0.0], [0.05, 0.0, 0]])
+w = np.array([0.89, 0.89, 0.89])  # No rotation
+e = np.array([[ 0.05, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0]])
 Fe = ErnouldsMethod.determineF(e , w)
 
 print('Fe is', Fe)
+
+#Fe = Fe/Fe[2,2]  #normalize so that h33 = 1
 
 
 EMEBSDfilename = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/Inputs/EBSDpattern_Al_July222025.h5'
@@ -228,7 +230,7 @@ measurement = np.array([[-shift[1], -shift[0], -theta]])
 print (f"Initial guess ({init_type}): {measurement}")
 # Convert the measurements to homographies
 if init_type == "full":
-    p = conversions.xyt2h(measurement, h0)
+    p = conversions.xyt2h(measurement, np.array([0, 0, 800]))
 else:
     p = conversions.xyt2h_partial(measurement)
 
@@ -326,7 +328,7 @@ plt.savefig("debug/results.jpg")
 plt.close()
 
 # Example: 3 homography arrays, each shape (8,)
-input_h = F2h(Fe, np.array([0, 0, 800])).flatten()
+input_h = F2h(Fe/Fe[2,2], np.array([0, 0, 800])).flatten()
 final_opt = p.flatten()
 
 

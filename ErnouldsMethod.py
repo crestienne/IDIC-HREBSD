@@ -104,10 +104,10 @@ def pattern_coords(PC, detector_shape): # (H, W, 3) coordinates of detector pixe
 
 
 def determineF(e, w, small_angle_approx=False):
-    '''Single sample version
-    Arguments:
+    '''
+    Arguemnts:
     - e: (9,) elastic strain tensor  
-    - w: (3,) rotation angles in degrees 
+    - w: (3,) w32, w13, w21 order, in degrees 
     
     Returns:
     - Fe: (3, 3) deformation gradient in the sample frame'''
@@ -115,7 +115,7 @@ def determineF(e, w, small_angle_approx=False):
     
     # Convert to radians
     w_rad = np.deg2rad(w)  # Shape: (3,)
-    w1, w2, w3 = w_rad
+    w1, w2, w3 = w_rad #w32, w13, w21 in Enrould's method, but here we will just call them w1, w2, w3 for simplicity
 
     if small_angle_approx:
         # Small angle approximation for rotation matrix
