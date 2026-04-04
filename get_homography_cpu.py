@@ -120,7 +120,7 @@ def optimize(
             roi_indices = None
             N = pats.nPatterns
             out_shape = (pats.nPatterns,)
-        get_pat = lambda idx: pats.read_pattern(idx) #removed the process=True argument here
+        get_pat = lambda idx: pats.read_pattern(idx, process=True) #removed the process=True argument here
         patshape = pats.patshape
     elif type(pats) == np.ndarray:
         N = np.prod(pats.shape[:-2])
@@ -150,16 +150,18 @@ def optimize(
     # Get the reference image
     R = get_pat(x0)
     #add a small guassian blur to the reference pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
-    R = gaussian_filter(R, sigma= 0.7)
+    #R = gaussian_filter(R, sigma= 0.8)
+
+    print('the shape of the reference pattern is:', R.shape)
 
     
     # # Get coordinates
-    # x = np.arange(R.shape[1]) - h0[0] 
-    # y = np.arange(R.shape[0]) - h0[1]
+    x = np.arange(R.shape[1]) - h0[0] 
+    y = np.arange(R.shape[0]) - h0[1]
 
-    # test: use pixel-center convention consistently
-    x = (np.arange(R.shape[1]) + 0.5) - h0[0]
-    y = (np.arange(R.shape[0]) + 0.5) - h0[1]
+    # # test: use pixel-center convention consistently
+    # x = (np.arange(R.shape[1]) + 0.5) - h0[0]
+    # y = (np.arange(R.shape[0]) + 0.5) - h0[1]
 
     X, Y = np.meshgrid(x, y, indexing="xy")
 
@@ -181,16 +183,36 @@ def optimize(
     r = (r - r.mean()) / r_zmsv
 
     # Aggreement between optimization test and get homography cpu for gradients check
-    # fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-    # for a in ax.ravel():
-    #     a.axis("off")
-    # ax[0].imshow(GRx.reshape(1082, 1082), cmap="Greys_r")
-    # ax[0].set_title("Gradient (x)")
-    # ax[1].imshow(GRy.reshape(1082, 1082), cmap="Greys_r")
-    # ax[1].set_title("Gradient (y)")
-    # plt.tight_layout()
-    # plt.savefig("debug/gradients_cpu.jpg")
-    # plt.close()
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    for a in ax.ravel():
+        a.axis("off")
+    ax[0].imshow(GRx.reshape(466, 466), cmap="Greys_r")
+    ax[0].set_title("Gradient (x)")
+    ax[1].imshow(GRy.reshape(466, 466), cmap="Greys_r")
+    ax[1].set_title("Gradient (y)")
+    plt.tight_layout()
+    plt.savefig("debug/gradients_cpu.jpg")
+    plt.close()
+
+    # compute gradient magnitude
+    grad_mag = np.sqrt(GRx**2 + GRy**2)
+
+    fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+    for a in ax.ravel():
+        a.axis("off")
+
+    ax[0].imshow(GRx.reshape(466, 466), cmap="RdBu")
+    ax[0].set_title("Gradient X", fontweight="bold")
+
+    ax[1].imshow(GRy.reshape(466, 466), cmap="RdBu")
+    ax[1].set_title("Gradient Y", fontweight="bold")
+
+    ax[2].imshow(grad_mag.reshape(466, 466), cmap="inferno")
+    ax[2].set_title("Gradient Magnitude", fontweight="bold")
+
+    plt.tight_layout()
+    plt.savefig("debug/gradients_silicon.jpg")
+    plt.close()
 
     # Compute the jacobian of the shape function
     _1 = np.ones(xi.shape[1])
@@ -452,21 +474,21 @@ def optimize_run(
     T = get_pat(idx)
 
     #add a small guassian blur to the target pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
-    T = gaussian_filter(T, sigma= 0.7)
+    #T = gaussian_filter(T, sigma= 0.8)
 
     savepat = True
     if savepat:
-        plt.imsave(f'debug/pat/target_pattern_{idx}_cpu.png', T, cmap='Greys_r')
+        plt.imsave(f'debug/pat/target_pattern_{idx}_cpu.jpg', T, cmap='Greys_r')
 
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
     #trying a different spline definition here 
     # test: use pixel-center convention consistently
-    x = (np.arange(T.shape[1]) + 0.5) - h0[0]
-    y = (np.arange(T.shape[0]) + 0.5) - h0[1]
+    # x = (np.arange(T.shape[1]) + 0.5) - h0[0]
+    # y = (np.arange(T.shape[0]) + 0.5) - h0[1]
 
 
-    # x = np.arange(T.shape[1]) - h0[0]
-    # y = np.arange(T.shape[0]) - h0[1]
+    x = np.arange(T.shape[1]) - h0[0]
+    y = np.arange(T.shape[0]) - h0[1]
     T_spline = interpolate.RectBivariateSpline(x, y, T.T, kx=5, ky=5) #patterns read in (y, x) ordering
 
     # Run the optimization
