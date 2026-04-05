@@ -104,7 +104,7 @@ def read_up2(up2: str) -> namedtuple:
     return out
 
 
-_EDAX_DEFAULT_COLUMNS = ["Phi1", "Phi", "Phi2", "x", "y", "IQ", "CI", "Phase", "SEM", "Fit"]
+_EDAX_DEFAULT_COLUMNS = ["Phi1", "Phi", "Phi2", "x", "y", "IQ", "CI", "Phase"]
 
 def read_ang(
     path: str,
@@ -180,36 +180,27 @@ def read_ang(
     shape = (rows, cols)
 
     
-    # Clean and drop Euler column names
-    names = [
-        name.replace(" ", "_").lower()
-        for name in names
-        if name.lower() not in ["phi1", "phi", "phi2"]
-    ]
-
-    # Now add extra values you append later
-    names.extend(["eulers", "quats", "shape", "pc", "step_size", "pidx"])
-
-
-
-    # if segment_grain_threshold is not None:
-    #     names.extend(["ids", "kam"])
-
-    # names.extend(["eulers", "quats", "shape", "pc", "step_size", "pidx"])
-    # if segment_grain_threshold is not None:
-    #     names.extend(["ids", "kam"])
-    # names = [
-    #     name.replace(" ", "_").lower()
-    #     for name in names
-    #     if name.lower() not in ["phi1", "phi", "phi2"]
-    # ]
-    # print(f"Len Names: {len(names)}")
-
     # Read in the data
     ang_data = np.genfromtxt(path, skip_header=header_lines)
     ang_data = ang_data.reshape(shape + (ang_data.shape[1],))
     euler = ang_data[..., 0:3]
     ang_data = ang_data[..., 3:]
+
+    # Build column names, dropping euler angles
+    data_col_names = [
+        name.replace(" ", "_").lower()
+        for name in names
+        if name.lower() not in ["phi1", "phi", "phi2"]
+    ]
+    # If parsed names don't match actual column count, fall back to generic names
+    if len(data_col_names) != ang_data.shape[-1]:
+        print(
+            f"Warning: {len(data_col_names)} column names but {ang_data.shape[-1]} data columns. "
+            "Falling back to generic names."
+        )
+        data_col_names = [f"col_{i}" for i in range(ang_data.shape[-1])]
+
+    names = data_col_names + ["eulers", "quats", "shape", "pc", "step_size", "pidx"]
     qu = rotations.eu2qu(euler)
     pidx = np.arange(np.prod(shape)).reshape(shape)
     if segment_grain_threshold is not None:
