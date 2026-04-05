@@ -104,10 +104,13 @@ def read_up2(up2: str) -> namedtuple:
     return out
 
 
+_EDAX_DEFAULT_COLUMNS = ["Phi1", "Phi", "Phi2", "x", "y", "IQ", "CI", "Phase", "SEM", "Fit"]
+
 def read_ang(
     path: str,
     patshape: tuple | list | np.ndarray = None,
     segment_grain_threshold: float = None,
+    column_names: list = None,
 ) -> namedtuple:
     """Reads in the pattern center from an ang file.
     Only supports EDAX/TSL.
@@ -135,13 +138,15 @@ def read_ang(
                       (i.e. x, y, iq, ci, sem, phase_index, etc.)
     """
     header_lines = 0
-    #print('names', names)
+    names = None
     with open(path, "r") as ang:
         for line in ang:
+            if not line.startswith("#"):
+                break
             header_lines += 1
             if "x-star" in line:
                 xstar = float(re.findall(NUMERIC, line)[0])
- 
+
             elif "y-star" in line:
                 ystar = float(re.findall(NUMERIC, line)[0])
 
@@ -161,7 +166,9 @@ def read_ang(
                 names = line.replace("\n", "").split(":")[1].strip().split(", ")
             elif "HEADER: End" in line:
                 break
-            #header_lines += 1
+
+    if names is None:
+        names = column_names if column_names is not None else _EDAX_DEFAULT_COLUMNS
 
     # Package the header data
     if patshape is not None:
@@ -172,7 +179,6 @@ def read_ang(
         print(f"Pattern center (original): {PC}")
     shape = (rows, cols)
 
-    print('names', names)
     
     # Clean and drop Euler column names
     names = [
