@@ -170,13 +170,9 @@ def read_ang(
     if names is None:
         names = column_names if column_names is not None else _EDAX_DEFAULT_COLUMNS
 
-    # Package the header data
-    if patshape is not None:
-        PC = convert_pc((xstar, ystar, zstar), patshape)
-        print(f"Pattern center (converted): {PC}")
-    else:
-        PC = (xstar, ystar, zstar)
-        print(f"Pattern center (original): {PC}")
+    # Package the header data — always store original fractional (xstar, ystar, zstar)
+    PC = (xstar, ystar, zstar)
+    print(f"Pattern center (xstar, ystar, zstar): {PC}")
     shape = (rows, cols)
 
     
