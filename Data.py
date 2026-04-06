@@ -9,6 +9,27 @@ from skimage import exposure
 import matplotlib.pyplot as plt
 
 
+def _circular_mask(shape, radius=None, center=None):
+    H, W = shape
+    if center is None:
+        cy, cx = H // 2, W // 2
+    else:
+        cy, cx = center
+    if radius is None:
+        radius = min(cy, cx, H - cy - 1, W - cx - 1)
+    yy, xx = np.ogrid[:H, :W]
+    return (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+
+
+def _center_cross_mask(shape, half_width):
+    H, W = shape
+    cy, cx = H // 2, W // 2
+    mask = np.ones((H, W), dtype=bool)
+    mask[cy - half_width : cy + half_width, :] = False
+    mask[:, cx - half_width : cx + half_width] = False
+    return mask
+
+
 class UP2:
     def __init__(self, path):
         self.path = path
@@ -66,6 +87,7 @@ class UP2:
         clahe_kernel: tuple = (5, 5),
         clahe_clip: float = 0.005,
         clahe_nbins: int = 256,
+        flip_x: bool = False,
     ):
         """Set the parameters for processing the patterns.
         Values of 0.0 will skip the step.
@@ -88,7 +110,8 @@ class UP2:
         self.clahe_kernel = clahe_kernel
         self.clahe_clip = clahe_clip
         self.clahe_nbins = clahe_nbins
-        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}")
+        self.flip_x = flip_x
+        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}, flip_x={flip_x}")
 
     def read(self, chunks, i=None):
         """Read the next `chunks` bytes from the file. If `i` is not None, read from the current position."""
@@ -100,11 +123,22 @@ class UP2:
         self.i += chunks
         return data
 
+    def get_mask(self):
+        """Return the boolean mask for the current mask_type, or None if no mask."""
+        if self.mask_type == "circular":
+            return _circular_mask(self.patshape)
+        elif self.mask_type == "center_cross":
+            return _center_cross_mask(self.patshape, self.center_cross_half_width)
+        else:
+            return None
+
     def read_pattern(self, i, process=False):
         # Read in the patterns
         seek_pos = np.int64(self.start_byte + np.int64(i) * self.pattern_bytes)
         buffer = self.read(chunks=self.pattern_bytes, i=seek_pos)
         pat = np.frombuffer(buffer, dtype=np.uint16).reshape(self.patshape) #order should be y,x
+        if self.flip_x:
+            pat = np.flipud(pat)  # flip about x axis (reverses rows)
         if process:
             pat = self.process_pattern(pat)
         return pat #pretty sure the patterns are in (x, y) format
@@ -138,24 +172,8 @@ class UP2:
         Images will be in the range [0, 1].
         """
 
-        def circular_mask(shape, radius=None, center=None):
-            H, W = shape
-            if center is None:
-                cy, cx = H // 2, W // 2
-            else:
-                cy, cx = center
-            if radius is None:
-                radius = min(cy, cx, H - cy - 1, W - cx - 1)
-            yy, xx = np.ogrid[:H, :W]
-            return (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
-
-        def center_cross_mask(shape, half_width):
-            H, W = shape
-            cy, cx = H // 2, W // 2
-            mask = np.ones((H, W), dtype=bool)
-            mask[cy - half_width : cy + half_width, :] = False  # horizontal band
-            mask[:, cx - half_width : cx + half_width] = False  # vertical band
-            return mask
+        circular_mask = _circular_mask
+        center_cross_mask = _center_cross_mask
 
         def masked_normalize(image, mask):
             image = image.astype(np.float32).copy()
