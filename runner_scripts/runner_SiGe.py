@@ -12,13 +12,13 @@ import os
 import datetime
 
 
-component = "Si-Indent-With-Mask-SimulatedReference"
-date = "Apr052026" 
+component = "TestRun_SiGe"
+date = "April_5_2026" 
 up2 = (
-   '/Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.up2' 
+   '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/SiGe_smallerRegion_20260322_512x512.up2'
 )
 # up2 = "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_512x512_flipX.up2"
-ang = '//Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.ang'
+ang = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset//DictionaryIndexing/SiGe_smallerRegion_20260322_512x512.ang'
 x0 = (0, 0) # reference pattern, order is y,x
 
 #order for roi_slice: [slice(y_start, y_stop), slice(x_start, x_stop)], set to none if want to look at whole pattern 
@@ -26,7 +26,7 @@ x0 = (0, 0) # reference pattern, order is y,x
 roi_slice = None
 
 base_folder_name = f'{component}_{date}_npyfiles'
-foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{base_folder_name}/'
+foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/{base_folder_name}/'
 
 os.makedirs(foldername, exist_ok=True)  # Set to False since we want unique folders
 
@@ -37,11 +37,12 @@ pat_obj.set_processing(
     low_pass_sigma=0.0,
     high_pass_sigma=15.0,
     truncate_std_scale=3.0,
-    mask_type="center_cross",       # options: "circular", "center_cross", None
+    mask_type="None",       # options: "circular", "center_cross", None
     center_cross_half_width=6,      # only used when mask_type="center_cross"
     clahe_kernel=(5, 5),
     clahe_clip=0.01,
     clahe_nbins=256,
+    flip_x=True,            # flip pattern about x axis (reverses rows)
 )
 print(pat_obj.patshape)
 
@@ -49,12 +50,8 @@ pat_obj.plot_parameter_sweep(
     pattern_idx=0,
     high_pass_sigmas=[3, 5, 7, 10, 15, 50, 80],
     clahe_kernels=[(3, 3), (4, 4), (5, 5), (6, 6), (8, 8), (12, 12)],
+    save_dir=foldername,
 )
-
-# ------ Simulated reference options (set use_simulated_reference=True to enable) ------
-use_simulated_reference = True
-master_pattern_path = '/Users/crestiennedechaine/OriginalData/Si-Indent/Si-master-20kV.h5'      # e.g. '/path/to/Si-master-20kV.h5'
-tilt_deg = 70.0                 # sample tilt in degrees
 
 # ------ Run optimization ------
 
@@ -62,10 +59,6 @@ ang_data = utilities.read_ang(ang, pat_obj.patshape, segment_grain_threshold=Non
 x0 = np.ravel_multi_index(x0, ang_data.shape)
 print("Initial index and coordinates:")
 print(x0)
-
-# Read the Euler angles and PC for the reference pattern (used only if use_simulated_reference=True)
-euler_angles_ref = ang_data.eulers[np.unravel_index(x0, ang_data.shape)]  # shape (3,) in radians
-pc_ref = ang_data.pc  # (xstar, ystar, zstar)
 
 optimize_params = dict(
     init_type='partial',
@@ -75,35 +68,7 @@ optimize_params = dict(
     verbose=True,
     roi_slice=roi_slice,
     mask=pat_obj.get_mask(),
-    use_simulated_reference=use_simulated_reference,
-    master_pattern_path=master_pattern_path,
-    euler_angles_ref=euler_angles_ref,
-    pc_ref=pc_ref,
-    tilt_deg=tilt_deg,
 )
-
-# ------ Plot real vs simulated reference pattern ------
-if use_simulated_reference:
-    os.makedirs("debug", exist_ok=True)
-    real_pat = pat_obj.read_pattern(x0, process=True)
-    sim_pat  = core.simulate_reference_pattern(
-        master_pattern_path=master_pattern_path,
-        euler_angles=euler_angles_ref,
-        PC=pc_ref,
-        patshape=pat_obj.patshape,
-        tilt_deg=tilt_deg,
-    )
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-    axes[0].imshow(real_pat, cmap="gray")
-    axes[0].set_title("Real reference pattern")
-    axes[0].axis("off")
-    axes[1].imshow(sim_pat, cmap="gray")
-    axes[1].set_title("Simulated reference pattern")
-    axes[1].axis("off")
-    plt.tight_layout()
-    plt.savefig("debug/real_vs_simulated_reference.png", dpi=200, bbox_inches="tight")
-    plt.close()
-    print("Saved debug/real_vs_simulated_reference.png")
 
 h, h_guess, iterations, residuals, dp_norms = core.optimize(
     pat_obj, x0, **optimize_params

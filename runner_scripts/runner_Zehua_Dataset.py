@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -34,7 +38,8 @@ print("Initial index and coordinates:")
 print(x0)
 
 h, h_guess, iterations, residuals, dp_norms = core.optimize(
-    pat_obj, x0, init_type='partial', crop_fraction=0.9, max_iter=25, n_jobs=19, verbose=True, roi_slice=roi_slice
+    pat_obj, x0, init_type='partial', crop_fraction=0.9, max_iter=25, n_jobs=19, verbose=True, roi_slice=roi_slice,
+    mask=pat_obj.get_mask(),
 )
 
 

@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -60,7 +64,8 @@ print(x0)
 #### ----- When initial guess is not used -----
 
 h, iterations, residuals, dp_norms = core.optimize(
-    pat_obj, x0, init_type='none', crop_fraction=0.9, max_iter=100, n_jobs=8, conv_tol=5e-4, verbose=True, roi_slice = None
+    pat_obj, x0, init_type='none', crop_fraction=0.9, max_iter=100, n_jobs=8, conv_tol=5e-4, verbose=True, roi_slice=None,
+    mask=pat_obj.get_mask(),
 )
 
 
