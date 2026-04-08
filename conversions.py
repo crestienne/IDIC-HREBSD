@@ -123,7 +123,7 @@ def h2F(H, X0):
 
     # Negate the detector distance becase our coordinates have +z pointing from the sample towards the detector
     # The calculation is the opposite, so we need to negate the distance
-    # DD = -DD
+    DD = -DD
 
     # Calculate the deformation gradient
     beta0 = 1 - h31 * x01 - h32 * x02
