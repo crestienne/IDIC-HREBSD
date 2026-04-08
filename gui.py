@@ -39,16 +39,6 @@ def _fig_to_pane(fig, max_width=700):
     return pn.pane.PNG(buf, max_width=max_width)
 
 
-def rotation_matrix_from_tilt(tilt_deg: float) -> np.ndarray:
-    theta_x = np.deg2rad(90.0 - tilt_deg)
-    Rx = np.array([
-        [1.0,  0.0,              0.0             ],
-        [0.0,  np.cos(theta_x), -np.sin(theta_x) ],
-        [0.0,  np.sin(theta_x),  np.cos(theta_x) ],
-    ])
-    Rz_180 = np.array([[-1., 0., 0.], [0., -1., 0.], [0., 0., 1.]])
-    return Rx @ Rz_180
-
 
 # ── GUI class ─────────────────────────────────────────────────────────────────
 
@@ -66,7 +56,8 @@ class HREBSD_GUI(param.Parameterized):
     # ── Scan geometry ────────────────────────────────────────────────────────
     ref_row = param.Integer(default=0,    bounds=(0, 9999), label="Reference row (y)")
     ref_col = param.Integer(default=0,    bounds=(0, 9999), label="Reference col (x)")
-    tilt    = param.Number( default=70.0, bounds=(0, 90),   label="Sample tilt (°)")
+    tilt     = param.Number(default=70.0, bounds=(0,  90), label="Sample tilt (°)")
+    det_tilt = param.Number(default=10.0, bounds=(0,  30), label="Detector tilt (°)")
 
     # ── Region of interest ───────────────────────────────────────────────────
     use_roi   = param.Boolean(default=False, label="Use region of interest (ROI)")
@@ -111,6 +102,7 @@ class HREBSD_GUI(param.Parameterized):
         self._results    = None
         self._running    = False
         self._N_total    = 0
+        self._main_tabs  = None   # set in view(); used to switch to Results after run
 
         # ── Buttons ─────────────────────────────────────────────────────────
         self._run_btn   = pn.widgets.Button(name="▶  Run Pipeline", button_type="success", width=160)
@@ -121,20 +113,24 @@ class HREBSD_GUI(param.Parameterized):
         # ── Progress bar ─────────────────────────────────────────────────────
         self._progress     = pn.widgets.Progress(
             name="", value=0, max=100, bar_color="success",
-            width=440, visible=False,
+            width=600, visible=False,
         )
-        self._progress_txt = pn.pane.Markdown("", width=440)
+        self._progress_txt = pn.pane.Markdown("", width=300)
 
         # ── Status badge ────────────────────────────────────────────────────
         self._status = pn.pane.Markdown("🟡 **Ready**", width=200)
 
         # ── Log ──────────────────────────────────────────────────────────────
         self._log_pane = pn.widgets.TextAreaInput(
-            value="", height=180, disabled=True, name="Log"
+            value="", height=260, disabled=True, name="Log",
+            sizing_mode="stretch_width",
         )
 
-        # ── Result tabs (populated after run) ───────────────────────────────
-        self._result_tabs = pn.Tabs(visible=False)
+        # ── Result columns (one per results tab) — populated after run ───────
+        self._col_strain    = pn.Column(pn.pane.Markdown("*Run the pipeline to see results.*"))
+        self._col_vonmises  = pn.Column(pn.pane.Markdown("*Run the pipeline to see results.*"))
+        self._col_diag      = pn.Column(pn.pane.Markdown("*Run the pipeline to see results.*"))
+        self._col_ref       = pn.Column()   # simulated reference (optional)
 
         # ── Color-reactive toggles ───────────────────────────────────────────
         self._roi_toggle = pn.widgets.Toggle(
@@ -161,9 +157,20 @@ class HREBSD_GUI(param.Parameterized):
         self._up2_btn.on_click(lambda _: self._pick_file("up2"))
         self._ang_btn.on_click(lambda _: self._pick_file("ang"))
 
-        # ── UP2 preview ──────────────────────────────────────────────────────
-        self._preview_pane = pn.Column()
-        self.param.watch(self._on_up2_path_change, "up2_path")
+        # ── Live preview pane (right-hand side) ─────────────────────────────
+        self._ang_cache    = None   # cached ang_data; invalidated when paths change
+        self._preview_pane = pn.Column(
+            pn.pane.Markdown("*Load a UP2 file to see the pattern preview.*",
+                             styles={"color": "gray"}),
+            sizing_mode="stretch_width",
+        )
+        # file changes → reload ANG cache, then redraw
+        self.param.watch(self._on_file_change, ["up2_path", "ang_path"])
+        # ROI / use_roi changes → just redraw (no reload needed)
+        self.param.watch(
+            self._update_preview,
+            ["use_roi", "roi_y0", "roi_y1", "roi_x0", "roi_x1"],
+        )
 
     # ── logging & status ─────────────────────────────────────────────────────
 
@@ -210,28 +217,106 @@ class HREBSD_GUI(param.Parameterized):
             else:
                 self.ang_path = path
 
-    # ── UP2 preview ───────────────────────────────────────────────────────────
+    # ── preview helpers ───────────────────────────────────────────────────────
 
-    def _on_up2_path_change(self, event):
-        path = event.new.strip()
+    def _on_file_change(self, *events):
+        """Reload ANG cache when either file path changes, then redraw."""
+        self._ang_cache = None
+        up2 = self.up2_path.strip()
+        ang = self.ang_path.strip()
+        if up2 and os.path.exists(up2) and ang and os.path.exists(ang):
+            try:
+                import Data, utilities
+                ps = Data.UP2(up2).patshape
+                self._ang_cache = utilities.read_ang(
+                    ang, ps, segment_grain_threshold=None
+                )
+            except Exception:
+                pass
+        self._update_preview()
+
+    def _update_preview(self, *events):
+        """Redraw the live preview: pattern (left) + scan map + ROI (right)."""
+        from matplotlib.patches import Rectangle
+
         self._preview_pane.clear()
-        if not path or not os.path.exists(path):
-            return
-        try:
-            import Data
-            pat_obj = Data.UP2(path)
-            pat = pat_obj.read_pattern(0, process=False)
-            fig, ax = plt.subplots(figsize=(2.8, 2.8))
-            ax.imshow(pat, cmap="gray")
-            ax.set_title(f"shape {pat.shape}  |  N={pat_obj.nPatterns}", fontsize=8)
-            ax.axis("off")
-            plt.tight_layout()
+
+        # ── load first pattern ───────────────────────────────────────────────
+        pat, pat_title = None, "No UP2 loaded"
+        up2 = self.up2_path.strip()
+        if up2 and os.path.exists(up2):
+            try:
+                import Data
+                pat_obj = Data.UP2(up2)
+                pat = pat_obj.read_pattern(0, process=False)
+                pat_title = (
+                    f"Pattern 0  |  {pat.shape[0]}×{pat.shape[1]} px"
+                    f"  |  N = {pat_obj.nPatterns:,}"
+                )
+            except Exception as exc:
+                pat_title = f"⚠ {exc}"
+
+        ang = self._ang_cache
+        has_ang = ang is not None
+
+        if pat is None and not has_ang:
             self._preview_pane.append(
-                pn.pane.Markdown("#### UP2 preview — pattern 0")
+                pn.pane.Markdown(
+                    "*Load a UP2 (and ANG) file to see the preview.*",
+                    styles={"color": "gray"},
+                )
             )
-            self._preview_pane.append(_fig_to_pane(fig, max_width=300))
-        except Exception as exc:
-            self._preview_pane.append(pn.pane.Markdown(f"⚠ Could not load preview: {exc}"))
+            return
+
+        ncols = 1 + int(has_ang)
+        fig, axes = plt.subplots(1, ncols, figsize=(5.5 * ncols, 5.5))
+        if ncols == 1:
+            axes = [axes]
+
+        # ── left: first pattern ──────────────────────────────────────────────
+        ax_pat = axes[0]
+        if pat is not None:
+            ax_pat.imshow(pat, cmap="gray")
+        else:
+            ax_pat.text(0.5, 0.5, "No UP2 loaded",
+                        ha="center", va="center", transform=ax_pat.transAxes,
+                        fontsize=11, color="gray")
+        ax_pat.set_title(pat_title, fontsize=9)
+        ax_pat.axis("off")
+
+        # ── right: scan map + optional ROI overlay ───────────────────────────
+        if has_ang:
+            ax_map = axes[1]
+            rows, cols = ang.shape
+            iq = getattr(ang, "IQ", None)
+            if iq is not None:
+                ax_map.imshow(iq.reshape(rows, cols), cmap="gray",
+                              aspect="auto", origin="upper")
+            else:
+                ax_map.imshow(np.ones((rows, cols)), cmap="gray",
+                              vmin=0, vmax=1, aspect="auto", origin="upper")
+
+            title = f"Scan grid  {rows} rows × {cols} cols"
+            if self.use_roi:
+                y0 = max(0, min(self.roi_y0, rows - 1))
+                y1 = max(y0 + 1, min(self.roi_y1, rows))
+                x0 = max(0, min(self.roi_x0, cols - 1))
+                x1 = max(x0 + 1, min(self.roi_x1, cols))
+                rect = Rectangle(
+                    (x0 - 0.5, y0 - 0.5), x1 - x0, y1 - y0,
+                    linewidth=2, edgecolor="red", facecolor="none",
+                    linestyle="--", label=f"ROI  r{y0}:{y1}  c{x0}:{x1}",
+                )
+                ax_map.add_patch(rect)
+                ax_map.legend(loc="upper right", fontsize=8,
+                              framealpha=0.7, edgecolor="red")
+                title += f"\nROI: rows {y0}:{y1},  cols {x0}:{x1}"
+
+            ax_map.set_title(title, fontsize=9)
+            ax_map.set_xlabel("col"); ax_map.set_ylabel("row")
+
+        plt.tight_layout()
+        self._preview_pane.append(_fig_to_pane(fig, max_width=1000))
 
     # ── run ──────────────────────────────────────────────────────────────────
 
@@ -246,7 +331,6 @@ class HREBSD_GUI(param.Parameterized):
         self._progress.visible = True
         self._progress.value   = 0
         self._progress_txt.object = ""
-        self._result_tabs.visible = False
         thread = threading.Thread(target=self._run_pipeline, daemon=True)
         thread.start()
 
@@ -405,10 +489,10 @@ class HREBSD_GUI(param.Parameterized):
         F = conversions.h2F(h_calc, PC_vec)
         epsilon, omega = conversions.F2strain(F)
 
-        R = rotation_matrix_from_tilt(self.tilt)
+        R = utilities.samp2detectorATEX(self.tilt, self.det_tilt)
         for i in range(N):
-            epsilon[i] = R.T @ epsilon[i] @ R
-            omega[i]   = R.T @ omega[i]   @ R
+            epsilon[i] = R @ epsilon[i] @ R.T
+            omega[i]   = R @ omega[i]   @ R.T
 
         Rows, Cols = ang_data.shape[0], ang_data.shape[1]
         if Rows * Cols == N:
@@ -476,124 +560,207 @@ class HREBSD_GUI(param.Parameterized):
         ax3b.set_title("Final residuals"); ax3b.axis("off")
         plt.tight_layout()
 
-        # Populate tabs on the main thread
-        self._result_tabs.clear()
-        self._result_tabs.extend([
-            ("Strain components", pn.Column(_fig_to_pane(fig1, max_width=900))),
-            ("Von Mises",         pn.Column(_fig_to_pane(fig2, max_width=500))),
-            ("Diagnostics",       pn.Column(_fig_to_pane(fig3, max_width=800))),
-        ])
-        self._result_tabs.visible = True
+        # Populate the per-tab result columns
+        self._col_strain.clear()
+        self._col_strain.append(_fig_to_pane(fig1, max_width=1100))
+
+        self._col_vonmises.clear()
+        self._col_vonmises.append(_fig_to_pane(fig2, max_width=600))
+
+        self._col_diag.clear()
+        self._col_diag.append(_fig_to_pane(fig3, max_width=1000))
+
+        # Switch to the Strain tab automatically
+        if self._main_tabs is not None:
+            self._main_tabs.active = 2   # "Strain Maps" is index 2
 
         self._log("✅ Done!")
         self._results = dict(epsilon=epsilon, omega=omega, von_mises=von_mises)
 
     def _queue_ref_tab(self, pane):
-        """Add a simulated-reference comparison tab (called before main result tabs)."""
-        self._result_tabs.clear()
-        self._result_tabs.append(("Reference patterns", pn.Column(pane)))
-        self._result_tabs.visible = True
+        """Show the simulated-reference comparison in the dedicated Ref tab."""
+        self._col_ref.clear()
+        self._col_ref.append(pn.pane.Markdown("### Simulated vs real reference"))
+        self._col_ref.append(pane)
 
     # ── layout ────────────────────────────────────────────────────────────────
 
     def view(self):
-        # ── sidebar tabs ────────────────────────────────────────────────────
-        tab_files = pn.Column(
+
+        # ════════════════════════════════════════════════════════════════════
+        #  LEFT SIDEBAR — all control tabs
+        # ════════════════════════════════════════════════════════════════════
+
+        # ── Files ────────────────────────────────────────────────────────────
+        sb_files = pn.Column(
             pn.layout.Divider(),
-            pn.pane.Markdown("**UP2 file**"),
-            pn.Row(self._up2_btn, pn.widgets.TextInput.from_param(self.param.up2_path, placeholder="Click Browse… or paste path")),
-            pn.layout.Divider(),
-            pn.pane.Markdown("**ANG file**"),
-            pn.Row(self._ang_btn, pn.widgets.TextInput.from_param(self.param.ang_path, placeholder="Click Browse… or paste path")),
+            pn.pane.Markdown("**UP2 pattern file**"),
+            pn.Row(
+                self._up2_btn,
+                pn.widgets.TextInput.from_param(
+                    self.param.up2_path,
+                    placeholder="Browse… or paste path",
+                    sizing_mode="stretch_width",
+                ),
+            ),
+            pn.pane.Markdown("**ANG orientation file**"),
+            pn.Row(
+                self._ang_btn,
+                pn.widgets.TextInput.from_param(
+                    self.param.ang_path,
+                    placeholder="Browse… or paste path",
+                    sizing_mode="stretch_width",
+                ),
+            ),
             pn.layout.Divider(),
             pn.widgets.TextInput.from_param(self.param.output_dir),
             pn.widgets.TextInput.from_param(self.param.component),
         )
 
-        tab_geometry = pn.Column(
+        # ── Geometry ─────────────────────────────────────────────────────────
+        sb_geometry = pn.Column(
             pn.layout.Divider(),
+            pn.pane.Markdown("**Reference pattern**"),
             pn.widgets.IntInput.from_param(self.param.ref_row),
             pn.widgets.IntInput.from_param(self.param.ref_col),
+            pn.layout.Divider(),
+            pn.pane.Markdown("**Tilt angles**"),
             pn.widgets.FloatInput.from_param(self.param.tilt),
+            pn.widgets.FloatInput.from_param(self.param.det_tilt),
             pn.layout.Divider(),
+            pn.pane.Markdown("**Region of interest**"),
             self._roi_toggle,
-            pn.pane.Markdown("*Row/col indices into the scan grid (not pixel coordinates)*",
-                             styles={"font-size": "11px", "color": "gray"}),
-            pn.Row(
-                pn.widgets.IntInput.from_param(self.param.roi_y0),
-                pn.widgets.IntInput.from_param(self.param.roi_y1),
+            pn.pane.Markdown(
+                "*Scan-grid row/col indices (not pattern pixels)*",
+                styles={"font-size": "11px", "color": "gray"},
             ),
-            pn.Row(
-                pn.widgets.IntInput.from_param(self.param.roi_x0),
-                pn.widgets.IntInput.from_param(self.param.roi_x1),
-            ),
+            pn.widgets.IntInput.from_param(self.param.roi_y0),
+            pn.widgets.IntInput.from_param(self.param.roi_y1),
+            pn.widgets.IntInput.from_param(self.param.roi_x0),
+            pn.widgets.IntInput.from_param(self.param.roi_x1),
             pn.layout.Divider(),
+            pn.pane.Markdown("**Pattern center**"),
             self._pc_toggle,
-            pn.pane.Markdown("*Overrides the PC read from the ANG file*",
-                             styles={"font-size": "11px", "color": "gray"}),
-            pn.Row(
-                pn.widgets.FloatInput.from_param(self.param.pc_xstar),
-                pn.widgets.FloatInput.from_param(self.param.pc_ystar),
-                pn.widgets.FloatInput.from_param(self.param.pc_zstar),
+            pn.pane.Markdown(
+                "*Overrides the PC from the ANG file*",
+                styles={"font-size": "11px", "color": "gray"},
             ),
+            pn.widgets.FloatInput.from_param(self.param.pc_xstar),
+            pn.widgets.FloatInput.from_param(self.param.pc_ystar),
+            pn.widgets.FloatInput.from_param(self.param.pc_zstar),
         )
 
-        tab_processing = pn.Column(
+        # ── Processing ───────────────────────────────────────────────────────
+        sb_processing = pn.Column(
             pn.layout.Divider(),
+            pn.pane.Markdown("**Filters**"),
             pn.widgets.FloatInput.from_param(self.param.low_pass_sigma),
             pn.widgets.FloatInput.from_param(self.param.high_pass_sigma),
             pn.widgets.FloatInput.from_param(self.param.truncate_std_scale),
             pn.layout.Divider(),
+            pn.pane.Markdown("**Mask**"),
             pn.widgets.Select.from_param(self.param.mask_type),
             pn.widgets.IntInput.from_param(self.param.center_cross_hw),
             pn.layout.Divider(),
+            pn.pane.Markdown("**CLAHE**"),
             pn.widgets.IntInput.from_param(self.param.clahe_kernel),
             pn.widgets.FloatInput.from_param(self.param.clahe_clip),
+            pn.layout.Divider(),
             pn.widgets.Toggle.from_param(self.param.flip_x),
         )
 
-        tab_optimization = pn.Column(
+        # ── Optimization / Run ───────────────────────────────────────────────
+        sb_run = pn.Column(
             pn.layout.Divider(),
+            pn.pane.Markdown("**Optimization**"),
             pn.widgets.Select.from_param(self.param.init_type),
             pn.widgets.FloatInput.from_param(self.param.crop_fraction),
             pn.widgets.IntInput.from_param(self.param.max_iter),
             pn.widgets.IntInput.from_param(self.param.n_jobs),
             pn.layout.Divider(),
+            pn.pane.Markdown("**Simulated reference**"),
             pn.widgets.Toggle.from_param(self.param.use_sim_ref),
             pn.widgets.TextInput.from_param(
-                self.param.master_pattern_path, placeholder="/path/to/master.h5"
+                self.param.master_pattern_path,
+                placeholder="/path/to/master.h5",
             ),
             pn.layout.Divider(),
             pn.Row(self._run_btn, self._clear_btn),
+            self._status,
         )
 
         sidebar_tabs = pn.Tabs(
-            ("Files",        tab_files),
-            ("Geometry",     tab_geometry),
-            ("Processing",   tab_processing),
-            ("Optimization", tab_optimization),
+            ("Files",        sb_files),
+            ("Geometry",     sb_geometry),
+            ("Processing",   sb_processing),
+            ("Run",          sb_run),
             tabs_location="above",
-        )
-
-        # ── main area ───────────────────────────────────────────────────────
-        main = pn.Column(
-            pn.Row(self._status, self._progress, self._progress_txt),
-            self._preview_pane,
-            pn.layout.Divider(),
-            self._log_pane,
-            pn.layout.Divider(),
-            self._result_tabs,
             sizing_mode="stretch_width",
         )
 
-        # ── FastListTemplate ────────────────────────────────────────────────
+        # ════════════════════════════════════════════════════════════════════
+        #  RIGHT MAIN AREA — visualisation tabs (dynamic: only active rendered)
+        # ════════════════════════════════════════════════════════════════════
+
+        main_preview = pn.Column(
+            pn.Row(self._progress, self._progress_txt),
+            pn.layout.Divider(),
+            self._preview_pane,
+            sizing_mode="stretch_width",
+        )
+
+        main_log = pn.Column(
+            self._log_pane,
+            sizing_mode="stretch_width",
+        )
+
+        main_strain = pn.Column(
+            pn.pane.Markdown("## Strain components"),
+            pn.layout.Divider(),
+            self._col_strain,
+            sizing_mode="stretch_width",
+        )
+
+        main_vonmises = pn.Column(
+            pn.pane.Markdown("## Von Mises equivalent strain"),
+            pn.layout.Divider(),
+            self._col_vonmises,
+            sizing_mode="stretch_width",
+        )
+
+        main_diag = pn.Column(
+            pn.pane.Markdown("## Diagnostics  (iterations & residuals)"),
+            pn.layout.Divider(),
+            self._col_diag,
+            sizing_mode="stretch_width",
+        )
+
+        main_ref = pn.Column(
+            pn.pane.Markdown("## Simulated reference comparison"),
+            pn.layout.Divider(),
+            self._col_ref,
+            sizing_mode="stretch_width",
+        )
+
+        self._main_tabs = pn.Tabs(
+            ("🔭  Preview",          main_preview),   # 0
+            ("📋  Log",              main_log),        # 1
+            ("📊  Strain Maps",      main_strain),     # 2
+            ("🔷  Von Mises",        main_vonmises),   # 3
+            ("🔬  Diagnostics",      main_diag),       # 4
+            ("🖼   Sim Reference",   main_ref),        # 5
+            dynamic=True,
+            sizing_mode="stretch_width",
+            tabs_location="above",
+        )
+
         template = pn.template.FastListTemplate(
             title="DIC-HREBSD Pipeline",
             sidebar=[sidebar_tabs],
-            main=[main],
+            main=[self._main_tabs],
             accent_base_color="#1f77b4",
             header_background="#1f77b4",
-            sidebar_width=340,
+            sidebar_width=300,
         )
         return template
 
