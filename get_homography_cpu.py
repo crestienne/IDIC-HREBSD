@@ -14,6 +14,9 @@ import warp
 import conversions
 import Data
 import matplotlib.pyplot as plt
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from PatternSimulation.SimPatGen import patternSimulation
 
 
 # Type hints
@@ -51,6 +54,173 @@ def tqdm_joblib(tqdm_object):
 ### Functions for the inverse composition gauss-newton algorithm
 
 
+def compare_gradients(
+    real_pat: np.ndarray,
+    sim_pat: np.ndarray,
+    crop_fraction: float = 0.9,
+    mask: np.ndarray = None,
+    save_path: str = "debug/gradient_comparison.png",
+) -> None:
+    """Compare the spline gradients of a real vs simulated reference pattern.
+
+    Computes GRx and GRy for both patterns using the same spline/crop/mask
+    settings used inside optimize(), then saves a side-by-side figure.
+
+    Args:
+        real_pat:      Preprocessed real reference pattern, shape (H, W).
+        sim_pat:       Preprocessed simulated reference pattern, same shape.
+        crop_fraction: Crop fraction used in optimize() (default 0.9).
+        mask:          Boolean mask array (H, W) — same one passed to optimize().
+        save_path:     Where to save the comparison figure.
+    """
+    assert real_pat.shape == sim_pat.shape, "Patterns must have the same shape"
+    H, W = real_pat.shape
+    h0 = (W // 2, H // 2)
+
+    x = np.arange(W) - h0[0]
+    y = np.arange(H) - h0[1]
+
+    crop_row = int(H * (1 - crop_fraction) / 2)
+    crop_col = int(W * (1 - crop_fraction) / 2)
+    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col))
+
+    X, Y = np.meshgrid(x, y, indexing="xy")
+    xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()])
+    subset_shape = X[subset_slice].shape
+
+    valid = None
+    if mask is not None:
+        valid = mask[subset_slice].flatten()
+        xi = xi[:, valid]
+
+    def to_2d(arr):
+        if valid is None:
+            return arr.reshape(subset_shape)
+        img = np.full(subset_shape[0] * subset_shape[1], np.nan)
+        img[valid] = arr
+        return img.reshape(subset_shape)
+
+    def grad_pair(pat):
+        spline = interpolate.RectBivariateSpline(x, y, pat.T, kx=5, ky=5)
+        gx = spline(xi[0], xi[1], dx=1, dy=0, grid=False)
+        gy = spline(xi[0], xi[1], dx=0, dy=1, grid=False)
+        return to_2d(gx), to_2d(gy), to_2d(np.sqrt(gx**2 + gy**2))
+
+    real_gx,  real_gy,  real_mag  = grad_pair(real_pat)
+    sim_gx,   sim_gy,   sim_mag   = grad_pair(sim_pat)
+
+    # shared colour limits per column
+    vmax_x   = np.nanpercentile(np.abs(np.concatenate([real_gx[~np.isnan(real_gx)],  sim_gx[~np.isnan(sim_gx)]])),  98)
+    vmax_y   = np.nanpercentile(np.abs(np.concatenate([real_gy[~np.isnan(real_gy)],  sim_gy[~np.isnan(sim_gy)]])),  98)
+    vmax_mag = np.nanpercentile(np.concatenate([real_mag[~np.isnan(real_mag)], sim_mag[~np.isnan(sim_mag)]]), 98)
+
+    fig, axes = plt.subplots(3, 3, figsize=(13, 9))
+    titles_col = ["Real", "Simulated", "Difference"]
+    row_labels  = ["Gradient X", "Gradient Y", "Gradient Magnitude"]
+
+    data = [
+        (real_gx,  sim_gx,  "RdBu",  vmax_x,   True),
+        (real_gy,  sim_gy,  "RdBu",  vmax_y,   True),
+        (real_mag, sim_mag, "inferno", vmax_mag, False),
+    ]
+
+    for row, (r, s, cmap, vmax, symmetric) in enumerate(data):
+        vmin = -vmax if symmetric else 0
+        diff = r - s
+        diff_lim = np.nanpercentile(np.abs(diff[~np.isnan(diff)]), 98)
+
+        for col, (img, vlim_min, vlim_max, cm) in enumerate([
+            (r,    vmin,      vmax,      cmap),
+            (s,    vmin,      vmax,      cmap),
+            (diff, -diff_lim, diff_lim,  "coolwarm"),
+        ]):
+            ax = axes[row, col]
+            im = ax.imshow(img, cmap=cm, vmin=vlim_min, vmax=vlim_max)
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            ax.axis("off")
+            if row == 0:
+                ax.set_title(titles_col[col], fontsize=12, fontweight="bold")
+        axes[row, 0].set_ylabel(row_labels[row], fontsize=11)
+
+    fig.suptitle("Gradient comparison: real vs simulated reference pattern", fontsize=13)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"Gradient comparison saved to: {save_path}")
+
+
+def simulate_reference_pattern(
+    master_pattern_path: str,
+    euler_angles: np.ndarray,
+    PC: tuple,
+    patshape: tuple,
+    tilt_deg: float = 70.0,
+    pat_obj: "Data.UP2" = None,
+    high_pass_sigma_override: float = None,
+) -> np.ndarray:
+    """Simulate a single EBSD reference pattern using EBSDtorch / SimPatGen.
+
+    Args:
+        master_pattern_path (str): Path to the .h5 master pattern file.
+        euler_angles (np.ndarray): Bunge ZXZ Euler angles in radians, shape (3,).
+        PC (tuple): Pattern center (xstar, ystar, zstar) in EDAX/TSL convention.
+        patshape (tuple): Detector shape in pixels (rows, cols).
+        tilt_deg (float): Primary sample tilt in degrees (default 70).
+        pat_obj (Data.UP2, optional): If provided, applies the same preprocessing
+            pipeline (filters, CLAHE) as real patterns.  The mask is NOT applied
+            to the simulated pattern — masked pixels in the real pattern correspond
+            to detector artefacts that have no equivalent in the simulation, so
+            zero-filling them creates a spurious centre-region intensity mismatch.
+        high_pass_sigma_override (float, optional): If set, temporarily overrides
+            pat_obj.high_pass_sigma when processing the simulated pattern.  Use a
+            higher value (e.g. 25-30) to remove excess low-frequency content that
+            the simulation produces relative to the experiment.
+
+    Returns:
+        np.ndarray: Simulated pattern as a float32 array, shape (rows, cols),
+                    normalised to [0, 1].
+    """
+    sim = patternSimulation()
+    sim.detector_height = patshape[0]
+    sim.detector_width  = patshape[1]
+    sim.det_shape       = patshape
+    sim.detector_tilt_deg = tilt_deg
+
+    sim.mastersetup(master_pattern_path)
+    # EBSDtorch uses Bruker convention: pcy = 1 - ystar (EDAX/TSL flips y)
+    pc_bruker = (PC[0], 1.0 - PC[1], PC[2])
+    print(f'PC (EDAX):   {PC}')
+    print(f'PC (Bruker): {pc_bruker}')
+    sim.EandPCSet(euler_angles, pc_bruker)
+
+    with __import__("torch").no_grad():
+        pats = sim.GenPattern()
+
+    pat = pats[0].reshape(patshape).cpu().numpy().astype(np.float32)
+    pat_min, pat_max = pat.min(), pat.max()
+    if pat_max > pat_min:
+        pat = (pat - pat_min) / (pat_max - pat_min)
+
+    if pat_obj is not None:
+        # Process without mask: masked pixels in the real pattern are detector
+        # artefacts with no physical equivalent in the simulation.  Zero-filling
+        # them via masked_gaussian creates a boundary halo near the mask edge
+        # that produces a spurious centre-region intensity mismatch.
+        orig_mask_type = pat_obj.mask_type
+        orig_hp_sigma  = pat_obj.high_pass_sigma
+        pat_obj.mask_type = None
+        if high_pass_sigma_override is not None:
+            pat_obj.high_pass_sigma = high_pass_sigma_override
+        try:
+            pat = pat_obj.process_pattern(pat)
+        finally:
+            pat_obj.mask_type      = orig_mask_type
+            pat_obj.high_pass_sigma = orig_hp_sigma
+
+    return pat
+
+
 def optimize(
     pats: PATS,
     x0: ARRAY,
@@ -61,6 +231,16 @@ def optimize(
     n_jobs: int = -1,
     verbose: bool = False,
     roi_slice: tuple[slice, slice] = None,
+    scan_shape: tuple = None,
+    mask: np.ndarray = None,
+    use_simulated_reference: bool = False,
+    master_pattern_path: str = None,
+    euler_angles_ref: np.ndarray = None,
+    pc_ref: tuple = None,
+    tilt_deg: float = 70.0,
+    sim_high_pass_sigma: float = None,
+    progress_callback: Callable = None,
+    debug_gradients: bool = False,
 ) -> np.ndarray:
     """Routine for running the inverse composition gauss-newton algorithm.
 
@@ -104,17 +284,19 @@ def optimize(
     if n_jobs == -1:
         n_jobs = os.cpu_count() - 1
 
-    #removed hardcoded pattern shape later 
-    nrows = 175
-    ncols = 434
-
-
     # Prepare the patterns
     if type(pats) == Data.UP2:
         if roi_slice is not None:
-            N = (roi_slice[0].stop - roi_slice[0].start) * (roi_slice[1].stop - roi_slice[1].start)
-            out_shape = (N, )
-            roi_indices = roi_indices_from_rect(roi_slice, (nrows, ncols))
+            if scan_shape is None:
+                raise ValueError(
+                    "roi_slice requires scan_shape=(nrows, ncols) — the grid dimensions of the full scan. "
+                    "Pass it as scan_shape=ang_data.shape to optimize()."
+                )
+            roi_nrows = roi_slice[0].stop - roi_slice[0].start
+            roi_ncols = roi_slice[1].stop - roi_slice[1].start
+            N = roi_nrows * roi_ncols
+            out_shape = (roi_nrows, roi_ncols)   # results reshaped to (roi_rows, roi_cols)
+            roi_indices = roi_indices_from_rect(roi_slice, scan_shape)
 
         else:
             roi_indices = None
@@ -131,15 +313,6 @@ def optimize(
     else:
         raise TypeError("pats must be a Data.UP2 object or a numpy array.")
 
-    # print (out_shape)  
-    # # # for a region of interest 
-    # if roi_slice is not None:
-    #     print("Using ROI slice for optimization:", roi_slice)
-    #     N = (roi_slice[0].stop - roi_slice[0].start) * (roi_slice[1].stop - roi_slice[1].start)
-    #     patshape = (roi_slice[0].stop - roi_slice[0].start, roi_slice[1].stop - roi_slice[1].start)
-    #     old_get_pat = get_pat
-    #     get_pat = lambda idx: old_get_pat(idx)[roi_slice[0], roi_slice[1]]
-
     h0 = (patshape[1] // 2, patshape[0] // 2)
     crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
     crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
@@ -148,7 +321,33 @@ def optimize(
 
     ### Reference precompute ###
     # Get the reference image
-    R = get_pat(x0)
+    if use_simulated_reference:
+        if master_pattern_path is None or euler_angles_ref is None or pc_ref is None:
+            raise ValueError(
+                "use_simulated_reference=True requires master_pattern_path, "
+                "euler_angles_ref, and pc_ref."
+            )
+        R = simulate_reference_pattern(
+            master_pattern_path=master_pattern_path,
+            euler_angles=euler_angles_ref,
+            PC=pc_ref,
+            patshape=patshape,
+            tilt_deg=tilt_deg,
+            pat_obj=pats if isinstance(pats, Data.UP2) else None,
+            high_pass_sigma_override=sim_high_pass_sigma,
+        )
+        print(f"Using simulated reference pattern (shape {R.shape})")
+        if debug_gradients:
+            real_R = get_pat(x0)
+            compare_gradients(
+                real_pat=real_R,
+                sim_pat=R,
+                crop_fraction=crop_fraction,
+                mask=mask,
+                save_path="debug/gradient_comparison.png",
+            )
+    else:
+        R = get_pat(x0)
     #add a small guassian blur to the reference pattern to smooth out interpolation artifacts and make the optimization landscape smoother, which can help with convergence
     #R = gaussian_filter(R, sigma= 0.8)
 
@@ -165,8 +364,24 @@ def optimize(
 
     X, Y = np.meshgrid(x, y, indexing="xy")
 
-    #changing 
+    #changing
     xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()]) #(y,x) ordering
+    subset_shape = X[subset_slice].shape
+
+    # Apply mask: exclude pixels that were zeroed out during preprocessing
+    valid = None
+    if mask is not None:
+        valid = mask[subset_slice].flatten()
+        xi = xi[:, valid]
+        print(f"Mask applied: {valid.sum()} / {valid.size} subset pixels used ({100*valid.mean():.1f}%)")
+
+    def to_2d(arr):
+        """Reconstruct a 2D subset image from a (possibly masked) 1D array."""
+        if valid is None:
+            return arr.reshape(subset_shape)
+        img = np.full(subset_shape[0] * subset_shape[1], np.nan)
+        img[valid] = arr
+        return img.reshape(subset_shape)
 
     # Compute the intensity gradients of the subset
     ref_spline = interpolate.RectBivariateSpline(x, y, R.T, kx=5, ky=5) #(y, x) ordering
@@ -174,11 +389,11 @@ def optimize(
     GRy = ref_spline(xi[0], xi[1], dx=0, dy=1, grid=False)
     # GRy, GRx = np.gradient(R[subset_slice], axis=(0, 1))
 
-    
+
     GR = np.vstack((GRx, GRy)).reshape(2, 1, -1).transpose(1, 0, 2)  # 2x1xN
 
 
-    r = ref_spline(xi[0], xi[1], grid=False).flatten() #(y, x) ordering 
+    r = ref_spline(xi[0], xi[1], grid=False).flatten() #(y, x) ordering
     r_zmsv = np.sqrt(((r - r.mean()) ** 2).sum())
     r = (r - r.mean()) / r_zmsv
 
@@ -186,9 +401,9 @@ def optimize(
     fig, ax = plt.subplots(1, 2, figsize=(8, 4))
     for a in ax.ravel():
         a.axis("off")
-    ax[0].imshow(GRx.reshape(466, 466), cmap="Greys_r")
+    ax[0].imshow(to_2d(GRx), cmap="Greys_r")
     ax[0].set_title("Gradient (x)")
-    ax[1].imshow(GRy.reshape(466, 466), cmap="Greys_r")
+    ax[1].imshow(to_2d(GRy), cmap="Greys_r")
     ax[1].set_title("Gradient (y)")
     plt.tight_layout()
     plt.savefig("debug/gradients_cpu.jpg")
@@ -201,13 +416,13 @@ def optimize(
     for a in ax.ravel():
         a.axis("off")
 
-    ax[0].imshow(GRx.reshape(466, 466), cmap="RdBu")
+    ax[0].imshow(to_2d(GRx), cmap="RdBu")
     ax[0].set_title("Gradient X", fontweight="bold")
 
-    ax[1].imshow(GRy.reshape(466, 466), cmap="RdBu")
+    ax[1].imshow(to_2d(GRy), cmap="RdBu")
     ax[1].set_title("Gradient Y", fontweight="bold")
 
-    ax[2].imshow(grad_mag.reshape(466, 466), cmap="inferno")
+    ax[2].imshow(to_2d(grad_mag), cmap="inferno")
     ax[2].set_title("Gradient Magnitude", fontweight="bold")
 
     plt.tight_layout()
@@ -309,7 +524,7 @@ def optimize(
                 idx,
                 get_pat,
                 init_type,
-                init_guess_subset_slice,  # pass the slice directly
+                init_guess_subset_slice,
                 r_init if init_type is not InitType.NONE else None,
                 r_fmt if init_type is not InitType.NONE else None,
                 X_fmt if init_type is not InitType.NONE else None,
@@ -341,6 +556,8 @@ def optimize(
         iterations[idx] = num_iter
         residuals[idx] = float(residual)
         dp_norms[idx] = float(dp_norm)
+        if progress_callback is not None:
+            progress_callback(idx + 1, N)
 
     # Reshape the results to match the input pattern shape
     homographies = homographies.reshape(out_shape + (8,))
@@ -360,7 +577,7 @@ def _process_single_pattern(
     idx,
     get_pat,
     init_type,
-    init_subset_slice,  # add parameter
+    init_subset_slice,
     r_init,
     r_fmt,
     X_fmt,
@@ -413,27 +630,52 @@ def _process_single_pattern(
 
     return h, initial_guess, num_iter, residual, dp_norm
 
-def roi_indices_from_rect(roi_slice, patshape):
+def roi_indices_from_rect(roi_slice, scan_shape):
     """
     Return a 1D array of flat pattern indices for a rectangular ROI.
+
+    The .up2 file stores patterns in row-major order, so the flat index of
+    pattern at scan position (row, col) is:  row * scan_ncols + col
 
     Parameters
     ----------
     roi_slice : tuple of slice
-        (row_slice, col_slice)
-    patshape : tuple
-        (total_rows, total_cols) of the full scan
+        (row_slice, col_slice) — row_slice selects scan rows (y),
+                                  col_slice selects scan columns (x)
+    scan_shape : tuple
+        (scan_nrows, scan_ncols) — total rows and columns of the full scan grid
     """
     row_slice, col_slice = roi_slice
-    Ny, Nx = patshape
+    scan_nrows, scan_ncols = scan_shape
 
-    rows = np.arange(row_slice.start, row_slice.stop)
-    cols = np.arange(col_slice.start, col_slice.stop)
+    # Validate ROI is within the scan bounds
+    if row_slice.stop > scan_nrows:
+        raise ValueError(
+            f"ROI row_slice {row_slice} exceeds scan rows ({scan_nrows})"
+        )
+    if col_slice.stop > scan_ncols:
+        raise ValueError(
+            f"ROI col_slice {col_slice} exceeds scan cols ({scan_ncols})"
+        )
 
-    rr, cc = np.meshgrid(rows, cols, indexing="ij")
+    roi_rows = np.arange(row_slice.start, row_slice.stop)   # e.g. [0,1,...,9]
+    roi_cols = np.arange(col_slice.start, col_slice.stop)   # e.g. [0,1,...,131]
 
-    # row-major (C-order): pattern_id = row * Nx + col
-    return (rr * Nx + cc).ravel()
+    # Build (n_roi_rows, n_roi_cols) grids of row and column indices
+    row_grid, col_grid = np.meshgrid(roi_rows, roi_cols, indexing="ij")
+
+    # Flat index in the .up2 file (row-major: row * scan_ncols + col)
+    flat_indices = row_grid * scan_ncols + col_grid   # shape (n_roi_rows, n_roi_cols)
+
+    print(
+        f"ROI: rows {row_slice.start}–{row_slice.stop-1}, "
+        f"cols {col_slice.start}–{col_slice.stop-1} "
+        f"({len(roi_rows)} x {len(roi_cols)} = {flat_indices.size} patterns)\n"
+        f"  Flat index range: {flat_indices.min()} – {flat_indices.max()} "
+        f"(scan has {scan_nrows * scan_ncols} patterns total)"
+    )
+
+    return flat_indices.ravel()
 
 
 
@@ -481,11 +723,10 @@ def optimize_run(
         plt.imsave(f'debug/pat/target_pattern_{idx}_cpu.jpg', T, cmap='Greys_r')
 
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    #trying a different spline definition here 
+    #trying a different spline definition here
     # test: use pixel-center convention consistently
     # x = (np.arange(T.shape[1]) + 0.5) - h0[0]
     # y = (np.arange(T.shape[0]) + 0.5) - h0[1]
-
 
     x = np.arange(T.shape[1]) - h0[0]
     y = np.arange(T.shape[0]) - h0[1]
@@ -500,8 +741,9 @@ def optimize_run(
         num_iter += 1
         t_deformed = warp.deform(xi, T_spline, h)
         t_mean = t_deformed.mean()
-        # t_deformed = (t_deformed - t_mean) / np.sqrt(((t_deformed - t_mean) ** 2).sum())
-        t_deformed = (t_deformed - t_mean) / r_zmsv #testing snapping
+        t_zmsv = np.sqrt(((t_deformed - t_mean) ** 2).sum())
+        if t_zmsv > 0:
+            t_deformed = (t_deformed - t_mean) / t_zmsv   # ZNSSD: each pattern normalised by its own variance
         # Compute the residuals
         e = r - t_deformed
         residuals.append(np.abs(e).mean())
@@ -512,7 +754,7 @@ def optimize_run(
         dp = linalg.cho_solve(cho_params, -dC_IC_ZNSSD.reshape(-1, 1))[:, 0]
         # Update the parameters
         norm = dp_norm(dp, xi)
-        Wp = warp.W(h) 
+        Wp = warp.W(h)
         Wdp = warp.W(dp)
         Wpdp = np.matmul(Wp, np.linalg.inv(Wdp))
         h = ((Wpdp / Wpdp[2, 2]) - np.eye(3)).reshape(9)[:8]
