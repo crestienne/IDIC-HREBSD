@@ -357,14 +357,14 @@ class UP2:
                 axes[r, c].imshow(result, cmap="gray", vmin=0, vmax=1)
                 axes[r, c].axis("off")
                 if r == 0:
-                    axes[r, c].set_title(f"hp_sigma={sigma}", fontsize=8)
+                    axes[r, c].set_title(f"hp_sigma={sigma}", fontsize=20, fontweight="bold")
             axes[r, 0].text(
                 -0.05, 0.5, f"clahe={kernel}",
-                fontsize=8, transform=axes[r, 0].transAxes,
+                fontsize=20, fontweight="bold", transform=axes[r, 0].transAxes,
                 ha="right", va="center", rotation=90,
             )
 
-        fig.suptitle(f"Parameter sweep  |  pattern {pattern_idx}", fontsize=11)
+        fig.suptitle(f"Parameter sweep  |  pattern {pattern_idx}", fontsize=20, fontweight="bold")
         plt.tight_layout()
         out_path = f"{save_dir}/sweep_combined.jpg"
         plt.savefig(out_path, dpi=200, bbox_inches="tight")
