@@ -14,6 +14,12 @@ conda install numpy matplotlib tqdm scipy scikit-image joblib kornia -c conda-fo
 conda create -n hrebsd python=3.12 numpy matplotlib tqdm scipy scikit-image pytorch kornia -c pytorch -c conda-forge
 conda activate hrebsd
 ```
+
+### Important Geometery Instructions
+
+All functions currently run using the EDAX sample frame and a Bruker detector frame. This is the same as utilized by kikuchipy and thus if the reader would like more information regarding these two sample frames they are highly encouraged to look there
+
+
 ### File descripitions
 - `get_homography_cpu.py`: Contains the code for running the inverse compositional Gauss–Newton (IC-GN) algorithm for determining the homographies that warp target patterns to a reference pattern. Inside this file, the method `run_single` of the `ICGNOptimizer` class contains the actual algorithm useed to determine the homographies.
 - `get_homography_gpu.py`: Same thing but for the GPU. Note that the GPU version currently does not support creating an initial guess of the homography. Inside this file, the method `run` of the `ICGNOptimizer` class contains the actual algorithm useed to determine the homographies.
