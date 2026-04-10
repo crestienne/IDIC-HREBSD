@@ -8,21 +8,7 @@ from matplotlib.offsetbox import AnchoredText
 import conversions
 import os
 import ErnouldsMethod
-
-
-def rotation_matrix_from_tilt(tilt_deg: float) -> np.ndarray:
-    theta_x = np.deg2rad(90.0 - tilt_deg)
-    Rx = np.array([
-        [1.0, 0.0,               0.0              ],
-        [0.0, np.cos(theta_x), -np.sin(theta_x)   ],
-        [0.0, np.sin(theta_x),  np.cos(theta_x)   ],
-    ])
-    Rz_180 = np.array([
-        [-1.0,  0.0, 0.0],
-        [ 0.0, -1.0, 0.0],
-        [ 0.0,  0.0, 1.0],
-    ])
-    return Rx @ Rz_180
+import utilities
 
 
 # ============================================================
@@ -92,7 +78,7 @@ print(F.shape)
 epsilon, omega = conversions.F2strain(F)
 
 
-R = rotation_matrix_from_tilt(tilt)
+R = utilities.samp2detectorATEX(tilt)
 
 samp_frame = True
 if samp_frame:

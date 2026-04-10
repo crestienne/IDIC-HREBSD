@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 import conversions
+import utilities
 
 # ============================================================
 # Inputs
@@ -39,19 +40,6 @@ os.makedirs(foldername, exist_ok=True)
 # Helpers
 # ============================================================
 
-def rotation_matrix_from_tilt(tilt_deg: float) -> np.ndarray:
-    theta_x = np.deg2rad(90.0 - tilt_deg)
-    Rx = np.array([
-        [1.0, 0.0,               0.0             ],
-        [0.0, np.cos(theta_x), -np.sin(theta_x)  ],
-        [0.0, np.sin(theta_x),  np.cos(theta_x)  ],
-    ])
-    Rz_180 = np.array([
-        [-1.0,  0.0, 0.0],
-        [ 0.0, -1.0, 0.0],
-        [ 0.0,  0.0, 1.0],
-    ])
-    return Rx @ Rz_180
 
 
 def von_mises(epsilon):
