@@ -350,6 +350,7 @@ def get_sharpness(imgs: np.ndarray) -> np.ndarray:
     return shp
 
 
+
 def process_patterns_gpu(
     imgs: np.ndarray,
     sigma: float = 0.0,
@@ -427,13 +428,7 @@ def process_patterns_gpu(
     out = imgs.cpu().numpy()
     out = out.reshape(-1, out.shape[2], out.shape[3])
     if reshape is not None:
-        out = out.reshape(reshape + out.shape[1:])
-
-    # Clear memory
-    del imgs
-    torch.cuda.empty_cache()
-
-    return out
+        out = out.reshape(reshape + out.shape[1:])  
 
 
 def process_pattern(
@@ -572,6 +567,46 @@ def rotate_stiffness_to_sample_frame(C: np.ndarray, quats: np.ndarray) -> np.nda
         C_rot[i] = rotate_elastic_constants(C, R)
     C_rot = C_rot.reshape(out_shape)
     return C_rot
+
+def rotation_matrix_passive(det_tilt_deg: float, sample_tilt_deg: float) -> np.ndarray:
+    """
+    Passive frame-change rotation chain:
+    DO NOT EDIT (THIS IS CORRECT FOR EDAX/TSL TO ATEX TRANSFORM)
+
+      1) detector tilt about x
+      2) then -90 deg about z'
+      3) then (180 - (90 - sample tilt)) deg about y''
+
+    Goes from EDAX sample frame to ATEX detector frame. To go the other way, take the transpose.
+
+    Returns a 3x3 orthogonal rotation matrix.
+    """
+    delta = np.deg2rad(-1 * det_tilt_deg)
+    beta = np.deg2rad(180.0 - (90.0 - sample_tilt_deg))  # = 90 + sample_tilt
+
+    # Step 1: passive +delta about x  -> active Rx(-delta)
+    Q1 = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, np.cos(delta),  np.sin(delta)],
+        [0.0, -np.sin(delta), np.cos(delta)],
+    ])
+
+    # Step 2: passive -90 about z' -> active Rz(+90)
+    Q2 = np.array([
+        [0.0, -1.0, 0.0],
+        [1.0,  0.0, 0.0],
+        [0.0,  0.0, 1.0],
+    ])
+
+    # Step 3: passive +beta about y'' -> active Ry(-beta)
+    Q3 = np.array([
+        [ np.cos(beta), 0.0, -np.sin(beta)],
+        [ 0.0,          1.0,  0.0         ],
+        [ np.sin(beta), 0.0,  np.cos(beta)],
+    ])
+
+    R = Q3 @ Q2 @ Q1
+    return R
 
 
 def test_bandpass(img, save_dir="./", window_size=128):
