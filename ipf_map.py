@@ -270,9 +270,7 @@ def plot_ipf_map(
     ax_map = fig.add_axes([0.04, 0.08, 0.68, 0.84])
     ax_map.imshow(rgb_map, origin="upper", interpolation="nearest")
     ax_map.set_title(f"IPF Map  //  {direction_label}  ({rows}×{cols})", fontsize=13)
-    ax_map.set_xlabel("Column", fontsize=11)
-    ax_map.set_ylabel("Row", fontsize=11)
-
+    
     ax_key = fig.add_axes([0.76, 0.15, 0.22, 0.70])
     plot_ipf_triangle(ax_key)
 
