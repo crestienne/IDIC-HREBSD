@@ -49,7 +49,11 @@ LAUE_O = np.array(
 # 2-D grain segmentation
 # ─────────────────────────────────────────────────────────────────────────────
 
-def segment_grains(quaternions: np.ndarray, threshold: float):
+def segment_grains(
+    quaternions: np.ndarray,
+    threshold: float,
+    min_grain_size: int = 1,
+):
     """
     Segment a 2-D EBSD scan into grains by flood-fill on misorientation.
 
@@ -61,16 +65,20 @@ def segment_grains(quaternions: np.ndarray, threshold: float):
         Misorientation threshold in degrees.  Neighbours whose
         misorientation from the seed is ≤ threshold are merged into the
         same grain.
+    min_grain_size : int, optional
+        Minimum number of pixels a grain must contain to be kept.
+        Grains smaller than this are relabelled to 0 (noise/unassigned)
+        and their KAM values are set to NaN.  Default is 1 (no filtering).
 
     Returns
     -------
     grain_ids : (rows, cols) int array
-        Grain label for each pixel (1-indexed; 0 = unvisited, should not
-        remain after the function returns).
+        Grain label for each pixel.  Labels ≥ 1 are valid grains; 0
+        means the pixel was too small to form a grain on its own.
     average_misorientation : (rows, cols) float array
         Mean misorientation (deg) of each pixel with respect to its
         within-grain neighbours.  NaN where no within-grain neighbour
-        exists.
+        exists or for grain-0 pixels.
     """
     rows, cols = quaternions.shape[:2]
     grain_ids              = np.zeros((rows, cols), dtype=int)
@@ -132,6 +140,17 @@ def segment_grains(quaternions: np.ndarray, threshold: float):
         progress_bar.update(1)
 
     progress_bar.close()
+
+    # ── Minimum grain size filter ─────────────────────────────────────────────
+    if min_grain_size > 1:
+        sizes = np.bincount(grain_ids.ravel())          # sizes[label] = pixel count
+        # Find labels (≥1) whose pixel count is below the threshold
+        too_small = np.where(sizes[1:] < min_grain_size)[0] + 1  # back to 1-indexed
+        if len(too_small):
+            mask = np.isin(grain_ids, too_small)
+            grain_ids[mask] = 0
+            average_misorientation[mask] = np.nan
+
     return grain_ids, average_misorientation
 
 
@@ -358,22 +377,158 @@ def inverse_qu(qu: np.ndarray) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# IPF + grain box overlay
+# ─────────────────────────────────────────────────────────────────────────────
+
+def plot_ipf_with_grain_boxes(
+    grain_ids: np.ndarray,
+    rgb_map: np.ndarray,
+    ax=None,
+    box_color: str = "white",
+    linewidth: float = 0.8,
+    min_grain_size: int = 1,
+):
+    """
+    Display an IPF map with axis-aligned bounding boxes drawn around each grain.
+
+    Parameters
+    ----------
+    grain_ids      : (rows, cols) int array from segment_grains (1-indexed labels).
+    rgb_map        : (rows, cols, 3) float RGB array from compute_ipf_colors.
+    ax             : matplotlib Axes to draw into — created if None.
+    box_color      : edge colour for the bounding boxes (default "white").
+    linewidth      : line width for the boxes.
+    min_grain_size : grains with fewer pixels than this are skipped.
+
+    Returns
+    -------
+    ax : the Axes used.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from scipy.ndimage import find_objects
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 6))
+
+    ax.imshow(rgb_map, origin="upper", interpolation="nearest")
+    ax.set_xlabel("Column", fontsize=9)
+    ax.set_ylabel("Row", fontsize=9)
+
+    grain_sizes = np.bincount(grain_ids.ravel())[1:]   # index 0 = label 0, skip it
+    for gid, sl in enumerate(find_objects(grain_ids), start=1):
+        if sl is None:
+            continue
+        if grain_sizes[gid - 1] < min_grain_size:
+            continue
+        r_sl, c_sl = sl
+        ax.add_patch(mpatches.Rectangle(
+            (c_sl.start - 0.5, r_sl.start - 0.5),
+            c_sl.stop - c_sl.start,
+            r_sl.stop - r_sl.start,
+            linewidth=linewidth, edgecolor=box_color, facecolor="none",
+        ))
+
+    return ax
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Save / load helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def save_segmentation(
+    grain_ids: np.ndarray,
+    kam: np.ndarray,
+    save_dir: str,
+    name: str = "segmentation",
+) -> dict:
+    """
+    Save grain segmentation results to *save_dir*.
+
+    Files written
+    -------------
+    <name>_grain_ids.npy   — (rows, cols) int array, 1-indexed grain labels
+    <name>_kam.npy         — (rows, cols) float array, KAM in degrees (NaN where no neighbour)
+    <name>_summary.txt     — plain-text summary (n_grains, mean grain size, etc.)
+
+    Returns
+    -------
+    dict with keys "grain_ids_path", "kam_path", "summary_path"
+    """
+    import os
+    os.makedirs(save_dir, exist_ok=True)
+
+    grain_ids_path = os.path.join(save_dir, f"{name}_grain_ids.npy")
+    kam_path       = os.path.join(save_dir, f"{name}_kam.npy")
+    summary_path   = os.path.join(save_dir, f"{name}_summary.txt")
+
+    np.save(grain_ids_path, grain_ids)
+    np.save(kam_path, kam)
+
+    n_grains    = int(grain_ids.max())
+    grain_sizes = np.bincount(grain_ids.ravel())[1:]   # exclude label 0
+    summary = (
+        f"Grain segmentation summary\n"
+        f"==========================\n"
+        f"Scan shape:          {grain_ids.shape[0]} rows x {grain_ids.shape[1]} cols\n"
+        f"Number of grains:    {n_grains}\n"
+        f"Mean grain size:     {grain_sizes.mean():.1f} pixels\n"
+        f"Median grain size:   {float(np.median(grain_sizes)):.1f} pixels\n"
+        f"Largest grain:       {grain_sizes.max()} pixels\n"
+        f"Smallest grain:      {grain_sizes.min()} pixels\n"
+        f"Mean KAM (deg):      {float(np.nanmean(kam)):.3f}\n"
+    )
+    with open(summary_path, "w") as f:
+        f.write(summary)
+    print(summary)
+
+    return {
+        "grain_ids_path": grain_ids_path,
+        "kam_path":       kam_path,
+        "summary_path":   summary_path,
+    }
+
+
+def load_segmentation(save_dir: str, name: str = "segmentation") -> tuple:
+    """
+    Load grain segmentation results previously saved by save_segmentation().
+
+    Returns
+    -------
+    grain_ids : (rows, cols) int array
+    kam       : (rows, cols) float array
+    """
+    import os
+    grain_ids = np.load(os.path.join(save_dir, f"{name}_grain_ids.npy"))
+    kam       = np.load(os.path.join(save_dir, f"{name}_kam.npy"))
+    return grain_ids, kam
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import os
     import matplotlib.pyplot as plt
     import utilities
 
     ang_path  = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/SiGe_dp_10rows132colums_largerRegion.ang'
     patshape  = (512, 512)
     threshold = 2.0   # degrees
+    min_size  = 10    # pixels
+    out_dir   = "results/segmentation"
 
     ang_data = utilities.read_ang(ang_path, patshape, segment_grain_threshold=None)
     quaternions = ang_data.quats   # (rows, cols, 4)
 
-    grain_ids, kam = segment_grains(quaternions, threshold)
+    grain_ids, kam = segment_grains(quaternions, threshold, min_size)
 
+    # ── Save arrays + summary ─────────────────────────────────────────────────
+    paths = save_segmentation(grain_ids, kam, save_dir=out_dir, name="SiGe")
+    print("Saved to:", paths)
+
+    # ── Plot ──────────────────────────────────────────────────────────────────
     from scipy.ndimage import find_objects
     import matplotlib.patches as mpatches
 
@@ -385,7 +540,7 @@ if __name__ == "__main__":
     plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
 
     # Draw bounding boxes around each grain on both panels
-    slices = find_objects(grain_ids)   # list indexed by (grain_id - 1)
+    slices = find_objects(grain_ids)
     for grain_id, sl in enumerate(slices, start=1):
         if sl is None:
             continue
@@ -401,7 +556,8 @@ if __name__ == "__main__":
             )
             ax.add_patch(rect)
 
+    fig_path = os.path.join(out_dir, "SiGe_grain_segmentation.png")
     plt.tight_layout()
-    plt.savefig("grain_segmentation.png", dpi=200, bbox_inches="tight")
+    plt.savefig(fig_path, dpi=200, bbox_inches="tight")
     plt.show()
-    print(f"Found {grain_ids.max()} grains.")
+    print(f"Found {grain_ids.max()} grains. Figure saved to {fig_path}")
