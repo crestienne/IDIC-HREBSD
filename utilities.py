@@ -139,6 +139,12 @@ def read_ang(
     """
     header_lines = 0
     names = None
+    # Safe defaults in case any header field is missing
+    xstar = ystar = zstar = 0.0
+    rows = cols = cols_even = 1
+    step_size = 1.0
+    grid_type = "SqrGrid"
+
     with open(path, "r") as ang:
         for line in ang:
             if not line.startswith("#"):
@@ -159,6 +165,12 @@ def read_ang(
             elif "NCOLS_ODD" in line:
                 cols = int(re.findall(NUMERIC, line)[0])
 
+            elif "NCOLS_EVEN" in line:
+                cols_even = int(re.findall(NUMERIC, line)[0])
+
+            elif "GRID" in line and "HEADER" not in line:
+                grid_type = line.split(":")[-1].strip()
+
             elif "XSTEP" in line:
                 step_size = float(re.findall(NUMERIC, line)[0])
                 print(f"X-step size: {step_size}")
@@ -173,12 +185,39 @@ def read_ang(
     # Package the header data — always store original fractional (xstar, ystar, zstar)
     PC = (xstar, ystar, zstar)
     print(f"Pattern center (xstar, ystar, zstar): {PC}")
-    shape = (rows, cols)
+    print(f"Grid type: {grid_type},  NROWS: {rows},  NCOLS_ODD: {cols},  NCOLS_EVEN: {cols_even}")
 
-    
     # Read in the data
     ang_data = np.genfromtxt(path, skip_header=header_lines)
-    ang_data = ang_data.reshape(shape + (ang_data.shape[1],))
+    n_cols_data = ang_data.shape[1]
+
+    is_hex = (grid_type.strip().lower() == "hexgrid") and (cols_even != cols)
+
+    if is_hex:
+        # HexGrid: odd-indexed rows (0, 2, 4, …) have `cols` points,
+        # even-indexed rows (1, 3, 5, …) have `cols_even` points.
+        # We reconstruct a rectangular (rows × cols) array, padding shorter
+        # rows with NaN so downstream code can keep the same 2-D indexing.
+        n_odd = (rows + 1) // 2   # rows 0, 2, 4, ...
+        n_even = rows // 2        # rows 1, 3, 5, ...
+        expected = n_odd * cols + n_even * cols_even
+        if ang_data.shape[0] != expected:
+            print(
+                f"Warning: HexGrid expected {expected} data lines "
+                f"but got {ang_data.shape[0]}. Proceeding anyway."
+            )
+
+        rect = np.full((rows, cols, n_cols_data), np.nan)
+        src_idx = 0
+        for r in range(rows):
+            ncols_this_row = cols if (r % 2 == 0) else cols_even
+            rect[r, :ncols_this_row, :] = ang_data[src_idx : src_idx + ncols_this_row, :]
+            src_idx += ncols_this_row
+        ang_data = rect
+        shape = (rows, cols)
+    else:
+        shape = (rows, cols)
+        ang_data = ang_data.reshape(shape + (n_cols_data,))
     euler = ang_data[..., 0:3]
     ang_data = ang_data[..., 3:]
 
