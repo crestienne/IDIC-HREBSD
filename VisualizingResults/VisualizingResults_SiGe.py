@@ -9,7 +9,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnchoredText
 import conversions
-import ErnouldsMethod
 import utilities
 
 from pc_homography_correction import (
@@ -19,6 +18,14 @@ from pc_homography_correction import (
     plot_pc_correction_summary,
     plot_pc_geometry_steps,
 )
+
+
+# ============================================================
+# PLOTTING HELPER  (defined in Results_plotting.py)
+# ============================================================
+
+from Results_plotting import plot_component_grid
+
 
 # ============================================================
 # INPUTS
@@ -34,12 +41,19 @@ foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/S
 # ---- Euler angle source ----
 # Set ang_file to the path of a .ang file to read per-pattern Euler angles from it, Set to None to use the single euler_angles_deg value below for all patterns.
 ang_file = None 
-ang_file = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/SiGe_dp_10rows132colums_largerRegion.ang'  # e.g. '/path/to/scan.ang'
+ang_file = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/dp-Si-new-refined.ang'  # e.g. '/path/to/scan.ang'
 
 
 #euler_angles_deg = np.array([10.00269719, 43.80376935, 347.2588334]) # [phi1, Phi, phi2] in degrees
-Rows = 10 #rows in EBSD scan grid
-Columns = 132 #columns in EBSD scan grid
+Rows = 10 #rows in the analysed ROI
+Columns = 132 #columns in the analysed ROI
+
+# ---- ROI offset within the full scan ----
+# If the run only covered a rectangular subset of the full scan, set the
+# top-left corner here so that the correct Euler angles are sliced from
+# the ANG file.  Set both to 0 if the ROI starts at the scan origin.
+roi_row_start = 0   # first row of the full scan included in the run
+roi_col_start = 0   # first column of the full scan included in the run
 patshape = np.array([512, 512])  # shape of the detector in pixels (height, width)
 pixel_size = 30  # pixel size in microns
 pattern_center_edax = np.array([0.6871, 0.8929, 0.67061])  # EDAX fractional coordinates (will be converted to bruker convention in the next line)
@@ -52,17 +66,17 @@ samp_frame = True  # whether to visualize in the sample reference frame (True) o
 # Must match x0 used in your runner script.
 ref_position = (0, 0)  # what was your reference position in the scan grid when you ran the DIC-HREBSD analysis? This should match the x0 variable in your runner script.
 # apply PC correction to the homographies? (True/False)
-apply_pc_correction = False  # set to True to apply the PC correction to the homographies, False to visualize the uncorrected homographies
+apply_pc_correction = True  # set to True to apply the PC correction to the homographies, False to visualize the uncorrected homographies
 
 # Physical step size from the .ang file XSTEP header, in microns.
 step_size_um = 2.6  # <-- update from your .ang file
 
 
-# -------- Calculated parameters --------
 
-pattern_center = np.array([0.6871, 1 - 0.8929, 1.06971])  # bruker convention for PC from upper left
+pattern_center_edax = np.array([0.6871, 0.8929, 1.06971])  # EDAX convention for PC from upper left
+pattern_center = conversions.Edax_to_Bruker_PC(pattern_center_edax)  # Bruker convention for PC from upper left
 homography_center = np.array([0.5, 0.5])  # homography center in fractional coordinates (x, y), typically (0.5, 0.5) for centred-pixel format
-xo = np.array([(homography_center[0] - pattern_center[0]) * patshape[0], (homography_center[1] - pattern_center[1]) * patshape[1], (pattern_center[2] * patshape[1])])  # vector
+xo = conversions.Bruker_to_fractional_PC(pattern_center, patshape, homography_center)  # convert to h2F fractional PC format (x*, y*, z*), where x*, y* are fractional relative to the pattern shape
 
 os.makedirs(foldername, exist_ok=True)
 
@@ -72,11 +86,10 @@ os.makedirs(foldername, exist_ok=True)
 
 h = np.load(filename)
 
-print("h shape:", h.shape)  # should be (N, 8) where N is the number of patterns
 
 if h.shape[1] != 8:
     # assume h is in shape (Rows, Columns, 8) and reshape to (Rows*Columns, 8)
-    h = h.reshape(Rows * Columns, 8)
+    h = h.reshape(Rows * Columns, 8) 
 
 # h is in column major order convert h to row major order for comparison
 h11 = h[:, 0]
@@ -157,14 +170,12 @@ epsilon, omega = conversions.F2strain(F)
 # ============================================================
 
 R = utilities.rotation_matrix_passive(DetectorTilt, SampleTilt)
-print("Rotation Matrix R:")
-print(R)
-print(R.T)
+
 
 # ============================================================
 # ROTATE TO SAMPLE FRAME
 # ============================================================
-
+print(f'epsilon.shape: {epsilon.shape}')
 if samp_frame:
     # need to rotate epsilon and omega by R.T (bc we need to go from detector to sample and R is the rotation from sample to detector) and R (bc we need to rotate the second index of epsilon and omega)
     for i in range(epsilon.shape[0]):
@@ -208,149 +219,63 @@ w32 = w32.reshape((Rows, Columns))
 # FIGURE: HOMOGRAPHY COMPONENTS (Spectral)
 # ============================================================
 
-fig, ax = plt.subplots(3, 3, figsize=(15, 10))
-
-ax[0, 0].imshow(h11.reshape(Rows, Columns), cmap="Spectral")
-cb1 = fig.colorbar(ax[0, 0].imshow(h11.reshape(Rows, Columns), cmap="Spectral"), ax=ax[0, 0])
-ax[0, 0].set_title(r"$h_{11}$")
-
-ax[0, 1].imshow(h12.reshape(Rows, Columns), cmap="Spectral")
-cb2 = fig.colorbar(ax[0, 1].imshow(h12.reshape(Rows, Columns), cmap="Spectral"), ax=ax[0, 1])
-
-ax[0, 2].imshow(h13.reshape(Rows, Columns), cmap="Spectral")
-cb3 = fig.colorbar(ax[0, 2].imshow(h13.reshape(Rows, Columns), cmap="Spectral"), ax=ax[0, 2])
-ax[0, 2].set_title(r"$h_{13}$")
-
-ax[1, 0].imshow(h21.reshape(Rows, Columns), cmap="Spectral")
-cb4 = fig.colorbar(ax[1, 0].imshow(h21.reshape(Rows, Columns), cmap="Spectral"), ax=ax[1, 0])
-ax[1, 0].set_title(r"$h_{21}$")
-
-ax[1, 1].imshow(h22.reshape(Rows, Columns), cmap="Spectral")
-cb5 = fig.colorbar(ax[1, 1].imshow(h22.reshape(Rows, Columns), cmap="Spectral"), ax=ax[1, 1])
-ax[1, 1].set_title(r"$h_{22}$")
-
-ax[1, 2].imshow(h23.reshape(Rows, Columns), cmap="Spectral")
-cb6 = fig.colorbar(ax[1, 2].imshow(h23.reshape(Rows, Columns), cmap="Spectral"), ax=ax[1, 2])
-ax[1, 2].set_title(r"$h_{23}$")
-
-ax[2, 0].imshow(h31.reshape(Rows, Columns), cmap="Spectral")
-cb7 = fig.colorbar(ax[2, 0].imshow(h31.reshape(Rows, Columns), cmap="Spectral"), ax=ax[2, 0])
-ax[2, 0].set_title(r"$h_{31}$")
-
-ax[2, 1].imshow(h32.reshape(Rows, Columns), cmap="Spectral")
-cb8 = fig.colorbar(ax[2, 1].imshow(h32.reshape(Rows, Columns), cmap="Spectral"), ax=ax[2, 1])
-ax[2, 1].set_title(r"$h_{32}$")
-ax[2, 2].axis("off")
-fig.suptitle(f"Homography Components", fontsize=16)
-
-plt.tight_layout()
-plt.savefig(f"{foldername}/Homography_Components - DETECTOR REFERENCE FRAME.png")
-plt.show(block=False)
+plot_component_grid(
+    components=[
+        {"data": h11.reshape(Rows, Columns), "label": r"$h_{11}$"},
+        {"data": h12.reshape(Rows, Columns), "label": r"$h_{12}$"},
+        {"data": h13.reshape(Rows, Columns), "label": r"$h_{13}$"},
+        {"data": h21.reshape(Rows, Columns), "label": r"$h_{21}$"},
+        {"data": h22.reshape(Rows, Columns), "label": r"$h_{22}$"},
+        {"data": h23.reshape(Rows, Columns), "label": r"$h_{23}$"},
+        {"data": h31.reshape(Rows, Columns), "label": r"$h_{31}$"},
+        {"data": h32.reshape(Rows, Columns), "label": r"$h_{32}$"},
+    ],
+    cmap="Spectral",
+    title="Homography Components",
+    save_path=f"{foldername}/Homography_Components - DETECTOR REFERENCE FRAME.png",
+)
 
 # ============================================================
 # FIGURE: STRAIN + ROTATION (coolwarm)
 # ============================================================
 
-fig, ax = plt.subplots(3, 3, figsize=(15, 10))
-
-vmin = -1e-2
-vmax = 1e-2
-vmin_rot = -0.25
-vmax_rot = 0.25
-
-ax[0, 0].imshow(e11, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb1 = fig.colorbar(ax[0, 0].imshow(e11, cmap="coolwarm", vmin=vmin, vmax=vmax), ax=ax[0, 0])
-ax[0, 0].set_title(r"$ \epsilon_{11}$" + f"  (mean={e11.mean():.2e})")
-
-ax[0, 1].imshow(e12, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb2 = fig.colorbar(ax[0, 1].imshow(e12, cmap="coolwarm", vmin=vmin, vmax=vmax), ax=ax[0, 1])
-ax[0, 1].set_title(r"$ \epsilon_{12}$" + f"  (mean={e12.mean():.2e})")
-
-ax[0, 2].imshow(e13, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb3 = fig.colorbar(ax[0, 2].imshow(e13, cmap="coolwarm", vmin=vmin, vmax=vmax), ax=ax[0, 2])
-ax[0, 2].set_title(r"$ \epsilon_{13}$" + f"  (mean={e13.mean():.2e})")
-
-ax[1, 0].imshow(w21, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb4 = fig.colorbar(ax[1, 0].imshow(w21, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot), ax=ax[1, 0])
-ax[1, 0].set_title(r"$ \omega_{21}$" + f"  (mean={w21.mean():.2e} degrees)")
-
-ax[1, 1].imshow(e22, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb5 = fig.colorbar(ax[1, 1].imshow(e22, cmap="coolwarm", vmin=vmin, vmax=vmax), ax=ax[1, 1])
-ax[1, 1].set_title(r"$ \epsilon_{22}$" + f"  (mean={e22.mean():.2e})")
-
-ax[1, 2].imshow(e23, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb6 = fig.colorbar(ax[1, 2].imshow(e23, cmap="coolwarm", vmin=vmin, vmax=vmax), ax=ax[1, 2])
-ax[1, 2].set_title(r"$ \epsilon_{23}$" + f"  (mean={e23.mean():.2e})")
-
-ax[2, 0].imshow(w13, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb7 = fig.colorbar(ax[2, 0].imshow(w13, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot), ax=ax[2, 0])
-ax[2, 0].set_title(r"$ \omega_{13}$" + f"  (mean={w13.mean():.2e} degrees)")
-
-ax[2, 1].imshow(w32, cmap="coolwarm", vmin=vmin, vmax=vmax)
-cb8 = fig.colorbar(ax[2, 1].imshow(w32, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot), ax=ax[2, 1])
-ax[2, 1].set_title(r"$ \omega_{32}$" + f"  (mean={w32.mean():.2e} degrees)")
-ax[2, 2].axis("off")
-fig.suptitle(f"Strain and Rotation Components", fontsize=16)
-
-plt.tight_layout()
-plt.savefig(f"{foldername}/Strain_and_Rotation_Calculated - DETECTOR REFERENCE FRAME.png")
-plt.show(block=False)
+_sv, _rv = 1e-2, 0.25   # strain / rotation limits for this figure
+plot_component_grid(
+    components=[
+        {"data": e11, "label": r"$\epsilon_{11}$"       + f"  (mean={e11.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": e12, "label": r"$\epsilon_{12}$"       + f"  (mean={e12.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": e13, "label": r"$\epsilon_{13}$"       + f"  (mean={e13.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": w21, "label": r"$\omega_{21}$ (deg)"   + f"  (mean={w21.mean():.2e})", "vmin": -_rv, "vmax": _rv},
+        {"data": e22, "label": r"$\epsilon_{22}$"       + f"  (mean={e22.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": e23, "label": r"$\epsilon_{23}$"       + f"  (mean={e23.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": w13, "label": r"$\omega_{13}$ (deg)"   + f"  (mean={w13.mean():.2e})", "vmin": -_rv, "vmax": _rv},
+        {"data": w32, "label": r"$\omega_{32}$ (deg)"   + f"  (mean={w32.mean():.2e})", "vmin": -_rv, "vmax": _rv},
+    ],
+    cmap="coolwarm",
+    title="Strain and Rotation Components",
+    save_path=f"{foldername}/Strain_and_Rotation_Calculated - DETECTOR REFERENCE FRAME.png",
+)
 
 # ============================================================
 # FIGURE: STRAIN + ROTATION (viridis)
 # ============================================================
 
-fig, ax = plt.subplots(3, 3, figsize=(15, 10))
-
-vmin = -1e-3
-vmax = 1e-3
-vmin_rot = -2.0
-vmax_rot = 2.0
-
-ax[0, 0].imshow(e11, cmap="viridis", vmin=vmin, vmax=vmax)
-cb1 = fig.colorbar(ax[0, 0].imshow(e11, cmap="viridis", vmin=vmin, vmax=vmax), ax=ax[0, 0])
-ax[0, 0].set_title(r"$ \epsilon_{11}$", fontsize=16)
-ax[0, 0].axis('off')
-
-ax[0, 1].imshow(e12, cmap="viridis", vmin=vmin, vmax=vmax)
-cb2 = fig.colorbar(ax[0, 1].imshow(e12, cmap="viridis", vmin=vmin, vmax=vmax), ax=ax[0, 1])
-ax[0, 1].set_title(r"$ \epsilon_{12}$", fontsize=16)
-ax[0, 1].axis('off')
-
-ax[0, 2].imshow(e13, cmap="viridis", vmin=vmin, vmax=vmax)
-cb3 = fig.colorbar(ax[0, 2].imshow(e13, cmap="viridis", vmin=vmin, vmax=vmax), ax=ax[0, 2])
-ax[0, 2].set_title(r"$ \epsilon_{13}$", fontsize=16)
-ax[0, 2].axis('off')
-
-ax[1, 0].imshow(w21, cmap="viridis", vmin=vmin_rot, vmax=vmax_rot)
-cb4 = fig.colorbar(ax[1, 0].imshow(w21, cmap="viridis", vmin=vmin_rot, vmax=vmax_rot), ax=ax[1, 0])
-ax[1, 0].set_title(r"$ \omega_{21}$ (degrees)", fontsize=16)
-ax[1, 0].axis('off')
-
-ax[1, 1].imshow(e22, cmap="viridis", vmin=vmin, vmax=vmax)
-cb5 = fig.colorbar(ax[1, 1].imshow(e22, cmap="viridis", vmin=vmin, vmax=vmax), ax=ax[1, 1])
-ax[1, 1].set_title(r"$ \epsilon_{22}$", fontsize=16)
-ax[1, 1].axis('off')
-
-ax[1, 2].imshow(e23, cmap="viridis", vmin=vmin, vmax=vmax)
-cb6 = fig.colorbar(ax[1, 2].imshow(e23, cmap="viridis", vmin=vmin, vmax=vmax), ax=ax[1, 2])
-ax[1, 2].set_title(r"$ \epsilon_{23}$", fontsize=16)
-ax[1, 2].axis('off')
-
-ax[2, 0].imshow(w13, cmap="viridis", vmin=vmin_rot, vmax=vmax_rot)
-cb7 = fig.colorbar(ax[2, 0].imshow(w13, cmap="viridis", vmin=vmin_rot, vmax=vmax_rot), ax=ax[2, 0])
-ax[2, 0].set_title(r"$ \omega_{13}$ (degrees)", fontsize=16)
-ax[2, 0].axis('off')
-
-ax[2, 1].imshow(w32, cmap="viridis", vmin=vmin_rot, vmax=vmax_rot)
-cb8 = fig.colorbar(ax[2, 1].imshow(w32, cmap="viridis", vmin=vmin_rot, vmax=vmax_rot), ax=ax[2, 1])
-ax[2, 1].set_title(r"$ \omega_{32}$ (degrees)", fontsize=16)
-ax[2, 1].axis('off')
-ax[2, 2].axis("off")
-
-plt.tight_layout()
-plt.savefig(f"{foldername}/Strain_and_Rotation_Calculated - viridis.png")
-plt.show(block=False)
+_sv, _rv = 1e-3, 2.0
+plot_component_grid(
+    components=[
+        {"data": e11, "label": r"$\epsilon_{11}$",       "vmin": -_sv, "vmax": _sv},
+        {"data": e12, "label": r"$\epsilon_{12}$",       "vmin": -_sv, "vmax": _sv},
+        {"data": e13, "label": r"$\epsilon_{13}$",       "vmin": -_sv, "vmax": _sv},
+        {"data": w21, "label": r"$\omega_{21}$ (deg)",   "vmin": -_rv, "vmax": _rv},
+        {"data": e22, "label": r"$\epsilon_{22}$",       "vmin": -_sv, "vmax": _sv},
+        {"data": e23, "label": r"$\epsilon_{23}$",       "vmin": -_sv, "vmax": _sv},
+        {"data": w13, "label": r"$\omega_{13}$ (deg)",   "vmin": -_rv, "vmax": _rv},
+        {"data": w32, "label": r"$\omega_{32}$ (deg)",   "vmin": -_rv, "vmax": _rv},
+    ],
+    cmap="viridis",
+    axis_off=True,
+    save_path=f"{foldername}/Strain_and_Rotation_Calculated - viridis.png",
+)
 
 # ============================================================
 # SAVE INDIVIDUAL COMPONENT PNGs
@@ -368,9 +293,10 @@ components = {
     "w32": w32
 }
 
+_indiv_sv = 1e-3   # colour limits for individual component saves
 for name, data in components.items():
     plt.figure(figsize=(6, 5))
-    plt.imshow(data, cmap="viridis", vmin=vmin, vmax=vmax)
+    plt.imshow(data, cmap="viridis", vmin=-_indiv_sv, vmax=_indiv_sv)
     cb = plt.colorbar()
     plt.title(f"{name} Component")
     plt.savefig(f"{foldername}/{name}_Calculated - DETECTOR REFERENCE FRAME.png")
@@ -406,9 +332,17 @@ N = Rows * Columns
 
 if ang_file is not None:
     ang_data = utilities.read_ang(ang_file, tuple(patshape))
-    # eulers shape: (Rows, Columns, 3) in radians — flatten to (N, 3)
-    base_quats = ang_data.quats.reshape(N, 4)   # already quaternions
-    print(f"Loaded per-pattern orientations from {ang_file}")
+    # Slice the ROI out of the full scan before reshaping.
+    # ang_data.quats shape: (full_rows, full_cols, 4)
+    roi_quats = ang_data.quats[
+        roi_row_start : roi_row_start + Rows,
+        roi_col_start : roi_col_start + Columns,
+        :,
+    ]
+    base_quats = roi_quats.reshape(N, 4)
+    print(f"Loaded per-pattern orientations from {ang_file} "
+          f"(ROI rows {roi_row_start}–{roi_row_start+Rows-1}, "
+          f"cols {roi_col_start}–{roi_col_start+Columns-1})")
 else:
     euler_angles_rad = np.deg2rad(euler_angles_deg)
     single_quat = rotations.eu2qu(euler_angles_rad)
@@ -479,67 +413,24 @@ print(f"Mean c/a     : {tetragonality_ratio.mean():.6f}")
 # FIGURE: ABSOLUTE STRAIN GRID (coolwarm)
 # ============================================================
 
-vmin_s   = -5e-3
-vmax_s   =  5e-3
-vmin_rot = -2.0
-vmax_rot =  2.0
-
-fig, ax = plt.subplots(3, 3, figsize=(15, 10))
-
-ax[0, 0].imshow(e11_abs, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s)
-fig.colorbar(ax[0, 0].imshow(e11_abs, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s), ax=ax[0, 0])
-ax[0, 0].set_title(r"$\epsilon_{11}^{\mathrm{abs}}$" + f"  (mean={e11_abs.mean():.2e})", fontsize=13)
-ax[0, 0].axis("off")
-
-ax[0, 1].imshow(e12, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s)
-fig.colorbar(ax[0, 1].imshow(e12, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s), ax=ax[0, 1])
-ax[0, 1].set_title(r"$\epsilon_{12}$" + f"  (mean={e12.mean():.2e})", fontsize=13)
-ax[0, 1].axis("off")
-
-ax[0, 2].imshow(e13, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s)
-fig.colorbar(ax[0, 2].imshow(e13, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s), ax=ax[0, 2])
-ax[0, 2].set_title(r"$\epsilon_{13}$" + f"  (mean={e13.mean():.2e})", fontsize=13)
-ax[0, 2].axis("off")
-
-ax[1, 0].imshow(w21, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot)
-fig.colorbar(ax[1, 0].imshow(w21, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot), ax=ax[1, 0])
-ax[1, 0].set_title(r"$\omega_{21}$ (deg)" + f"  (mean={w21.mean():.2e})", fontsize=13)
-ax[1, 0].axis("off")
-
-ax[1, 1].imshow(e22_abs, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s)
-fig.colorbar(ax[1, 1].imshow(e22_abs, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s), ax=ax[1, 1])
-ax[1, 1].set_title(r"$\epsilon_{22}^{\mathrm{abs}}$" + f"  (mean={e22_abs.mean():.2e})", fontsize=13)
-ax[1, 1].axis("off")
-
-ax[1, 2].imshow(e23, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s)
-fig.colorbar(ax[1, 2].imshow(e23, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s), ax=ax[1, 2])
-ax[1, 2].set_title(r"$\epsilon_{23}$" + f"  (mean={e23.mean():.2e})", fontsize=13)
-ax[1, 2].axis("off")
-
-ax[2, 0].imshow(w13, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot)
-fig.colorbar(ax[2, 0].imshow(w13, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot), ax=ax[2, 0])
-ax[2, 0].set_title(r"$\omega_{13}$ (deg)" + f"  (mean={w13.mean():.2e})", fontsize=13)
-ax[2, 0].axis("off")
-
-ax[2, 1].imshow(w32, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot)
-fig.colorbar(ax[2, 1].imshow(w32, cmap="coolwarm", vmin=vmin_rot, vmax=vmax_rot), ax=ax[2, 1])
-ax[2, 1].set_title(r"$\omega_{32}$ (deg)" + f"  (mean={w32.mean():.2e})", fontsize=13)
-ax[2, 1].axis("off")
-
-ax[2, 2].imshow(e33_abs, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s)
-fig.colorbar(ax[2, 2].imshow(e33_abs, cmap="coolwarm", vmin=vmin_s, vmax=vmax_s), ax=ax[2, 2])
-ax[2, 2].set_title(r"$\epsilon_{33}^{\mathrm{abs}}$ (traction-free)" + f"  (mean={e33_abs.mean():.2e})", fontsize=13)
-ax[2, 2].axis("off")
-
-fig.suptitle(
-    "Absolute strain and rotation components (traction-free BC)\n",
-    fontsize=14
+_sv, _rv = 5e-3, 2.0
+plot_component_grid(
+    components=[
+        {"data": e11_abs, "label": r"$\epsilon_{11}^{\mathrm{abs}}$"          + f"  (mean={e11_abs.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": e12,     "label": r"$\epsilon_{12}$"                          + f"  (mean={e12.mean():.2e})",     "vmin": -_sv, "vmax": _sv},
+        {"data": e13,     "label": r"$\epsilon_{13}$"                          + f"  (mean={e13.mean():.2e})",     "vmin": -_sv, "vmax": _sv},
+        {"data": w21,     "label": r"$\omega_{21}$ (deg)"                      + f"  (mean={w21.mean():.2e})",     "vmin": -_rv, "vmax": _rv},
+        {"data": e22_abs, "label": r"$\epsilon_{22}^{\mathrm{abs}}$"          + f"  (mean={e22_abs.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+        {"data": e23,     "label": r"$\epsilon_{23}$"                          + f"  (mean={e23.mean():.2e})",     "vmin": -_sv, "vmax": _sv},
+        {"data": w13,     "label": r"$\omega_{13}$ (deg)"                      + f"  (mean={w13.mean():.2e})",     "vmin": -_rv, "vmax": _rv},
+        {"data": w32,     "label": r"$\omega_{32}$ (deg)"                      + f"  (mean={w32.mean():.2e})",     "vmin": -_rv, "vmax": _rv},
+        {"data": e33_abs, "label": r"$\epsilon_{33}^{\mathrm{abs}}$ (TF BC)"  + f"  (mean={e33_abs.mean():.2e})", "vmin": -_sv, "vmax": _sv},
+    ],
+    cmap="coolwarm",
+    axis_off=True,
+    title="Absolute strain and rotation components (traction-free BC)\n",
+    save_path=f"{foldername}/Absolute_strain_grid.png",
 )
-plt.tight_layout()
-save_path = f"{foldername}/Absolute_strain_grid.png"
-plt.savefig(save_path, dpi=200, bbox_inches="tight")
-plt.show(block=False)
-print(f"Saved {save_path}")
 
 # ============================================================
 # FIGURE: TETRAGONALITY MAP
