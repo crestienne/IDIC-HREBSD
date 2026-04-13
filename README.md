@@ -1,10 +1,10 @@
-# pyHREBSD
+# IDIC - HREBSD
 
 HR-EBSD pipeline to determine absolute elastic strain via the use of dynamically simulated EBSD patterns. Is implemented using an inverse compositional Gauss-Newton optimization routine to determine the linear homography required to warp a target EBSP to match a simulated reference EBSP in python. This code follows the HR-EBSD calculations outlined in the [ATEX](http://www.atex-software.eu) EBSD software developed by Jean-Jacques Fundenberger and Benoit Beausir. The linear homography approach was developed by Clement Ernould during his PhD research and more information can be found here: 
 
 Insert link to Ernould's papers
 
-The following code builds upon the HR-EBSD implementation by Dr. James Lamb, whose implementation can be found here: [https://github.com/lambjames18/pyHREBSD] 
+The following code builds upon the HR-EBSD implementation by Dr. James Lamb, whose implementation, pyHREBSD, can be found here: [https://github.com/lambjames18/pyHREBSD] 
 
 The code is designed specifically to support the use of a dynamically simulated reference patterns generated via EMsoft. The following implementation can be run in two ways either using a GUI or alternately through a runner script. 
 
