@@ -23,23 +23,43 @@ Follow the installer defaults. When it finishes, open a terminal:
 ### 2 — Download the code
 In the terminal, navigate to wherever you want to save the project, then clone the repository:
 ```
-cd ~/Documents
+cd ~/insert/path/here
 git clone https://github.com/crestienne/IDIC-HREBSD.git
 cd IDIC-HREBSD
 ```
 
 ### 3 — Create the conda environment
-Once the repository has been downloaded the conda environment must be created. 
+Once the repository has been downloaded the conda environment must be created. Run the commands for your operating system from the sections below. The following commands only need to be run once. 
 
-Run the commands for your operating system from the **Conda Env** sections below. The following commands only need to be run once. 
+### Conda Env (windows, cuda version = 12.4)
+```
+conda create -n hrebsd python=3.12 -y
+conda activate hrebsd
+conda install pytorch torchvision pytorch-cuda=12.4 -c pytorch -c nvidia -y
+conda install numpy matplotlib tqdm scipy scikit-image joblib kornia -c conda-forge -y
+
+```
+### Conda Env (Mac or no CUDA)
+```
+conda create -n hrebsd python=3.12 numpy matplotlib tqdm scipy scikit-image pytorch kornia joblib -c pytorch -c conda-forge
+conda activate hrebsd
+pip install PyQt6
+```
 
 ### 4 — Launch the GUI
-The GUI can be launched from the terminal via the following commands. 
+The GUI can be launched from the terminal via the following commands. Every time you want to use the software, open a terminal and activate the environment:
 
-Every time you want to use the software, open a terminal, activate the environment, and run:
 ```
 conda activate hrebsd
-cd ~/InsertPathHere/IDIC-HREBSD
+```
+Then navigate to where IDIC-HREBSD is stored: 
+
+```
+cd ~/insert/your/path/IDIC-HREBSD
+```
+Then run: 
+
+```
 python Run_GUI.py
 ```
 A window titled **DIC-HREBSD Pipeline** should appear.
