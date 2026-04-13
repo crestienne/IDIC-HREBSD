@@ -165,6 +165,28 @@ class LoadFilesPage(QWizardPage):
         bottom_row.addWidget(mat_group, stretch=1)
 
         layout.addLayout(bottom_row)
+
+        # ── Visualize existing results ─────────────────────────────────────────
+        vis_group  = QGroupBox("Visualize Existing Results")
+        vis_layout = QHBoxLayout()
+        vis_label  = QLabel(
+            "Already have a homographies .npy file from a previous run? "
+            "Open the results viewer directly without running the full pipeline. NOTE: Currently only supports files for the full field of view (no ROI)."
+        )
+        vis_label.setWordWrap(True)
+        vis_label.setStyleSheet("color: gray; font-size: 11px;")
+        self._open_vis_btn = QPushButton("Open Results Viewer")
+        self._open_vis_btn.setFixedHeight(34)
+        self._open_vis_btn.setStyleSheet(
+            f"font-size: 12px; font-weight: bold; "
+            f"background-color: {THEME['accent']}; color: #000; border-radius: 5px;"
+        )
+        self._open_vis_btn.clicked.connect(self._launch_vis_dialog)
+        vis_layout.addWidget(vis_label, stretch=1)
+        vis_layout.addWidget(self._open_vis_btn)
+        vis_group.setLayout(vis_layout)
+        layout.addWidget(vis_group)
+
         self.setLayout(layout)
 
         self.registerField("up2_path*", self.up2_edit)
@@ -236,6 +258,10 @@ class LoadFilesPage(QWizardPage):
             self._info_label.setText(f"Could not read UP2: {exc}")
             self._canvas.draw()
 
+    def _launch_vis_dialog(self):
+        dlg = VisualizationDialog({}, parent=self)
+        dlg.show()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page 2 — Scan Geometry
@@ -251,11 +277,14 @@ class ScanGeometryPage(QWizardPage):
             "Check them and adjust if needed."
         )
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner  = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setSpacing(12)
+        # ── Two-column outer layout ───────────────────────────────────────────
+        columns   = QHBoxLayout()
+        left_col  = QVBoxLayout()
+        right_col = QVBoxLayout()
+        left_col.setSpacing(10)
+        right_col.setSpacing(10)
+
+        # ══ LEFT COLUMN ═══════════════════════════════════════════════════════
 
         # ── Tilts ─────────────────────────────────────────────────────────────
         tilt_group  = QGroupBox("Tilts")
@@ -276,7 +305,7 @@ class ScanGeometryPage(QWizardPage):
         tilt_layout.addRow("Sample tilt:", self.tilt)
         tilt_layout.addRow("Detector tilt:", self.det_tilt)
         tilt_group.setLayout(tilt_layout)
-        layout.addWidget(tilt_group)
+        left_col.addWidget(tilt_group)
 
         # ── EDAX Pattern Center ───────────────────────────────────────────────
         pc_group  = QGroupBox("EDAX Pattern Center  ✦  (auto-populated from ANG)")
@@ -311,7 +340,11 @@ class ScanGeometryPage(QWizardPage):
                   "y* is measured from the bottom of the detector.")
         )
         pc_group.setLayout(pc_layout)
-        layout.addWidget(pc_group)
+        left_col.addWidget(pc_group)
+
+        left_col.addStretch()
+
+        # ══ RIGHT COLUMN ══════════════════════════════════════════════════════
 
         # ── Detector ──────────────────────────────────────────────────────────
         det_group  = QGroupBox("Detector")
@@ -338,7 +371,7 @@ class ScanGeometryPage(QWizardPage):
         det_layout.addRow("Pattern height  ✦:", self.pat_h)
         det_layout.addRow("Pattern width   ✦:", self.pat_w)
         det_group.setLayout(det_layout)
-        layout.addWidget(det_group)
+        right_col.addWidget(det_group)
 
         # ── Scan ──────────────────────────────────────────────────────────────
         scan_group  = QGroupBox("Scan  ✦  (auto-populated from ANG)")
@@ -365,19 +398,50 @@ class ScanGeometryPage(QWizardPage):
         scan_layout.addRow("Columns:", self.cols)
         scan_layout.addRow("Step size:", self.step_size)
         scan_group.setLayout(scan_layout)
-        layout.addWidget(scan_group)
+        right_col.addWidget(scan_group)
+
+        # ── Scan Strategy ─────────────────────────────────────────────────────
+        strategy_group  = QGroupBox("Scan Strategy")
+        strategy_layout = QVBoxLayout()
+
+        self._strategy_standard = QRadioButton("Standard  (origin: lower-right, x ←, y ↑)")
+        self._strategy_de       = QRadioButton("Direct Electron  (origin: upper-right, x ←, y ↓)")
+        self._strategy_ul       = QRadioButton("Upper Left  (origin: upper-left, x →, y ↓)")
+        self._strategy_standard.setChecked(True)
+        self._strategy_standard.setToolTip(
+            "Use when your scan origin is at the lower-right corner of the sample.")
+        self._strategy_de.setToolTip(
+            "Use when your scan origin is at the upper-right corner (Direct Electron detector).")
+        self._strategy_ul.setToolTip(
+            "Use when your scan origin is at the upper-left corner of the sample.")
+
+        strategy_layout.addWidget(self._strategy_standard)
+        strategy_layout.addWidget(self._strategy_de)
+        strategy_layout.addWidget(self._strategy_ul)
+
+        self._apply_pc_correction = QCheckBox("Apply pattern centre drift correction")
+        self._apply_pc_correction.setChecked(False)
+        self._apply_pc_correction.setToolTip(
+            "Removes the geometric homography contribution caused by the pattern centre "
+            "shifting as the beam steps across the tilted sample.")
+        strategy_layout.addSpacing(4)
+        strategy_layout.addWidget(self._apply_pc_correction)
+
+        strategy_group.setLayout(strategy_layout)
+        right_col.addWidget(strategy_group)
 
         # ── Auto-populate status ──────────────────────────────────────────────
         self._status_label = QLabel("")
         self._status_label.setStyleSheet("color: gray; font-size: 11px;")
-        layout.addWidget(self._status_label)
+        self._status_label.setWordWrap(True)
+        right_col.addWidget(self._status_label)
 
-        layout.addStretch()
-        scroll.setWidget(inner)
+        right_col.addStretch()
 
-        outer = QVBoxLayout()
-        outer.addWidget(scroll)
-        self.setLayout(outer)
+        # ── Assemble columns ──────────────────────────────────────────────────
+        columns.addLayout(left_col,  stretch=1)
+        columns.addLayout(right_col, stretch=1)
+        self.setLayout(columns)
 
     def initializePage(self):
         """Called by the wizard when this page becomes visible. Auto-populate from files."""
@@ -453,15 +517,19 @@ class ScanGeometryPage(QWizardPage):
 
     def get_params(self) -> dict:
         return {
-            "tilt":       self.tilt.value(),
-            "det_tilt":   self.det_tilt.value(),
-            "pc_edax":    (self.pc_x.value(), self.pc_y.value(), self.pc_z.value()),
-            "pixel_size": self.pixel_size.value(),
-            "pat_h":      self.pat_h.value(),
-            "pat_w":      self.pat_w.value(),
-            "rows":       self.rows.value(),
-            "cols":       self.cols.value(),
-            "step_size":  self.step_size.value(),
+            "tilt":                self.tilt.value(),
+            "det_tilt":            self.det_tilt.value(),
+            "pc_edax":             (self.pc_x.value(), self.pc_y.value(), self.pc_z.value()),
+            "pixel_size":          self.pixel_size.value(),
+            "pat_h":               self.pat_h.value(),
+            "pat_w":               self.pat_w.value(),
+            "rows":                self.rows.value(),
+            "cols":                self.cols.value(),
+            "step_size":           self.step_size.value(),
+            "scan_strategy":       ("direct_electron" if self._strategy_de.isChecked()
+                                   else "upper_left" if self._strategy_ul.isChecked()
+                                   else "standard"),
+            "apply_pc_correction": self._apply_pc_correction.isChecked(),
         }
 
 
@@ -584,9 +652,14 @@ class ROISelectionPage(QWizardPage):
 
         roi_layout.addRow("Rows  (y):", row_w)
         roi_layout.addRow("Columns  (x):", col_w)
-        roi_layout.addRow("IPF direction:", dir_w)
         roi_layout.addRow(_note("Indices are 0-based — top-left corner is (row 0, col 0)."))
         roi_group.setLayout(roi_layout)
+
+        # ── IPF direction group (standalone, sits between top row and maps) ────
+        ipf_dir_group  = QGroupBox("Select IPF Direction")
+        ipf_dir_layout = QFormLayout()
+        ipf_dir_layout.addRow("IPF direction:", dir_w)
+        ipf_dir_group.setLayout(ipf_dir_layout)
 
         # ── Map display (IPF left, grain map right) ───────────────────────────
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -640,11 +713,12 @@ class ROISelectionPage(QWizardPage):
 
         # ── Assemble page ─────────────────────────────────────────────────────
         top_row = QHBoxLayout()
-        top_row.addWidget(seg_group)
         top_row.addWidget(roi_group)
+        top_row.addWidget(seg_group)
 
         outer = QVBoxLayout()
         outer.addLayout(top_row)
+        outer.addWidget(ipf_dir_group)
         outer.addWidget(self._splitter, stretch=1)
         self.setLayout(outer)
 
@@ -729,6 +803,46 @@ class ROISelectionPage(QWizardPage):
         bnd_overlay = np.zeros((*grain_ids.shape, 4), dtype=float)
         bnd_overlay[boundary] = [1.0, 1.0, 1.0, 0.9]
         self._grain_ax.imshow(bnd_overlay, origin="upper", interpolation="nearest")
+
+        # ── Grain legend ──────────────────────────────────────────────────────
+        import matplotlib.patches as mpatches
+        # Reuse the cmap/norm from the grain imshow so colours match exactly
+        grain_img  = self._grain_ax.get_images()[0]
+        grain_cmap = grain_img.cmap
+        grain_norm = grain_img.norm
+
+        legend_entries = [
+            (gid, int(sizes[gid]), grain_cmap(grain_norm(gid)))
+            for gid in range(1, len(sizes)) if sizes[gid] > 0
+        ]
+
+        MAX_LEGEND = 30
+        if len(legend_entries) > MAX_LEGEND:
+            legend_entries.sort(key=lambda x: -x[1])
+            legend_entries = legend_entries[:MAX_LEGEND]
+            leg_title = f"Largest {MAX_LEGEND} grains"
+        else:
+            leg_title = "Grains"
+
+        legend_patches = [
+            mpatches.Patch(facecolor=col, edgecolor="white", linewidth=0.3,
+                           label=f"G{gid}  ({sz} px)")
+            for gid, sz, col in legend_entries
+        ]
+        ncols = max(1, min(4, (len(legend_patches) + 7) // 8))
+        self._grain_ax.legend(
+            handles=legend_patches,
+            title=leg_title,
+            loc="lower left",
+            bbox_to_anchor=(0.0, -0.01),
+            fontsize=6,
+            title_fontsize=7,
+            ncol=ncols,
+            framealpha=0.85,
+            handlelength=1.2,
+            handleheight=0.9,
+        )
+
         self._grain_fig.tight_layout(pad=0.5)
 
         if self._rgb_map is not None:
@@ -893,7 +1007,7 @@ class ROISelectionPage(QWizardPage):
 
             rect = mpatches.Rectangle(
                 (c0 - 0.5, r0 - 0.5), c1 - c0, r1 - r0,
-                linewidth=2, edgecolor="yellow", facecolor="none",
+                linewidth=2, edgecolor="black", facecolor="none",
             )
             ax.add_patch(rect)
             self._roi_rects[idx] = rect
@@ -1555,6 +1669,9 @@ class OptimizationRunPage(QWizardPage):
             f"Flip patterns    : {proc['flip_x']}",
             f"Mask type        : {proc['mask_type']}",
             f"CLAHE kernel     : {proc['clahe_kernel']}",
+            f"",
+            f"Scan strategy    : {geom['scan_strategy']}",
+            f"PC correction    : {'yes' if geom['apply_pc_correction'] else 'no'}",
         ]
         self._summary.setPlainText("\n".join(lines))
 
@@ -1631,21 +1748,30 @@ class OptimizationRunPage(QWizardPage):
             p.get("output_dir", ""),
             f"{comp}_homographies_{date}.npy",
         )
+        npz_path = os.path.join(
+            p.get("output_dir", ""),
+            f"{comp}_results_{date}.npy",
+        )
 
         vis_params = {
-            "npy_path":    npy_path,
-            "ang":         p.get("ang", ""),        # pre-fill ang path (already loaded in step 1)
-            "save_folder": p.get("output_dir", ""),
-            "rows":        eff_rows,
-            "cols":        eff_cols,
-            "roi_slice":   p.get("roi_slice", None), # needed so VisWorker slices ang quats correctly
-            "full_rows":   p.get("rows", eff_rows),  # full scan shape (before ROI)
-            "full_cols":   p.get("cols", eff_cols),
-            "pat_h":       p.get("pat_h", 512),
-            "pat_w":       p.get("pat_w", 512),
-            "pc_edax":     p.get("pc_edax", (0.5, 0.5, 0.5)),
-            "tilt":        p.get("tilt", 70.0),
-            "det_tilt":    p.get("det_tilt", 10.0),
+            "npz_path":            npz_path,
+            "npy_path":            npy_path,
+            "ang":                 p.get("ang", ""),        # pre-fill ang path (already loaded in step 1)
+            "save_folder":         p.get("output_dir", ""),
+            "rows":                eff_rows,
+            "cols":                eff_cols,
+            "roi_slice":           p.get("roi_slice", None), # needed so VisWorker slices ang quats correctly
+            "full_rows":           p.get("rows", eff_rows),  # full scan shape (before ROI)
+            "full_cols":           p.get("cols", eff_cols),
+            "pat_h":               p.get("pat_h", 512),
+            "pat_w":               p.get("pat_w", 512),
+            "pc_edax":             p.get("pc_edax", (0.5, 0.5, 0.5)),
+            "tilt":                p.get("tilt", 70.0),
+            "det_tilt":            p.get("det_tilt", 10.0),
+            "step_size":           p.get("step_size", 1.0),
+            "pixel_size":          p.get("pixel_size", 1.0),
+            "scan_strategy":       p.get("scan_strategy", "standard"),
+            "apply_pc_correction": p.get("apply_pc_correction", False),
         }
 
         dlg = VisualizationDialog(vis_params, parent=self)
