@@ -1,0 +1,10 @@
+{
+  "name": "Silicon (Si)",
+  "structure": "cubic",
+  "elastic_constants_GPa": {
+    "C11": 165.7,
+    "C12": 63.9,
+    "C44": 79.6
+  },
+  "reference": "Madelung 1982"
+}

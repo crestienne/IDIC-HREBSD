@@ -1,0 +1,10 @@
+{
+  "name": "Si0.5Ge0.5 alloy (50/50, linear interp.)",
+  "structure": "cubic",
+  "elastic_constants_GPa": {
+    "C11": 147.1,
+    "C12": 56.1,
+    "C44": 73.2
+  },
+  "reference": "Linear interpolation between Si (Madelung 1982) and Ge (Madelung 1982). Replace with composition-specific values for your sample."
+}
