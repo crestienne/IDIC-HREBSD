@@ -2,7 +2,7 @@
 gui_qt.py — entry point for the DIC-HREBSD PyQt6 wizard GUI.
 
 Run:
-    python gui_qt.py
+    python Run_GUI.py
 
 Module layout
 ─────────────
