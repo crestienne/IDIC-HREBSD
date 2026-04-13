@@ -234,7 +234,7 @@ def plot_all_results(results: dict, params: dict):
         save_path=_sp("Homography_Components.png"),
     )
 
-    # ── Strain + rotation (coolwarm) ──────────────────────────────────────────
+    # ── Strain + rotation (coolwarm) — shown but saved only after TFBC ────────
     plot_component_grid(
         [
             {"data": e11, "label": r"$\epsilon_{11}$"    + f"  (mean={e11.mean():.2e})", "vmin": -sv, "vmax": sv},
@@ -247,43 +247,9 @@ def plot_all_results(results: dict, params: dict):
             {"data": w32, "label": r"$\omega_{32}$ (°)"  + f"  (mean={w32.mean():.2e})", "vmin": -rv, "vmax": rv},
         ],
         cmap="coolwarm",
-        title="Strain and Rotation Components (coolwarm)",
-        save_path=_sp("Strain_Rotation_coolwarm.png"),
+        title="Strain and Rotation Components (relative)",
+        save_path=None,   # not saved — TFBC-corrected version is saved below
     )
-
-    # ── Strain + rotation (viridis) ───────────────────────────────────────────
-    sv2, rv2 = 1e-3, 2.0
-    plot_component_grid(
-        [
-            {"data": e11, "label": r"$\epsilon_{11}$",      "vmin": -sv2, "vmax": sv2},
-            {"data": e12, "label": r"$\epsilon_{12}$",      "vmin": -sv2, "vmax": sv2},
-            {"data": e13, "label": r"$\epsilon_{13}$",      "vmin": -sv2, "vmax": sv2},
-            {"data": w21, "label": r"$\omega_{21}$ (°)",    "vmin": -rv2, "vmax": rv2},
-            {"data": e22, "label": r"$\epsilon_{22}$",      "vmin": -sv2, "vmax": sv2},
-            {"data": e23, "label": r"$\epsilon_{23}$",      "vmin": -sv2, "vmax": sv2},
-            {"data": w13, "label": r"$\omega_{13}$ (°)",    "vmin": -rv2, "vmax": rv2},
-            {"data": w32, "label": r"$\omega_{32}$ (°)",    "vmin": -rv2, "vmax": rv2},
-        ],
-        cmap="viridis",
-        axis_off=True,
-        title="Strain and Rotation Components (viridis)",
-        save_path=_sp("Strain_Rotation_viridis.png"),
-    )
-
-    # ── Individual component PNGs (save only) ─────────────────────────────────
-    if save:
-        indiv_lim = 1e-3
-        for name, data in [
-            ("e11", e11), ("e12", e12), ("e13", e13),
-            ("e22", e22), ("e23", e23), ("e33", e33),
-            ("w13", w13), ("w21", w21), ("w32", w32),
-        ]:
-            fig_i, ax_i = plt.subplots(figsize=(6, 5))
-            im_i = ax_i.imshow(data, cmap="viridis", vmin=-indiv_lim, vmax=indiv_lim)
-            fig_i.colorbar(im_i, ax=ax_i)
-            ax_i.set_title(f"{name} Component")
-            fig_i.savefig(os.path.join(save, f"{name}_Component.png"), dpi=200, bbox_inches="tight")
-            plt.close(fig_i)
 
     # ── Strain line maps ──────────────────────────────────────────────────────
     x_pos = np.arange(cols)
@@ -348,9 +314,8 @@ def plot_all_results(results: dict, params: dict):
         plt.savefig(sp, dpi=200, bbox_inches="tight")
     plt.show(block=False)
 
-    # ── Traction-free BC (optional) ───────────────────────────────────────────
-    if (params.get("tfbc_enabled") and
-            "F_flat" in results and "base_quats" in results):
+    # ── Traction-free BC ──────────────────────────────────────────────────────
+    if "F_flat" in results and "base_quats" in results:
         tfbc = compute_tfbc(results, params)
         e11_abs      = tfbc["e11_abs"]
         e22_abs      = tfbc["e22_abs"]
@@ -372,8 +337,8 @@ def plot_all_results(results: dict, params: dict):
             ],
             cmap="coolwarm",
             axis_off=True,
-            title="Absolute strain and rotation components (traction-free BC)",
-            save_path=_sp("Absolute_strain_grid.png"),
+            title="Absolute strain and rotation components (traction-free BC, coolwarm)",
+            save_path=_sp("Strain_Rotation_TFBC_coolwarm.png"),
         )
 
         # Tetragonality map
