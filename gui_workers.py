@@ -133,6 +133,30 @@ class PipelineWorker(QThread):
             f"{dt / n_pat * 1000:.2f} ms/pattern"
         )
 
+        # Determine effective scan shape (after any ROI)
+        roi_slice = p.get("roi_slice", None)
+        if roi_slice is not None:
+            eff_rows = roi_slice[0].stop - roi_slice[0].start
+            eff_cols = roi_slice[1].stop - roi_slice[1].start
+        else:
+            eff_rows, eff_cols = ang_data.shape
+
+        if p.get("apply_pc_correction", True):
+            from pc_homography_correction import correct_homographies
+            self.log_signal.emit("Applying PC drift correction…")
+            h = correct_homographies(
+                h=h,
+                scan_shape=(eff_rows, eff_cols),
+                step_size_um=p["step_size"],
+                pc_ref=pc_ref,
+                patshape=pat_obj.patshape,
+                pixel_size_um=p["pixel_size"],
+                sample_tilt_deg=p["tilt"],
+                detector_tilt_deg=p["det_tilt"],
+                convention=p.get("scan_strategy", "standard"),
+            )
+            self.log_signal.emit("PC drift correction applied.")
+
         comp   = p["component"]
         date   = p["date"]
         folder = p["output_dir"]
@@ -144,7 +168,40 @@ class PipelineWorker(QThread):
         if h_guess is not None:
             np.save(os.path.join(folder, f"{comp}_h_guess_{date}.npy"), h_guess)
 
-        self.log_signal.emit(f"Results saved to: {folder}")
+        # ── Compute strain / rotation and save results npz ────────────────────
+        self.log_signal.emit("Computing strain and rotation tensors…")
+        import conversions
+
+        pc_edax        = np.asarray(pc_ref, dtype=float)
+        pc_bruker      = conversions.Edax_to_Bruker_PC(pc_edax)
+        xo             = conversions.Bruker_to_fractional_PC(pc_bruker, pat_obj.patshape)
+        F              = conversions.h2F(h, xo)
+        epsilon, omega = conversions.F2strain(F)
+
+        R = utilities.rotation_matrix_passive(p["det_tilt"], p["tilt"])
+        for i in range(epsilon.shape[0]):
+            epsilon[i] = R @ epsilon[i] @ R.T
+            omega[i]   = R @ omega[i]   @ R.T
+
+        def _2d(arr):
+            return arr.reshape(eff_rows, eff_cols)
+
+        results_npy_path = os.path.join(folder, f"{comp}_results_{date}.npy")
+        np.save(results_npy_path, {
+            "h11": _2d(h[:, 0]), "h12": _2d(h[:, 1]), "h13": _2d(h[:, 2]),
+            "h21": _2d(h[:, 3]), "h22": _2d(h[:, 4]), "h23": _2d(h[:, 5]),
+            "h31": _2d(h[:, 6]), "h32": _2d(h[:, 7]),
+            "e11": _2d(epsilon[:, 0, 0]), "e12": _2d(epsilon[:, 0, 1]), "e13": _2d(epsilon[:, 0, 2]),
+            "e22": _2d(epsilon[:, 1, 1]), "e23": _2d(epsilon[:, 1, 2]), "e33": _2d(epsilon[:, 2, 2]),
+            "w13": _2d(np.degrees(omega[:, 0, 2])),
+            "w21": _2d(np.degrees(omega[:, 1, 0])),
+            "w32": _2d(np.degrees(omega[:, 2, 1])),
+            "F":   F,
+            "rows": np.array(eff_rows),
+            "cols": np.array(eff_cols),
+        })
+        self.log_signal.emit(f"Strain/rotation saved → {comp}_results_{date}.npy")
+        self.log_signal.emit(f"All results saved to: {folder}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -195,7 +252,7 @@ class SegmentWorker(QThread):
                 self.ang_path, self.patshape, segment_grain_threshold=None
             )
             grain_ids, kam = segment.segment_grains(
-                ang_data.quats, self.threshold, self.min_grain_size
+                ang_data.quats, self.threshold, self.min_grain_size, progress=False
             )
             self.done_signal.emit(grain_ids, kam, "")
         except Exception:
@@ -225,6 +282,12 @@ class VisWorker(QThread):
         import conversions, utilities
         p = self.params
 
+        # ── Fast path: load pre-computed results from npy ─────────────────────
+        npy_results = p.get("npz_path", "")   # field name kept for compat
+        if npy_results and os.path.isfile(npy_results):
+            return self._load_from_npz(npy_results, p)
+
+        # ── Legacy path: compute from raw homographies npy ────────────────────
         h = np.load(p["npy_path"])
         rows, cols = p["rows"], p["cols"]
         if h.ndim != 2 or h.shape[-1] != 8:
@@ -243,6 +306,21 @@ class VisWorker(QThread):
         # EDAX → Bruker → xo vector expected by conversions.h2F
         patshape  = (p["pat_h"], p["pat_w"])
         pc_edax   = np.asarray(p["pc_edax"], dtype=float)
+
+        if p.get("apply_pc_correction", False):
+            from pc_homography_correction import correct_homographies
+            h_calc = correct_homographies(
+                h=h_calc,
+                scan_shape=(rows, cols),
+                step_size_um=p.get("step_size", 1.0),
+                pc_ref=pc_edax,
+                patshape=patshape,
+                pixel_size_um=p.get("pixel_size", 1.0),
+                sample_tilt_deg=p["tilt"],
+                detector_tilt_deg=p["det_tilt"],
+                convention=p.get("scan_strategy", "standard"),
+            )
+
         pc_bruker = conversions.Edax_to_Bruker_PC(pc_edax)
         xo        = conversions.Bruker_to_fractional_PC(pc_bruker, patshape)
 
@@ -284,6 +362,40 @@ class VisWorker(QThread):
                 quats_roi = quats_2d[roi_slice[0], roi_slice[1], :]
             else:
                 quats_roi = quats_2d
+            result["base_quats"] = quats_roi.reshape(-1, 4)
+
+        return result
+
+    def _load_from_npz(self, npy_path: str, p: dict) -> dict:
+        """Load pre-computed strain/rotation results saved by PipelineWorker."""
+        import utilities
+        d    = np.load(npy_path, allow_pickle=True).item()
+        rows = int(d["rows"])
+        cols = int(d["cols"])
+
+        result = {
+            "h11": d["h11"], "h12": d["h12"], "h13": d["h13"],
+            "h21": d["h21"], "h22": d["h22"], "h23": d["h23"],
+            "h31": d["h31"], "h32": d["h32"],
+            "e11": d["e11"], "e12": d["e12"], "e13": d["e13"],
+            "e22": d["e22"], "e23": d["e23"], "e33": d["e33"],
+            "w13": d["w13"], "w21": d["w21"], "w32": d["w32"],
+            "rows": rows, "cols": cols,
+            "F_flat": d["F"],
+        }
+
+        # Load base orientations from .ang if provided (needed for TFBC)
+        ang_path = p.get("ang_path", "")
+        if ang_path and os.path.isfile(ang_path):
+            patshape       = (p.get("pat_h", 512), p.get("pat_w", 512))
+            ang_data       = utilities.read_ang(ang_path, patshape, segment_grain_threshold=None)
+            full_r, full_c = ang_data.shape
+            quats_2d       = ang_data.quats.reshape(full_r, full_c, 4)
+            roi_slice      = p.get("roi_slice", None)
+            if roi_slice is not None:
+                quats_roi = quats_2d[roi_slice[0], roi_slice[1], :]
+            else:
+                quats_roi = quats_2d[:rows, :cols, :]
             result["base_quats"] = quats_roi.reshape(-1, 4)
 
         return result
