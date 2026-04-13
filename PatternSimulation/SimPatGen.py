@@ -16,7 +16,7 @@ import h5py
 import numpy as np
 
 import sys
-
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ebsdtorch"))
 
 from ebsdtorch.ebsd import geometry
 from ebsdtorch.io.read_master_pattern import read_master_pattern
@@ -34,7 +34,7 @@ class patternSimulation():
     def __init__(self):
 
         self.batch = 1 #defining the batch size - currently set to 1, but can be changed to allow GPU parallelization
-        self.device = torch.device("cpu") if torch.backends.mps.is_available() else torch.device("cpu")
+        self.device = torch.device("cpu")
         self.dtype = torch.float32  # Specify the data type
 
         #Defining the size/shape of detector
@@ -56,14 +56,14 @@ class patternSimulation():
         
     def mastersetup(self, masterpatternpath):
 
-        self.master_pattern = read_master_pattern(masterpatternpath) 
+        self.master_pattern = read_master_pattern(masterpatternpath).to(self.device).to(self.dtype)
         print("Master Pattern Loaded")
 
-    def EandPCSet(self, Euler, PC, D = None):
+    def EandPCSet(self, Euler, PC, D=None, verbose=True):
         '''
-        Argument: 
+        Argument:
         -Takes in a single Euler angle array in Edax TSL format(numpy array), E is in radians - this is the initial orientation guess and PC (3 values)
-        -converts E to quaternions 
+        -converts E to quaternions
         -sets the class values so that gen pattern can be called
 
         Returns: None
@@ -85,7 +85,7 @@ class patternSimulation():
         #convert the pattern center and tilt angles to SE3 vector
         rotation, translation = bruker_geometry_to_SE3(
             pattern_centers= self.pattern_centerInit,
-            primary_tilt_deg = torch.tensor([-72], device= self.device, dtype=self.dtype),
+            primary_tilt_deg = torch.tensor([-(self.detector_tilt_deg - self.sample_tilt_deg)], device=self.device, dtype=self.dtype),
             secondary_tilt_deg=torch.tensor([self.azimuthal_deg], device=self.device, dtype=self.dtype),
             detector_shape= self.det_shape,
         )
@@ -96,9 +96,9 @@ class patternSimulation():
         #Make SE3 vector a parameter
         self.se3_vector = torch.nn.Parameter(self.se3_vector) #this allows the SE3 vector to be optimized
 
-        #print the initial quaternions and SE3 vector
-        print('Initial Quaternions: ' + str(self.quats))
-        print('Initial SE3 Vector: ' + str(self.se3_vector))
+        if verbose:
+            print('Initial Quaternions: ' + str(self.quats))
+            print('Initial SE3 Vector: ' + str(self.se3_vector))
 
 
 

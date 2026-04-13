@@ -15,7 +15,7 @@ conda create -n hrebsd python=3.12 numpy matplotlib tqdm scipy scikit-image pyto
 conda activate hrebsd
 ```
 
-### Important Geometery Instructions
+### Important Geometry Instructions
 
 All functions currently run using the EDAX sample frame and a Bruker detector frame. This is the same as utilized by kikuchipy and thus if the reader would like more information regarding these two sample frames they are highly encouraged to look there
 

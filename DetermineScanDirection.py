@@ -38,6 +38,9 @@ fps        = 10      # frames per second
 # Process patterns before display? (high-pass + CLAHE — slower but clearer)
 process = False
 
+# Flip patterns vertically before display?
+flip_ud = True
+
 # ============================================================
 # HELPERS
 # ============================================================
@@ -52,7 +55,8 @@ def _read_frames(up2, indices, process):
     frames = []
     for k, idx in enumerate(indices):
         pat = up2.read_pattern(idx, process=process).astype(np.float32)
-        #pat = np.flipud(pat)
+        if flip_ud:
+            pat = np.flipud(pat)
         lo, hi = pat.min(), pat.max()
         if hi > lo:
             pat = (pat - lo) / (hi - lo)
