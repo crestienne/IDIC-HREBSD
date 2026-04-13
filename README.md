@@ -11,8 +11,9 @@ conda install numpy matplotlib tqdm scipy scikit-image joblib kornia -c conda-fo
 ```
 ### Conda Env (Mac or no CUDA)
 ```
-conda create -n hrebsd python=3.12 numpy matplotlib tqdm scipy scikit-image pytorch kornia -c pytorch -c conda-forge
+conda create -n hrebsd python=3.12 numpy matplotlib tqdm scipy scikit-image pytorch kornia joblib -c pytorch -c conda-forge
 conda activate hrebsd
+pip install PyQt6
 ```
 
 ### Important Geometery Instructions
