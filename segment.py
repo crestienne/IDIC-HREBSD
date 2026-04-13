@@ -380,56 +380,71 @@ def inverse_qu(qu: np.ndarray) -> np.ndarray:
 # IPF + grain box overlay
 # ─────────────────────────────────────────────────────────────────────────────
 
-def plot_ipf_with_grain_boxes(
+def plot_ipf_with_grain_boundaries(
     grain_ids: np.ndarray,
     rgb_map: np.ndarray,
     ax=None,
-    box_color: str = "white",
-    linewidth: float = 0.8,
+    boundary_color: str = "white",
     min_grain_size: int = 1,
 ):
     """
-    Display an IPF map with axis-aligned bounding boxes drawn around each grain.
+    Display an IPF map with actual grain boundary contours overlaid.
 
     Parameters
     ----------
     grain_ids      : (rows, cols) int array from segment_grains (1-indexed labels).
     rgb_map        : (rows, cols, 3) float RGB array from compute_ipf_colors.
     ax             : matplotlib Axes to draw into — created if None.
-    box_color      : edge colour for the bounding boxes (default "white").
-    linewidth      : line width for the boxes.
-    min_grain_size : grains with fewer pixels than this are skipped.
+    boundary_color : colour for the boundary overlay (default "white").
+    min_grain_size : grains with fewer pixels than this are excluded from boundaries.
 
     Returns
     -------
     ax : the Axes used.
     """
     import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    from scipy.ndimage import find_objects
+    from matplotlib.colors import to_rgba
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 6))
 
     ax.imshow(rgb_map, origin="upper", interpolation="nearest")
-    ax.set_xlabel("Column", fontsize=9)
-    ax.set_ylabel("Row", fontsize=9)
+    ax.axis("off")
 
-    grain_sizes = np.bincount(grain_ids.ravel())[1:]   # index 0 = label 0, skip it
-    for gid, sl in enumerate(find_objects(grain_ids), start=1):
-        if sl is None:
-            continue
-        if grain_sizes[gid - 1] < min_grain_size:
-            continue
-        r_sl, c_sl = sl
-        ax.add_patch(mpatches.Rectangle(
-            (c_sl.start - 0.5, r_sl.start - 0.5),
-            c_sl.stop - c_sl.start,
-            r_sl.stop - r_sl.start,
-            linewidth=linewidth, edgecolor=box_color, facecolor="none",
-        ))
+    # Build a filtered grain_ids where small grains are zeroed out
+    if min_grain_size > 1:
+        sizes = np.bincount(grain_ids.ravel())
+        filtered = grain_ids.copy()
+        for gid in range(1, len(sizes)):
+            if sizes[gid] < min_grain_size:
+                filtered[filtered == gid] = 0
+    else:
+        filtered = grain_ids
+
+    # Detect boundary pixels: neighbours with different grain IDs
+    boundary = np.zeros(filtered.shape, dtype=bool)
+    h_diff = filtered[:-1, :] != filtered[1:, :]
+    v_diff = filtered[:, :-1] != filtered[:, 1:]
+    boundary[:-1, :] |= h_diff
+    boundary[1:,  :] |= h_diff
+    boundary[:, :-1] |= v_diff
+    boundary[:, 1:]  |= v_diff
+
+    r, g, b, _ = to_rgba(boundary_color)
+    bnd_overlay = np.zeros((*filtered.shape, 4), dtype=float)
+    bnd_overlay[boundary] = [r, g, b, 0.9]
+    ax.imshow(bnd_overlay, origin="upper", interpolation="nearest")
 
     return ax
+
+
+# Keep old name as alias for backward compatibility
+def plot_ipf_with_grain_boxes(grain_ids, rgb_map, ax=None,
+                               box_color="white", min_grain_size=1, **_):
+    return plot_ipf_with_grain_boundaries(
+        grain_ids, rgb_map, ax=ax,
+        boundary_color=box_color, min_grain_size=min_grain_size,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
