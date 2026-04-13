@@ -123,7 +123,7 @@ def h2F(H, X0):
 
     # Negate the detector distance becase our coordinates have +z pointing from the sample towards the detector
     # The calculation is the opposite, so we need to negate the distance
-    # DD = -DD
+    DD = -DD
 
     # Calculate the deformation gradient
     beta0 = 1 - h31 * x01 - h32 * x02
@@ -282,7 +282,94 @@ def F2strain(
 
     return epsilon, omega
 
+def Edax_to_Bruker_PC(edax_pc):
+    """
+    Convert EDAX fractional PC coordinates to Bruker convention.
 
+    EDAX convention: (x, y, z) with origin at upper left, x right, y down, z into sample
+    Bruker convention: (x', y', z') with origin at upper left, x' right, y' up, z' out of sample
+
+    Conversion:
+        x' = x
+        y' = 1 - y
+        z' = 1 - z
+
+    Parameters
+    ----------
+    edax_pc : array-like of shape (3,)
+        Fractional PC coordinates in EDAX convention.
+
+    Returns
+    -------
+    bruker_pc : ndarray of shape (3,)
+        Fractional PC coordinates in Bruker convention.
+    """
+    edax_pc = np.asarray(edax_pc)
+    if edax_pc.shape != (3,):
+        raise ValueError("edax_pc must be a 3-element vector.")
+    
+    x_bruker = edax_pc[0]
+    y_bruker = 1.0 - edax_pc[1]
+    z_bruker = edax_pc[2]
+
+    return np.array([x_bruker, y_bruker, z_bruker])
+# -------- Calculated parameters --------
+
+def Bruker_to_Edax_PC(bruker_pc):
+    """
+    Convert Bruker fractional PC coordinates to EDAX convention.
+
+    Bruker convention: (x', y', z') with origin at upper left, x' right, y' up, z' out of sample
+    EDAX convention: (x, y, z) with origin at upper left, x right, y down, z into sample
+
+    Conversion:
+        x = x'
+        y = 1 - y'
+        z = z'
+
+    Parameters
+    ----------
+    bruker_pc : array-like of shape (3,)
+        Fractional PC coordinates in Bruker convention.
+
+    Returns
+    -------
+    edax_pc : ndarray of shape (3,)
+        Fractional PC coordinates in EDAX convention.
+    """
+    bruker_pc = np.asarray(bruker_pc)
+    if bruker_pc.shape != (3,):
+        raise ValueError("bruker_pc must be a 3-element vector.")
+    
+    x_edax = bruker_pc[0]
+    y_edax = 1.0 - bruker_pc[1]
+    z_edax = bruker_pc[2]
+
+    return np.array([x_edax, y_edax, z_edax])
+
+def Bruker_to_fractional_PC(bruker_pc, patshape, homography_center = np.array([0.5, 0.5])):
+    """
+    Convert Bruker fractional PC to the h2F fractional PC format. Is the vector that goes from the pattern center to the homography center, in fractional coordinates relative to the pattern shape. This is the format that h2F expects for the PC input.
+
+    Bruker convention: (x', y', z') with origin at upper left, x' right, y' up, z' out of sample
+    h2F fractional PC convention: (x*, y*, z*) with origin at upper left, x* right, y* down, z* into sample, and x*, y* are fractional relative to the pattern shape
+
+    Conversion:
+        x* = x'
+        y* = 1 - y'
+        z* = z'
+
+    Parameters'''
+    bruker_pc : array-like of shape (3,)
+        Fractional PC coordinates in Bruker convention. 
+    patshape : tuple
+        (height_px, width_px) of the pattern.
+    homography_center : array-like of shape (2,), optional
+        Fractional coordinates of the homography center (x, y) relative to the pattern shape. Default is (0.5, 0.5) for centred-pixel format.
+    """
+    xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
+
+    return xo
 
 
 

@@ -1,0 +1,10 @@
+{
+  "name": "Aluminum (Al)",
+  "structure": "cubic",
+  "elastic_constants_GPa": {
+    "C11": 108.2,
+    "C12": 61.3,
+    "C44": 28.5
+  },
+  "reference": "Simmons & Wang 1971"
+}

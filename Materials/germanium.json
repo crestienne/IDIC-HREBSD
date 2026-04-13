@@ -1,0 +1,10 @@
+{
+  "name": "Germanium (Ge)",
+  "structure": "cubic",
+  "elastic_constants_GPa": {
+    "C11": 128.5,
+    "C12": 48.3,
+    "C44": 66.8
+  },
+  "reference": "Madelung 1982"
+}

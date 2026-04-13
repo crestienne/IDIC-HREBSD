@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -6,20 +10,21 @@ import utilities
 import get_homography_cpu as core
 import os
 import datetime
+from optimize_reference import optimize_pc_and_euler
 
 
-component = "Si-Indent-AccuracyAssessment"
-date = "Mar302025" 
+component = "Si-TestRegion-SimulatedReference"
+date = "Apr072026" 
 up2 = (
    '/Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.up2' 
 )
 # up2 = "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_512x512_flipX.up2"
-ang = '//Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.ang'
+ang = '/Users/crestiennedechaine/OriginalData/Si-Indent/dp2-refined.ang'
 x0 = (0, 0) # reference pattern, order is y,x
 
 #order for roi_slice: [slice(y_start, y_stop), slice(x_start, x_stop)], set to none if want to look at whole pattern 
-#roi_slice= [slice(0, 5), slice(0, 5)]
-roi_slice = None
+roi_slice= [slice(0, 5), slice(0, 10)]
+#roi_slice = None
 
 base_folder_name = f'{component}_{date}_npyfiles'
 foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/{base_folder_name}/'
@@ -47,12 +52,39 @@ pat_obj.plot_parameter_sweep(
     clahe_kernels=[(3, 3), (4, 4), (5, 5), (6, 6), (8, 8), (12, 12)],
 )
 
+# ------ Simulated reference options (set use_simulated_reference=True to enable) ------
+use_simulated_reference = True
+master_pattern_path = '/Users/crestiennedechaine/OriginalData/Si-Indent/Si-master-20kV.h5'      # e.g. '/path/to/Si-master-20kV.h5'
+tilt_deg = 70.0                 # sample tilt in degrees
+debug_gradients = True        # set True to save debug/gradient_comparison.png
+
 # ------ Run optimization ------
 
 ang_data = utilities.read_ang(ang, pat_obj.patshape, segment_grain_threshold=None)
 x0 = np.ravel_multi_index(x0, ang_data.shape)
 print("Initial index and coordinates:")
 print(x0)
+
+# Read the Euler angles and PC for the reference pattern (used only if use_simulated_reference=True)
+euler_angles_ref = ang_data.eulers[np.unravel_index(x0, ang_data.shape)]  # shape (3,) in radians
+print("Reference pattern Euler angles (radians):", euler_angles_ref)
+pc_ref = ang_data.pc  # (xstar, ystar, zstar)
+print ("Reference pattern PC:", pc_ref)
+
+# ------ Refine PC and Euler angles against the experimental reference ------
+if use_simulated_reference:
+    euler_angles_ref, pc_ref = optimize_pc_and_euler(
+        pat_obj=pat_obj,
+        x0=x0,
+        master_pattern_path=master_pattern_path,
+        euler_angles_init=euler_angles_ref,
+        pc_init=pc_ref,
+        tilt_deg=tilt_deg,
+        max_iter=300,
+        save_dir="debug",
+    )
+    print("Refined Euler angles (rad):", euler_angles_ref)
+    print("Refined PC:", pc_ref)
 
 optimize_params = dict(
     init_type='partial',
@@ -61,11 +93,45 @@ optimize_params = dict(
     n_jobs=8,
     verbose=True,
     roi_slice=roi_slice,
+    scan_shape=ang_data.shape,
+    mask=pat_obj.get_mask(),
+    use_simulated_reference=use_simulated_reference,
+    master_pattern_path=master_pattern_path,
+    euler_angles_ref=euler_angles_ref,
+    pc_ref=pc_ref,
+    tilt_deg=tilt_deg,
+    debug_gradients=debug_gradients,
 )
+
+# ------ Plot real vs simulated reference pattern ------
+if use_simulated_reference:
+    os.makedirs("debug", exist_ok=True)
+    real_pat = pat_obj.read_pattern(x0, process=True)
+    sim_pat  = core.simulate_reference_pattern(
+        master_pattern_path=master_pattern_path,
+        euler_angles=euler_angles_ref,
+        PC=pc_ref,
+        patshape=pat_obj.patshape,
+        tilt_deg=tilt_deg,
+        pat_obj=pat_obj,
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    axes[0].imshow(real_pat, cmap="gray")
+    axes[0].set_title("Real reference pattern")
+    axes[0].axis("off")
+    axes[1].imshow(sim_pat, cmap="gray")
+    axes[1].set_title("Simulated reference pattern")
+    axes[1].axis("off")
+    plt.tight_layout()
+    plt.savefig("debug/real_vs_simulated_reference.png", dpi=200, bbox_inches="tight")
+    plt.close()
+    print("Saved debug/real_vs_simulated_reference.png")
 
 h, h_guess, iterations, residuals, dp_norms = core.optimize(
     pat_obj, x0, **optimize_params
 )
+
+
 
 # ------ Save results ------
 
