@@ -32,7 +32,7 @@ up2_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/SiGe_largerRe
 Rows       = 132
 Columns    = 132
 
-output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/PCShiftInUpdatedUP2/'
+output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/'  # where to save videos and plots
 fps        = 10      # frames per second
 
 # Process patterns before display? (high-pass + CLAHE — slower but clearer)
@@ -40,6 +40,12 @@ process = False
 
 # Flip patterns vertically before display?
 flip_ud = False
+
+# Flip patterns horizontally (across y-axis) before display?
+flip_lr = False
+
+# Rotate patterns 180° before display?
+rotate_180 = False
 
 # ============================================================
 # HELPERS
@@ -57,6 +63,10 @@ def _read_frames(up2, indices, process):
         pat = up2.read_pattern(idx, process=process).astype(np.float32)
         if flip_ud:
             pat = np.flipud(pat)
+        if flip_lr:
+            pat = np.fliplr(pat)
+        if rotate_180:
+            pat = np.rot90(pat, 2)
         # Percentile stretch: clip the bottom 2 % and top 2 % of intensities
         # for a mild contrast boost without the full processing pipeline
         lo, hi = np.percentile(pat, 2), np.percentile(pat, 98)
