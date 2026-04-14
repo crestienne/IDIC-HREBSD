@@ -397,37 +397,34 @@ def optimize(
     r_zmsv = np.sqrt(((r - r.mean()) ** 2).sum())
     r = (r - r.mean()) / r_zmsv
 
-    # Aggreement between optimization test and get homography cpu for gradients check
-    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-    for a in ax.ravel():
-        a.axis("off")
-    ax[0].imshow(to_2d(GRx), cmap="Greys_r")
-    ax[0].set_title("Gradient (x)")
-    ax[1].imshow(to_2d(GRy), cmap="Greys_r")
-    ax[1].set_title("Gradient (y)")
-    plt.tight_layout()
-    plt.savefig("debug/gradients_cpu.jpg")
-    plt.close()
-
     # compute gradient magnitude
     grad_mag = np.sqrt(GRx**2 + GRy**2)
 
-    fig, ax = plt.subplots(1, 3, figsize=(12, 4))
-    for a in ax.ravel():
-        a.axis("off")
+    if debug_gradients:
+        os.makedirs("debug", exist_ok=True)
+        fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+        for a in ax.ravel():
+            a.axis("off")
+        ax[0].imshow(to_2d(GRx), cmap="Greys_r")
+        ax[0].set_title("Gradient (x)")
+        ax[1].imshow(to_2d(GRy), cmap="Greys_r")
+        ax[1].set_title("Gradient (y)")
+        plt.tight_layout()
+        plt.savefig("debug/gradients_cpu.jpg")
+        plt.close()
 
-    ax[0].imshow(to_2d(GRx), cmap="RdBu")
-    ax[0].set_title("Gradient X", fontweight="bold")
-
-    ax[1].imshow(to_2d(GRy), cmap="RdBu")
-    ax[1].set_title("Gradient Y", fontweight="bold")
-
-    ax[2].imshow(to_2d(grad_mag), cmap="inferno")
-    ax[2].set_title("Gradient Magnitude", fontweight="bold")
-
-    plt.tight_layout()
-    plt.savefig("debug/gradients_silicon.jpg")
-    plt.close()
+        fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+        for a in ax.ravel():
+            a.axis("off")
+        ax[0].imshow(to_2d(GRx), cmap="RdBu")
+        ax[0].set_title("Gradient X", fontweight="bold")
+        ax[1].imshow(to_2d(GRy), cmap="RdBu")
+        ax[1].set_title("Gradient Y", fontweight="bold")
+        ax[2].imshow(to_2d(grad_mag), cmap="inferno")
+        ax[2].set_title("Gradient Magnitude", fontweight="bold")
+        plt.tight_layout()
+        plt.savefig("debug/gradients_silicon.jpg")
+        plt.close()
 
     # Compute the jacobian of the shape function
     _1 = np.ones(xi.shape[1])
