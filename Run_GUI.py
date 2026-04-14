@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("QtAgg")
 
 from PyQt6.QtWidgets import QApplication, QWizard
+from PyQt6.QtGui import QFont
 
 from gui_theme import apply_theme
 from gui_pages import (
@@ -74,6 +75,7 @@ class HREBSDWizard(QWizard):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")   # Fusion gives QPalette full control on all platforms
+    app.setFont(QFont("Arial"))
     apply_theme(app)
     wiz = HREBSDWizard()
     wiz.show()
