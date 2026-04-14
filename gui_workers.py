@@ -38,6 +38,28 @@ class _StdoutCapture(io.TextIOBase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SKIP_PARAMS = {"roi_slice"}   # non-serialisable / not useful to log
+
+def _write_params_txt(path: str, params: dict):
+    """Write all GUI run parameters to a human-readable .txt file."""
+    lines = ["DIC-HREBSD Run Parameters", "=" * 40, ""]
+    for key, val in sorted(params.items()):
+        if key in _SKIP_PARAMS:
+            continue
+        try:
+            val_str = str(val)
+        except Exception:
+            val_str = "<unrepresentable>"
+        lines.append(f"{key:<30} {val_str}")
+    lines.append("")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pipeline worker
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -100,6 +122,13 @@ class PipelineWorker(QThread):
 
         os.makedirs(p["output_dir"], exist_ok=True)
 
+        # ── Save run parameters to a text file ───────────────────────────────
+        _comp = p.get("component", "run")
+        _date = p.get("date", "")
+        params_txt_path = os.path.join(p["output_dir"], f"{_comp}_params_{_date}.txt")
+        _write_params_txt(params_txt_path, p)
+        self.log_signal.emit(f"Parameters saved → {os.path.basename(params_txt_path)}")
+
         optimize_params = dict(
             init_type=p["init_type"],
             crop_fraction=p["crop_fraction"],
@@ -133,13 +162,24 @@ class PipelineWorker(QThread):
             f"{dt / n_pat * 1000:.2f} ms/pattern"
         )
 
-        # Determine effective scan shape (after any ROI)
-        roi_slice = p.get("roi_slice", None)
-        if roi_slice is not None:
-            eff_rows = roi_slice[0].stop - roi_slice[0].start
-            eff_cols = roi_slice[1].stop - roi_slice[1].start
+        # The optimizer returns h as (rows, cols, 8) when an ROI is used,
+        # or (N, 8) for the full scan. Derive eff_rows/eff_cols from the
+        # actual shape, then flatten to (N, 8) for downstream processing.
+        if h.ndim == 3:
+            eff_rows, eff_cols = h.shape[0], h.shape[1]
+            h = h.reshape(-1, 8)
+            if h_guess is not None:
+                h_guess = h_guess.reshape(-1, 8)
+            iterations = iterations.flatten()
+            residuals  = residuals.flatten()
+            dp_norms   = dp_norms.flatten()
         else:
-            eff_rows, eff_cols = ang_data.shape
+            roi_slice = p.get("roi_slice", None)
+            if roi_slice is not None:
+                eff_rows = roi_slice[0].stop - roi_slice[0].start
+                eff_cols = roi_slice[1].stop - roi_slice[1].start
+            else:
+                eff_rows, eff_cols = ang_data.shape
 
         if p.get("apply_pc_correction", True):
             from pc_homography_correction import correct_homographies
