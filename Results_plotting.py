@@ -31,7 +31,8 @@ def plot_component_grid(
     show=True,
     figsize=(15, 10),
     fontsize=13,
-    axis_off=False,
+    fontweight="normal",
+    axis_off=True,
 ):
     """
     Plot up to 9 data components in a 3×3 grid.
@@ -83,12 +84,12 @@ def plot_component_grid(
 
         im = ax.imshow(data, cmap=c_cmap, vmin=c_vmin, vmax=c_vmax)
         fig.colorbar(im, ax=ax)
-        ax.set_title(label, fontsize=fontsize)
+        ax.set_title(label, fontsize=fontsize, fontweight=fontweight)
         if axis_off:
             ax.axis("off")
 
     if title:
-        fig.suptitle(title, fontsize=fontsize + 2)
+        fig.suptitle(title, fontsize=fontsize + 2, fontweight=fontweight)
 
     plt.tight_layout()
 
@@ -229,22 +230,24 @@ def plot_all_results(results: dict, params: dict):
             {"data": h22, "label": r"$h_{22}$"}, {"data": h23, "label": r"$h_{23}$"},
             {"data": h31, "label": r"$h_{31}$"}, {"data": h32, "label": r"$h_{32}$"},
         ],
-        cmap="Spectral",
+        cmap="coolwarm",
         title="Homography Components",
         save_path=_sp("Homography_Components.png"),
+        fontsize=16,
+        fontweight="bold",
     )
 
     # ── Strain + rotation (coolwarm) — shown but saved only after TFBC ────────
     plot_component_grid(
         [
-            {"data": e11, "label": r"$\epsilon_{11}$"    + f"  (mean={e11.mean():.2e})", "vmin": -sv, "vmax": sv},
-            {"data": e12, "label": r"$\epsilon_{12}$"    + f"  (mean={e12.mean():.2e})", "vmin": -sv, "vmax": sv},
-            {"data": e13, "label": r"$\epsilon_{13}$"    + f"  (mean={e13.mean():.2e})", "vmin": -sv, "vmax": sv},
-            {"data": w21, "label": r"$\omega_{21}$ (°)"  + f"  (mean={w21.mean():.2e})", "vmin": -rv, "vmax": rv},
-            {"data": e22, "label": r"$\epsilon_{22}$"    + f"  (mean={e22.mean():.2e})", "vmin": -sv, "vmax": sv},
-            {"data": e23, "label": r"$\epsilon_{23}$"    + f"  (mean={e23.mean():.2e})", "vmin": -sv, "vmax": sv},
-            {"data": w13, "label": r"$\omega_{13}$ (°)"  + f"  (mean={w13.mean():.2e})", "vmin": -rv, "vmax": rv},
-            {"data": w32, "label": r"$\omega_{32}$ (°)"  + f"  (mean={w32.mean():.2e})", "vmin": -rv, "vmax": rv},
+            {"data": e11, "label": r"$\epsilon_{11}$",   "vmin": -sv, "vmax": sv},
+            {"data": e12, "label": r"$\epsilon_{12}$",   "vmin": -sv, "vmax": sv},
+            {"data": e13, "label": r"$\epsilon_{13}$",   "vmin": -sv, "vmax": sv},
+            {"data": w21, "label": r"$\omega_{21}$ (°)", "vmin": -rv, "vmax": rv},
+            {"data": e22, "label": r"$\epsilon_{22}$",   "vmin": -sv, "vmax": sv},
+            {"data": e23, "label": r"$\epsilon_{23}$",   "vmin": -sv, "vmax": sv},
+            {"data": w13, "label": r"$\omega_{13}$ (°)", "vmin": -rv, "vmax": rv},
+            {"data": w32, "label": r"$\omega_{32}$ (°)", "vmin": -rv, "vmax": rv},
         ],
         cmap="coolwarm",
         title="Strain and Rotation Components (relative)",
@@ -325,15 +328,15 @@ def plot_all_results(results: dict, params: dict):
         # Absolute strain grid (coolwarm)
         plot_component_grid(
             [
-                {"data": e11_abs, "label": r"$\epsilon_{11}^{\mathrm{abs}}$"         + f"  (mean={e11_abs.mean():.2e})", "vmin": -sv, "vmax": sv},
-                {"data": results["e12"], "label": r"$\epsilon_{12}$"                  + f"  (mean={e12.mean():.2e})",     "vmin": -sv, "vmax": sv},
-                {"data": results["e13"], "label": r"$\epsilon_{13}$"                  + f"  (mean={e13.mean():.2e})",     "vmin": -sv, "vmax": sv},
-                {"data": w21, "label": r"$\omega_{21}$ (°)"                           + f"  (mean={w21.mean():.2e})",     "vmin": -rv, "vmax": rv},
-                {"data": e22_abs, "label": r"$\epsilon_{22}^{\mathrm{abs}}$"         + f"  (mean={e22_abs.mean():.2e})", "vmin": -sv, "vmax": sv},
-                {"data": results["e23"], "label": r"$\epsilon_{23}$"                  + f"  (mean={e23.mean():.2e})",     "vmin": -sv, "vmax": sv},
-                {"data": w13, "label": r"$\omega_{13}$ (°)"                           + f"  (mean={w13.mean():.2e})",     "vmin": -rv, "vmax": rv},
-                {"data": w32, "label": r"$\omega_{32}$ (°)"                           + f"  (mean={w32.mean():.2e})",     "vmin": -rv, "vmax": rv},
-                {"data": e33_abs, "label": r"$\epsilon_{33}^{\mathrm{abs}}$ (TF BC)" + f"  (mean={e33_abs.mean():.2e})", "vmin": -sv, "vmax": sv},
+                {"data": e11_abs,         "label": r"$\epsilon_{11}$",   "vmin": -sv, "vmax": sv},
+                {"data": results["e12"], "label": r"$\epsilon_{12}$",   "vmin": -sv, "vmax": sv},
+                {"data": results["e13"], "label": r"$\epsilon_{13}$",   "vmin": -sv, "vmax": sv},
+                {"data": w21,            "label": r"$\omega_{21}$ (°)", "vmin": -rv, "vmax": rv},
+                {"data": e22_abs,         "label": r"$\epsilon_{22}$",   "vmin": -sv, "vmax": sv},
+                {"data": results["e23"], "label": r"$\epsilon_{23}$",   "vmin": -sv, "vmax": sv},
+                {"data": w13,            "label": r"$\omega_{13}$ (°)", "vmin": -rv, "vmax": rv},
+                {"data": w32,            "label": r"$\omega_{32}$ (°)", "vmin": -rv, "vmax": rv},
+                {"data": e33_abs,         "label": r"$\epsilon_{33}$",   "vmin": -sv, "vmax": sv},
             ],
             cmap="coolwarm",
             axis_off=True,
@@ -350,7 +353,7 @@ def plot_all_results(results: dict, params: dict):
         cb_ca = fig_ca.colorbar(im_ca, ax=ax_ca, fraction=0.03, pad=0.04)
         cb_ca.set_label(r"$c/a$", fontsize=13)
         ax_ca.set_title(
-            r"Lattice tetragonality  $c/a$" + f"\nmean={ca_mean:.6f},  std={ca_std:.2e}",
+            r"Lattice tetragonality  $c/a$",
             fontsize=13,
         )
         ax_ca.axis("off")
