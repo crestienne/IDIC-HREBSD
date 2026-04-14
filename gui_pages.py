@@ -420,7 +420,7 @@ class ScanGeometryPage(QWizardPage):
         strategy_layout.addWidget(self._strategy_ul)
 
         self._apply_pc_correction = QCheckBox("Apply pattern centre drift correction")
-        self._apply_pc_correction.setChecked(False)
+        self._apply_pc_correction.setChecked(True)
         self._apply_pc_correction.setToolTip(
             "Removes the geometric homography contribution caused by the pattern centre "
             "shifting as the beam steps across the tilted sample.")
