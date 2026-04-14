@@ -138,6 +138,7 @@ def apply_theme(app) -> None:
             border-radius: 4px;
             padding: 3px 5px;
             selection-background-color: {t["accent"]};
+            font-family: "Arial";
         }}
         QSpinBox, QDoubleSpinBox {{
             background-color: {t["input_bg"]};
