@@ -469,7 +469,7 @@ def optimize(
 
     
         # Get the FMT-FCC initial guess precomputed items
-        r_init = window_and_normalize(R[init_guess_subset_slice])
+        r_init = window_and_normalize_new(R[init_guess_subset_slice])
   
         # Get the dimensions of the image
         height, width = r_init.shape
@@ -737,6 +737,12 @@ def optimize_run(
         # Warp the target subset
         num_iter += 1
         t_deformed = warp.deform(xi, T_spline, h)
+        # Clip spline extrapolation outliers (5th-degree polynomials blow up outside
+        # the image domain; this is especially important for zero-mean patterns where
+        # even small out-of-bounds excursions can produce very large values that
+        # dominate the ZMSV normalization and cause divergence).
+        t_p1, t_p99 = np.percentile(t_deformed, [1, 99])
+        t_deformed = np.clip(t_deformed, t_p1, t_p99)
         t_mean = t_deformed.mean()
         t_zmsv = np.sqrt(((t_deformed - t_mean) ** 2).sum())
         if t_zmsv > 0:
@@ -810,7 +816,7 @@ def initial_guess_run(
     T = get_pat(idx)
 
     h0 = (T.shape[1] // 2, T.shape[0] // 2)
-    t_init = window_and_normalize(T[init_subset_slice[0], init_subset_slice[1]], alpha=0.2)
+    t_init = window_and_normalize_new(T[init_subset_slice[0], init_subset_slice[1]], alpha=0.2)
 
     savepat = True
     if savepat:
