@@ -28,7 +28,7 @@ from Data import UP2
 # INPUTS
 # ============================================================
 
-up2_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/SiGe_largerRegion.up2'
+up2_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/20260322_514785_0_movie_countedframes_reversedSCAN_flipYonly_512x512.up2'
 Rows       = 132
 Columns    = 132
 
