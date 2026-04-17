@@ -1312,6 +1312,10 @@ class PatternProcessingPage(QWizardPage):
         clahe_group  = QGroupBox("CLAHE")
         clahe_layout = QFormLayout()
 
+        self.use_clahe = QCheckBox("Enable CLAHE")
+        self.use_clahe.setChecked(False)
+        self.use_clahe.setToolTip("Apply adaptive histogram equalisation. Uncheck to skip.")
+
         self.clahe_kernel = QSpinBox()
         self.clahe_kernel.setRange(1, 32)
         self.clahe_kernel.setValue(6)
@@ -1328,6 +1332,15 @@ class PatternProcessingPage(QWizardPage):
             "Clip limit. Lower = less clipping. Typical: 0.01–0.05."
         )
 
+        def _toggle_clahe(enabled):
+            self.clahe_kernel.setEnabled(enabled)
+            self.clahe_clip.setEnabled(enabled)
+            self._schedule_preview()
+
+        self.use_clahe.toggled.connect(_toggle_clahe)
+        _toggle_clahe(self.use_clahe.isChecked())  # set initial enabled state
+
+        clahe_layout.addRow("",             self.use_clahe)
         clahe_layout.addRow("Kernel size:", self.clahe_kernel)
         clahe_layout.addRow("Clip limit:",  self.clahe_clip)
         clahe_group.setLayout(clahe_layout)
@@ -1368,6 +1381,18 @@ class PatternProcessingPage(QWizardPage):
         preview_vbox   = QVBoxLayout(preview_widget)
         preview_vbox.setContentsMargins(6, 0, 0, 0)
 
+        # Show-gradients toggle
+        grad_toggle_row = QHBoxLayout()
+        self._show_gradients = QCheckBox("Show gradients")
+        self._show_gradients.setToolTip(
+            "Display Gx, Gy and |G| of the processed pattern.\n"
+            "These are the gradients the IC-GN optimizer sees."
+        )
+        self._show_gradients.setChecked(False)
+        grad_toggle_row.addWidget(self._show_gradients)
+        grad_toggle_row.addStretch()
+        preview_vbox.addLayout(grad_toggle_row)
+
         panels_row = QHBoxLayout()
 
         _fig_bg = THEME["surface_bg"]
@@ -1401,12 +1426,39 @@ class PatternProcessingPage(QWizardPage):
         panels_row.addWidget(raw_box)
         panels_row.addWidget(proc_box)
 
+        # Gradient row (hidden until checkbox is ticked)
+        self._grad_widget = QGroupBox("Gradients  (Gx · Gy · |G|)")
+        grad_vbox = QVBoxLayout(self._grad_widget)
+        self._fig_grad = Figure(tight_layout=True, facecolor=_fig_bg)
+        self._ax_gx  = self._fig_grad.add_subplot(131)
+        self._ax_gy  = self._fig_grad.add_subplot(132)
+        self._ax_gm  = self._fig_grad.add_subplot(133)
+        for ax in (self._ax_gx, self._ax_gy, self._ax_gm):
+            ax.set_facecolor(_fig_bg)
+            ax.axis("off")
+        self._canvas_grad = FigureCanvas(self._fig_grad)
+        self._canvas_grad.setStyleSheet(f"background-color: {_fig_bg};")
+        self._canvas_grad.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self._canvas_grad.setMaximumHeight(220)
+        grad_vbox.addWidget(self._canvas_grad)
+        self._grad_widget.setVisible(False)
+
         self._prev_status = QLabel("Preview loads when the page opens.")
         self._prev_status.setStyleSheet("color: gray;")
         self._prev_status.setWordWrap(True)
 
         preview_vbox.addLayout(panels_row, stretch=1)
+        preview_vbox.addWidget(self._grad_widget)
         preview_vbox.addWidget(self._prev_status)
+
+        def _toggle_grad_panel(checked):
+            self._grad_widget.setVisible(checked)
+            if checked and self._ax_gx.get_images():
+                self._canvas_grad.draw()
+
+        self._show_gradients.toggled.connect(_toggle_grad_panel)
 
         # ── Assemble ──────────────────────────────────────────────────────────
         outer = QHBoxLayout()
@@ -1418,6 +1470,7 @@ class PatternProcessingPage(QWizardPage):
         for w in (self.high_pass, self.low_pass, self.clahe_clip):
             w.valueChanged.connect(self._schedule_preview)
         self.clahe_kernel.valueChanged.connect(self._schedule_preview)
+        self.use_clahe.toggled.connect(self._schedule_preview)
         self.mask_type.currentIndexChanged.connect(self._schedule_preview)
         self.flip_x.toggled.connect(self._schedule_preview)
 
@@ -1471,6 +1524,29 @@ class PatternProcessingPage(QWizardPage):
         self._ax_proc.axis("off")
         self._fig_proc.tight_layout()
         self._canvas_proc.draw()
+
+        # Compute and cache gradients (cheap — always done so the panel is
+        # ready instantly when the checkbox is toggled)
+        pat = processed.astype(np.float32)
+        gy, gx = np.gradient(pat)
+        gmag   = np.sqrt(gx**2 + gy**2)
+        vmax_x = np.percentile(np.abs(gx), 99) or 1e-9
+        vmax_y = np.percentile(np.abs(gy), 99) or 1e-9
+        vmax_m = np.percentile(gmag, 99)        or 1e-9
+
+        for ax, data, cmap, vmin, vmax, title in [
+            (self._ax_gx, gx,   "RdBu",   -vmax_x, vmax_x, "Gx"),
+            (self._ax_gy, gy,   "RdBu",   -vmax_y, vmax_y, "Gy"),
+            (self._ax_gm, gmag, "inferno", 0,       vmax_m, "|G|"),
+        ]:
+            ax.clear()
+            ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax, origin="upper")
+            ax.set_title(title, color="white", fontsize=9)
+            ax.axis("off")
+
+        self._fig_grad.tight_layout()
+        if self._grad_widget.isVisible():
+            self._canvas_grad.draw()
 
         self._prev_status.setText("")
 
@@ -1526,6 +1602,7 @@ class PatternProcessingPage(QWizardPage):
             "low_pass_sigma":  self.low_pass.value(),
             "flip_x":          self.flip_x.isChecked(),
             "mask_type":       self.mask_type.currentText(),
+            "use_clahe":       self.use_clahe.isChecked(),
             "clahe_kernel":    self.clahe_kernel.value(),
             "clahe_clip":      self.clahe_clip.value(),
         }
@@ -1668,7 +1745,7 @@ class OptimizationRunPage(QWizardPage):
             f"High-pass σ      : {proc['high_pass_sigma']}",
             f"Flip patterns    : {proc['flip_x']}",
             f"Mask type        : {proc['mask_type']}",
-            f"CLAHE kernel     : {proc['clahe_kernel']}",
+            f"CLAHE            : {'on (kernel=' + str(proc['clahe_kernel']) + ')' if proc['use_clahe'] else 'off'}",
             f"",
             f"Scan strategy    : {geom['scan_strategy']}",
             f"PC correction    : {'yes' if geom['apply_pc_correction'] else 'no'}",
