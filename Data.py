@@ -88,12 +88,18 @@ class UP2:
         clahe_clip: float = 0.005,
         clahe_nbins: int = 256,
         flip_x: bool = False,
+        use_clahe: bool = True,
+        rescale_to_uint16: bool = False,
+        unsharp_sigma: float = 0.0,
+        unsharp_strength: float = 1.0,
     ):
         """Set the parameters for processing the patterns.
         Values of 0.0 will skip the step.
 
         Args:
-            low_pass_sigma (float): The sigma for the low pass filter. Roughly 1% of the image size works well.
+            low_pass_sigma (float): Sigma for a Gaussian noise-smoothing filter applied *after*
+                background removal (Ernould et al. step 2). 1–2 pixels improves IC-GN convergence
+                speed without loss of accuracy. 0.0 disables the step.
             high_pass_sigma (float): The sigma for the high pass filter. Roughly 20% of the image size works well.
             truncate_std_scale (float): The number of standard deviations to truncate. 3.0 is a good value.
             mask_type (str): "circular", "center_cross", or None (no mask). Controls which mask is applied in process_pattern.
@@ -101,6 +107,16 @@ class UP2:
             clahe_kernel (tuple): Kernel size for CLAHE. Smaller = more local contrast. Default (5, 5).
             clahe_clip (float): Clip limit for CLAHE. Higher = more contrast. Default 0.005.
             clahe_nbins (int): Number of histogram bins for CLAHE. Default 256.
+            use_clahe (bool): Set False to skip CLAHE entirely. Default True.
+            rescale_to_uint16 (bool): If True, linearly rescale each raw pattern so
+                its minimum maps to 0 and its maximum maps to 65535 before any other
+                processing. Useful when the detector does not fill the full uint16
+                dynamic range. Default False.
+            unsharp_sigma (float): Sigma for unsharp masking applied after CLAHE.
+                Sharpens band edges by subtracting a blurred copy.
+                0.0 disables the step. Good starting range: 1.0–3.0 pixels. Default 0.0.
+            unsharp_strength (float): Weight of the sharpening term. Higher = sharper
+                but more noise amplification. Typical range: 0.5–3.0. Default 1.0.
         """
         self.low_pass_sigma = low_pass_sigma
         self.high_pass_sigma = high_pass_sigma
@@ -111,7 +127,11 @@ class UP2:
         self.clahe_clip = clahe_clip
         self.clahe_nbins = clahe_nbins
         self.flip_x = flip_x
-        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}, flip_x={flip_x}")
+        self.use_clahe = use_clahe
+        self.rescale_to_uint16 = rescale_to_uint16
+        self.unsharp_sigma = unsharp_sigma
+        self.unsharp_strength = unsharp_strength
+        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}, use_clahe={use_clahe}, flip_x={flip_x}, rescale_to_uint16={rescale_to_uint16}, unsharp_sigma={unsharp_sigma}, unsharp_strength={unsharp_strength}")
 
     def read(self, chunks, i=None):
         """Read the next `chunks` bytes from the file. If `i` is not None, read from the current position."""
@@ -139,6 +159,10 @@ class UP2:
         pat = np.frombuffer(buffer, dtype=np.uint16).reshape(self.patshape) #order should be y,x
         if self.flip_x:
             pat = np.flipud(pat)  # flip about x axis (reverses rows)
+        if self.rescale_to_uint16:
+            pmin, pmax = pat.min(), pat.max()
+            if pmax > pmin:
+                pat = np.round((pat.astype(np.float32) - pmin) / (pmax - pmin) * 65535).astype(np.uint16)
         if process:
             pat = self.process_pattern(pat)
         return pat #pretty sure the patterns are in (x, y) format
@@ -215,36 +239,63 @@ class UP2:
             weights  = ndimage.gaussian_filter(float_mask, sigma)
             return np.where(weights > 0, weighted / weights, 0.0)
 
-        # Low pass filter
+        # High-pass filter in log domain (Ernould et al.)
+        # EBSD background is multiplicative, so subtract in log space:
+        #   log(I) - gaussian(log(I))  ≡  log(I / background)
+        # This correctly removes the smooth inelastic-scattering envelope without
+        # biasing the result the way linear subtraction does.
+        # A percentile floor (1st percentile of valid pixels) replaces the naive eps
+        # to prevent log(~0) in dark corners from biasing the background estimate and
+        # creating a bright ring / ramp artifact that would dominate the gradients.
+        if self.high_pass_sigma > 0:
+            img_floor = float(np.percentile(img[mask], 1))
+            img_floor = max(img_floor, 1e-4)          # absolute safety minimum
+            log_img = np.log(np.maximum(img, img_floor))
+            log_img[~mask] = 0.0
+            log_background = masked_gaussian(log_img, mask, self.high_pass_sigma)
+            img = np.exp(log_img - log_background)
+            img[~mask] = 0.0
+            img = masked_normalize(img, mask)
+
+        img_highpass = to_uint8(img, mask)
+
+        # ---- adaptive histogram equalization ----
+        # Applied immediately after background removal so CLAHE sees the sharpest
+        # possible image. Running it after the low-pass would mean enhancing already-
+        # blurred data, which wastes the contrast gain on smoothed band edges.
+        # CLAHE has no native mask support, so inpaint the masked region with
+        # Gaussian-interpolated values from valid neighbours before running it,
+        # then zero it out again afterwards.
+        if self.use_clahe:
+            img_clahe_in = masked_gaussian(img, mask, sigma=max(self.clahe_kernel))
+            img_clahe_in[mask] = img[mask]  # leave valid pixels unchanged
+            img = exposure.equalize_adapthist(
+                img_clahe_in,
+                kernel_size=self.clahe_kernel,
+                clip_limit=self.clahe_clip,
+                nbins=self.clahe_nbins,
+            ).astype(np.float32)
+            img[~mask] = 0.0
+
+        img_CLAHE = to_uint8(img, mask)
+
+        # Low-pass filter (noise smoothing) — applied *after* background removal and
+        # CLAHE, per Ernould et al. A small radius (1–2 px) reduces high-frequency
+        # noise and improves IC-GN convergence speed without loss of accuracy.
         if self.low_pass_sigma > 0:
             img = masked_gaussian(img, mask, self.low_pass_sigma)
             img[~mask] = 0.0
 
         img_lowpass = to_uint8(img, mask)
 
-        # High pass filter
-        if self.high_pass_sigma > 0:
-            background = masked_gaussian(img, mask, self.high_pass_sigma)
-            img = img - background
+        # Unsharp masking — enhances band edges by amplifying fine detail
+        # sharpened = img + strength * (img - gaussian(img, sigma))
+        # Applied after CLAHE so contrast is already equalised before sharpening.
+        if self.unsharp_sigma > 0:
+            blurred = masked_gaussian(img, mask, self.unsharp_sigma)
+            img[mask] = img[mask] + self.unsharp_strength * (img[mask] - blurred[mask])
             img[~mask] = 0.0
-
-        img_highpass = to_uint8(img, mask)
-
-        # ---- adaptive histogram equalization ----
-        # CLAHE has no native mask support, so inpaint the masked region with
-        # Gaussian-interpolated values from valid neighbours before running it,
-        # then zero it out again afterwards.
-        img_clahe_in = masked_gaussian(img, mask, sigma=max(self.clahe_kernel))
-        img_clahe_in[mask] = img[mask]  # leave valid pixels unchanged
-        img = exposure.equalize_adapthist(
-            img_clahe_in,
-            kernel_size=self.clahe_kernel,
-            clip_limit=self.clahe_clip,
-            nbins=self.clahe_nbins,
-        ).astype(np.float32)
-        img[~mask] = 0.0
-
-        img_CLAHE = to_uint8(img, mask)
+            img = masked_normalize(img, mask)   # re-clip to [0, 1] after boosting
 
         # Truncate step using only masked region
         if self.truncate_std_scale > 0:
@@ -269,6 +320,16 @@ class UP2:
         img[~mask] = 0.0
 
         img_gamma = to_uint8(img, mask)
+
+        # Final zero-mean, unit-std normalisation over the valid region
+        vals = img[mask]
+        mean_val = vals.mean()
+        std_val  = vals.std()
+        if std_val > 0:
+            img[mask] = (img[mask] - mean_val) / std_val
+        else:
+            img[mask] = 0.0
+        img[~mask] = 0.0
 
         # -------------------------
         # Save all steps as subplots
