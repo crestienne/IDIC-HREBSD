@@ -255,14 +255,20 @@ def apply_theme(app) -> None:
 # Shared widget helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_browse_row(parent_page, edit: QLineEdit, filt: str, title: str) -> QWidget:
-    """Return a widget containing [QLineEdit] [Browse…]."""
+def _make_browse_row(parent_page, edit: QLineEdit, filt: str, title: str,
+                     start_dir_fn=None) -> QWidget:
+    """Return a widget containing [QLineEdit] [Browse…].
+
+    start_dir_fn: optional zero-argument callable called at click time to
+                  get the initial directory.  Falls back to ~ if None or
+                  if the callable returns an empty/non-existent path.
+    """
     w = QWidget()
     h = QHBoxLayout(w)
     h.setContentsMargins(0, 0, 0, 0)
     btn = QPushButton("Browse…")
     btn.setFixedWidth(90)
-    btn.clicked.connect(lambda: _pick_file(parent_page, edit, filt, title))
+    btn.clicked.connect(lambda: _pick_file(parent_page, edit, filt, title, start_dir_fn))
     h.addWidget(edit)
     h.addWidget(btn)
     return w
@@ -280,10 +286,13 @@ def _make_browse_dir(parent_page, edit: QLineEdit) -> QWidget:
     return w
 
 
-def _pick_file(parent, edit: QLineEdit, filt: str, title: str):
-    path, _ = QFileDialog.getOpenFileName(
-        parent, title, os.path.expanduser("~"), filt
-    )
+def _pick_file(parent, edit: QLineEdit, filt: str, title: str, start_dir_fn=None):
+    start = os.path.expanduser("~")
+    if start_dir_fn is not None:
+        candidate = start_dir_fn()
+        if candidate and os.path.isdir(candidate):
+            start = candidate
+    path, _ = QFileDialog.getOpenFileName(parent, title, start, filt)
     if path:
         edit.setText(path)
 

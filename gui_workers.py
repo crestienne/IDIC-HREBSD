@@ -41,7 +41,7 @@ class _StdoutCapture(io.TextIOBase):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SKIP_PARAMS = {"roi_slice"}   # non-serialisable / not useful to log
+_SKIP_PARAMS = {"roi_slice", "_ang_data"}   # non-serialisable / not useful to log
 
 def _write_params_txt(path: str, params: dict):
     """Write all GUI run parameters to a human-readable .txt file."""
@@ -57,6 +57,31 @@ def _write_params_txt(path: str, params: dict):
     lines.append("")
     with open(path, "w") as f:
         f.write("\n".join(lines))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ANG background loader
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AngLoaderWorker(QThread):
+    """Load a .ang file in the background and cache the result on the wizard."""
+    done_signal  = pyqtSignal(object)   # ang_data namedtuple
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, ang_path: str, patshape: tuple):
+        super().__init__()
+        self.ang_path = ang_path
+        self.patshape = patshape
+
+    def run(self):
+        try:
+            import utilities
+            ang_data = utilities.read_ang(
+                self.ang_path, self.patshape, segment_grain_threshold=None
+            )
+            self.done_signal.emit(ang_data)
+        except Exception:
+            self.error_signal.emit(traceback.format_exc())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,10 +131,14 @@ class PipelineWorker(QThread):
         )
         print(pat_obj)
 
-        self.log_signal.emit("Reading ANG file…")
-        ang_data = utilities.read_ang(
-            p["ang"], pat_obj.patshape, segment_grain_threshold=None
-        )
+        ang_data = p.get("_ang_data")
+        if ang_data is None:
+            self.log_signal.emit("Reading ANG file…")
+            ang_data = utilities.read_ang(
+                p["ang"], pat_obj.patshape, segment_grain_threshold=None
+            )
+        else:
+            self.log_signal.emit("Using cached ANG data.")
 
         x0 = np.ravel_multi_index(p["ref_position"], ang_data.shape)
         self.log_signal.emit(
@@ -252,19 +281,23 @@ class PipelineWorker(QThread):
 class IPFWorker(QThread):
     done_signal = pyqtSignal(object, str)   # rgb_map (ndarray) | None, error_msg
 
-    def __init__(self, ang_path: str, patshape: tuple, direction: np.ndarray):
+    def __init__(self, ang_path: str, patshape: tuple, direction: np.ndarray,
+                 ang_data=None):
         super().__init__()
         self.ang_path  = ang_path
         self.patshape  = patshape
         self.direction = direction
+        self.ang_data  = ang_data
 
     def run(self):
         try:
             from ipf_map import compute_ipf_colors
-            import utilities
-            ang_data = utilities.read_ang(
-                self.ang_path, self.patshape, segment_grain_threshold=None
-            )
+            ang_data = self.ang_data
+            if ang_data is None:
+                import utilities
+                ang_data = utilities.read_ang(
+                    self.ang_path, self.patshape, segment_grain_threshold=None
+                )
             rgb = compute_ipf_colors(ang_data.eulers, self.direction)
             self.done_signal.emit(rgb, "")
         except Exception:
@@ -279,19 +312,22 @@ class SegmentWorker(QThread):
     done_signal = pyqtSignal(object, object, str)  # grain_ids, kam, error_msg
 
     def __init__(self, ang_path: str, patshape: tuple, threshold: float,
-                 min_grain_size: int = 1):
+                 min_grain_size: int = 1, ang_data=None):
         super().__init__()
         self.ang_path       = ang_path
         self.patshape       = patshape
         self.threshold      = threshold
         self.min_grain_size = min_grain_size
+        self.ang_data       = ang_data
 
     def run(self):
         try:
             import utilities, segment
-            ang_data  = utilities.read_ang(
-                self.ang_path, self.patshape, segment_grain_threshold=None
-            )
+            ang_data = self.ang_data
+            if ang_data is None:
+                ang_data = utilities.read_ang(
+                    self.ang_path, self.patshape, segment_grain_threshold=None
+                )
             grain_ids, kam = segment.segment_grains(
                 ang_data.quats, self.threshold, self.min_grain_size, progress=False
             )
@@ -394,7 +430,9 @@ class VisWorker(QThread):
         # Load per-pattern base orientations from .ang file if provided
         ang_path = p.get("ang_path", "")
         if ang_path and os.path.isfile(ang_path):
-            ang_data  = utilities.read_ang(ang_path, patshape, segment_grain_threshold=None)
+            ang_data = p.get("_ang_data") or utilities.read_ang(
+                ang_path, patshape, segment_grain_threshold=None
+            )
             full_r, full_c = ang_data.shape   # full scan shape from the ang file itself
             # Reshape to 2-D so we can slice the ROI out cleanly
             quats_2d  = ang_data.quats.reshape(full_r, full_c, 4)
@@ -429,7 +467,9 @@ class VisWorker(QThread):
         ang_path = p.get("ang_path", "")
         if ang_path and os.path.isfile(ang_path):
             patshape       = (p.get("pat_h", 512), p.get("pat_w", 512))
-            ang_data       = utilities.read_ang(ang_path, patshape, segment_grain_threshold=None)
+            ang_data       = p.get("_ang_data") or utilities.read_ang(
+                ang_path, patshape, segment_grain_threshold=None
+            )
             full_r, full_c = ang_data.shape
             quats_2d       = ang_data.quats.reshape(full_r, full_c, 4)
             roi_slice      = p.get("roi_slice", None)

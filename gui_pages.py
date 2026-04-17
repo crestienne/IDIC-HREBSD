@@ -30,12 +30,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 
 from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
-from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker
+from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker
 from gui_visualization import VisualizationDialog
 from gui_sweep import ParameterSweepDialog
 
 
-from gui_materials import _load_material_presets
+from gui_materials import _load_material_presets, NewMaterialDialog
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,8 +69,15 @@ class LoadFilesPage(QWizardPage):
         self.ang_edit.setPlaceholderText("Path to .ang file…")
         file_layout.addRow(
             "ANG scan file:",
-            _make_browse_row(self, self.ang_edit, "ANG files (*.ang);;All files (*)", "Select ANG file"),
+            _make_browse_row(
+                self, self.ang_edit, "ANG files (*.ang);;All files (*)", "Select ANG file",
+                start_dir_fn=lambda: os.path.dirname(self.up2_edit.text()) if self.up2_edit.text() else None,
+            ),
         )
+
+        self._ang_load_status = QLabel("")
+        self._ang_load_status.setStyleSheet("color: gray; font-style: italic;")
+        file_layout.addRow("", self._ang_load_status)
 
         file_group.setLayout(file_layout)
         layout.addWidget(file_group)
@@ -148,18 +155,26 @@ class LoadFilesPage(QWizardPage):
         self._C11 = QDoubleSpinBox()
         self._C11.setRange(0, 9999); self._C11.setDecimals(1)
         self._C11.setSuffix(" GPa"); self._C11.setValue(165.7)
+        self._C11.setReadOnly(True); self._C11.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
 
         self._C12 = QDoubleSpinBox()
         self._C12.setRange(0, 9999); self._C12.setDecimals(1)
         self._C12.setSuffix(" GPa"); self._C12.setValue(63.9)
+        self._C12.setReadOnly(True); self._C12.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
 
         self._C44 = QDoubleSpinBox()
         self._C44.setRange(0, 9999); self._C44.setDecimals(1)
         self._C44.setSuffix(" GPa"); self._C44.setValue(79.6)
+        self._C44.setReadOnly(True); self._C44.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+
+        self._new_material_btn = QPushButton("New material…")
+        self._new_material_btn.setToolTip("Create a new material JSON file and add it to the preset list.")
+        self._new_material_btn.clicked.connect(self._open_new_material_dialog)
 
         mat_layout.addRow("C\u2081\u2081:", self._C11)
         mat_layout.addRow("C\u2081\u2082:", self._C12)
         mat_layout.addRow("C\u2084\u2084:", self._C44)
+        mat_layout.addRow("", self._new_material_btn)
         mat_layout.addRow(_note("Used to compute strain from homographies."))
         mat_group.setLayout(mat_layout)
         bottom_row.addWidget(mat_group, stretch=1)
@@ -195,6 +210,74 @@ class LoadFilesPage(QWizardPage):
         self.registerField("output_dir*", self.out_edit)
 
         self.up2_edit.textChanged.connect(self._update_preview)
+        self.ang_edit.textChanged.connect(self._on_ang_path_changed)
+        self._ang_loader = None   # keep reference so the thread isn't GC'd
+
+    # ── ANG background loading ────────────────────────────────────────────────
+
+    def _get_patshape(self):
+        """Return patshape from the UP2 header, or (512, 512) as fallback."""
+        up2_path = self.up2_edit.text()
+        if up2_path and os.path.isfile(up2_path):
+            try:
+                import Data
+                return Data.UP2(up2_path).patshape
+            except Exception:
+                pass
+        return (512, 512)
+
+    def _on_ang_path_changed(self, path):
+        wiz = self.wizard()
+        if not path or not os.path.isfile(path):
+            if wiz:
+                wiz.ang_data        = None
+                wiz.ang_loaded_path = ""
+            self._ang_load_status.setText("")
+            return
+
+        patshape = self._get_patshape()
+
+        # Skip if already cached for this exact path + patshape
+        if (wiz and wiz.ang_data is not None
+                and wiz.ang_loaded_path == path
+                and wiz.ang_loaded_patshape == patshape):
+            self._ang_load_status.setText("ANG loaded.")
+            return
+
+        if wiz:
+            wiz.ang_data        = None
+            wiz.ang_loaded_path = ""
+
+        self._ang_load_status.setText("Loading ANG…")
+
+        if self._ang_loader is not None and self._ang_loader.isRunning():
+            self._ang_loader.done_signal.disconnect()
+            self._ang_loader.error_signal.disconnect()
+
+        self._ang_loader = AngLoaderWorker(path, patshape)
+        self._ang_loader.done_signal.connect(
+            lambda d: self._on_ang_loaded(d, path, patshape)
+        )
+        self._ang_loader.error_signal.connect(self._on_ang_error)
+        self._ang_loader.start()
+
+    def _on_ang_loaded(self, ang_data, path, patshape):
+        wiz = self.wizard()
+        if wiz:
+            wiz.ang_data            = ang_data
+            wiz.ang_loaded_path     = path
+            wiz.ang_loaded_patshape = patshape
+        rows, cols = ang_data.shape
+        self._ang_load_status.setText(
+            f"ANG loaded — {rows}×{cols}, PC=({ang_data.pc[0]:.4f}, "
+            f"{ang_data.pc[1]:.4f}, {ang_data.pc[2]:.4f})"
+        )
+        self._ang_load_status.setStyleSheet("color: #88cc88; font-style: italic;")
+
+    def _on_ang_error(self, msg: str):
+        self._ang_load_status.setText("ANG load failed — check console.")
+        self._ang_load_status.setStyleSheet("color: #cc4444; font-style: italic;")
+        print("\n--- ANG load error ---\n" + msg)
 
     def _apply_material_preset(self, index: int):
         preset = self._preset_combo.itemData(index)
@@ -204,6 +287,31 @@ class LoadFilesPage(QWizardPage):
         self._C11.setValue(ec.get("C11", self._C11.value()))
         self._C12.setValue(ec.get("C12", self._C12.value()))
         self._C44.setValue(ec.get("C44", self._C44.value()))
+        self._struct_lbl.setText(preset.get("structure", self._struct_lbl.text()))
+
+    def _open_new_material_dialog(self):
+        dlg = NewMaterialDialog(parent=self)
+        dlg.saved.connect(self._on_new_material_saved)
+        dlg.exec()
+
+    def _on_new_material_saved(self, preset: dict):
+        """Add the new preset to the dropdown and select it."""
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.addItem(preset["name"], userData=preset)
+        # Re-sort by name (skip index 0 — the placeholder)
+        items = [(self._preset_combo.itemText(i), self._preset_combo.itemData(i))
+                 for i in range(1, self._preset_combo.count())]
+        items.sort(key=lambda t: t[0])
+        for i, (text, data) in enumerate(items, start=1):
+            self._preset_combo.setItemText(i, text)
+            self._preset_combo.setItemData(i, data)
+        new_idx = next(
+            (i for i in range(1, self._preset_combo.count())
+             if self._preset_combo.itemText(i) == preset["name"]),
+            self._preset_combo.count() - 1,
+        )
+        self._preset_combo.blockSignals(False)
+        self._preset_combo.setCurrentIndex(new_idx)
         self._struct_lbl.setText(preset.get("structure", "cubic"))
 
     def get_material_params(self) -> dict:
@@ -472,8 +580,12 @@ class ScanGeometryPage(QWizardPage):
                 except Exception:
                     patshape = (self.pat_h.value(), self.pat_w.value())
 
-                ang_data = utilities.read_ang(
-                    ang_path, patshape, segment_grain_threshold=None
+                wiz      = self.wizard()
+                ang_data = (
+                    wiz.ang_data
+                    if wiz and wiz.ang_data is not None
+                       and wiz.ang_loaded_path == ang_path
+                    else utilities.read_ang(ang_path, patshape, segment_grain_threshold=None)
                 )
 
                 pc = ang_data.pc
@@ -742,7 +854,8 @@ class ROISelectionPage(QWizardPage):
 
         self._ipf_status.setText("Computing IPF map… (this may take a few seconds)")
         direction = self._DIRECTIONS[self._dir_combo.currentText()]
-        self._ipf_worker = IPFWorker(ang_path, patshape, direction)
+        cached = wiz.ang_data if wiz.ang_data is not None and wiz.ang_loaded_path == ang_path else None
+        self._ipf_worker = IPFWorker(ang_path, patshape, direction, ang_data=cached)
         self._ipf_worker.done_signal.connect(self._on_ipf_done)
         self._ipf_worker.start()
 
@@ -761,10 +874,12 @@ class ROISelectionPage(QWizardPage):
         self._seg_btn.setEnabled(False)
         self._seg_status.setText("Segmenting grains… (may take a while for large scans)")
 
+        cached = wiz.ang_data if wiz.ang_data is not None and wiz.ang_loaded_path == ang_path else None
         self._seg_worker = SegmentWorker(
             ang_path, patshape,
             self.seg_threshold.value(),
             self.min_grain_size.value(),
+            ang_data=cached,
         )
         self._seg_worker.done_signal.connect(self._on_seg_done)
         self._seg_worker.start()
@@ -890,7 +1005,8 @@ class ROISelectionPage(QWizardPage):
             return
         self._ipf_status.setText("Recomputing…")
         direction = self._DIRECTIONS[self._dir_combo.currentText()]
-        self._ipf_worker = IPFWorker(ang_path, patshape, direction)
+        cached = wiz.ang_data if wiz.ang_data is not None and wiz.ang_loaded_path == ang_path else None
+        self._ipf_worker = IPFWorker(ang_path, patshape, direction, ang_data=cached)
         self._ipf_worker.done_signal.connect(self._on_ipf_done)
         self._ipf_worker.start()
 
@@ -1142,7 +1258,8 @@ class ReferencePatternPage(QWizardPage):
             return
 
         self._ipf_status.setText("Computing IPF map… (this may take a few seconds)")
-        self._ipf_worker = IPFWorker(ang_path, patshape, np.array([0, 0, 1]))
+        cached = wiz.ang_data if wiz.ang_data is not None and wiz.ang_loaded_path == ang_path else None
+        self._ipf_worker = IPFWorker(ang_path, patshape, np.array([0, 0, 1]), ang_data=cached)
         self._ipf_worker.done_signal.connect(self._on_ipf_done)
         self._ipf_worker.start()
 
@@ -1784,6 +1901,10 @@ class OptimizationRunPage(QWizardPage):
         self._log.clear()
         self._status_label.setText("Running…")
         self._status_label.setStyleSheet(f"color: {THEME['warning']}; font-weight: bold;")
+
+        wiz = self.wizard()
+        if wiz and wiz.ang_data is not None and wiz.ang_loaded_path == params.get("ang"):
+            params["_ang_data"] = wiz.ang_data
 
         self._worker = PipelineWorker(params)
         self._worker.log_signal.connect(self._append_log)

@@ -45,6 +45,9 @@ class HREBSDWizard(QWizard):
 
     def __init__(self):
         super().__init__()
+        self.ang_data            = None   # cached result of utilities.read_ang
+        self.ang_loaded_path     = ""     # ang path used for the current cache
+        self.ang_loaded_patshape = None   # patshape used when loading the cache
         self.setWindowTitle("DIC-HREBSD Pipeline")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.setMinimumSize(760, 720)
