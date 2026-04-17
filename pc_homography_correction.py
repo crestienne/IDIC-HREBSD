@@ -267,6 +267,9 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
     Returns
     -------
     h_corrected : ndarray (N, 8)
+    TS_inv      : ndarray (n_rows, n_cols, 3, 3)
+        The per-position correction matrices applied to each warp.
+        At the scan origin [0,0] this is the 3×3 identity.
     """
     n_rows, n_cols = scan_shape
     N = n_rows * n_cols
@@ -288,14 +291,18 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
     print(np.round(TS_inv[0, 0], 6))
     print("(expected: 3×3 identity)")
 
-    # 6. W_corrected = W @ TS_inv  (post-multiply)
-    W_corrected = np.einsum('...ij,...jk->...ik', W, TS_inv)
+    #print an example TS_inv matrix to check --- IGNORE ---
+    print("Example TS_inv matrix at [2,2]:")
+    print(np.round(TS_inv[1, 130], 6))
+
+    W_corrected = TS_inv @ W
+   #W_corrected = np.einsum('...ij,...jk->...ik', TS_inv, W)
 
     # 7. back to (N, 8)
     h_corrected = warp_to_h(W_corrected).reshape(N, 8)
     print(f"PC correction applied — convention: '{convention}'  "
           f"scan: {n_rows}×{n_cols}")
-    return h_corrected
+    return h_corrected, TS_inv
 
 
 def delta_pc_to_TS(Δpc, pc_ref, patshape):
@@ -354,6 +361,8 @@ def delta_pc_to_TS(Δpc, pc_ref, patshape):
     TS = np.einsum('...ij,...jk->...ik', S, T)
     #find the inverse of TS to get the correction that should be applied to the pattern
     TS_inv = np.linalg.inv(TS)
+    #print the first TS_inv matrix to check --- IGNORE ---
+    print("the shape of TS_inv is:", TS_inv.shape)
 
     return TS_inv
 
