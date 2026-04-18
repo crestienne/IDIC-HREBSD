@@ -92,11 +92,7 @@ def compute_ipf_colors(
     # Passive convention: d_sample = R @ c_crystal  →  c_crystal = R^T @ d_sample
     d = np.asarray(sample_direction, dtype=np.float64)
     d = d / np.linalg.norm(d)
-    c = np.einsum("nij,j->ni", R, d)   # = R @ d gives sample coords of crystal axis
-    # Wait — we want the crystal direction that aligns with d_sample.
-    # In passive convention g maps crystal→sample: d_sample = g c_crystal
-    # so c_crystal = g^T d_sample = R^T d_sample
-    c = np.einsum("nji,j->ni", R, d)   # R^T @ d, shape (N, 3)
+    c = np.einsum("nij,j->ni", R, d)   # = R @ d 
 
     # ── Reduce to cubic fundamental zone ────────────────────────────────────
     c = np.abs(c)                         # apply mirror symmetries (m-3m)
@@ -302,9 +298,9 @@ if __name__ == "__main__":
     # INPUTS  — edit these lines then run:  python ipf_map.py
     # =========================================================================
 
-    ang_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/dp-Si-new-refined.ang'
+    ang_file  = '/Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.ang' 
     patshape   = (512, 512)   # (height_px, width_px) of the detector
-    output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/'
+    output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/Si-Indent/'
     direction  = 'ND'         # 'ND', 'RD', or 'TD'
 
     # =========================================================================
