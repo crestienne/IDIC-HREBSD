@@ -5,7 +5,7 @@ segment.py  —  grain segmentation by flood-fill on misorientation
 from collections import deque
 
 import numpy as np
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 import rotations
 
@@ -53,6 +53,7 @@ def segment_grains(
     quaternions: np.ndarray,
     threshold: float,
     min_grain_size: int = 1,
+    progress: bool = True,
 ):
     """
     Segment a 2-D EBSD scan into grains by flood-fill on misorientation.
@@ -86,7 +87,7 @@ def segment_grains(
     current_grain_id       = 1
 
     coords       = np.array(np.meshgrid(np.arange(rows), np.arange(cols))).T.reshape(-1, 2)
-    progress_bar = tqdm(total=rows * cols, desc="Segmenting grains")
+    progress_bar = tqdm(total=rows * cols, desc="Segmenting grains", disable=not progress)
 
     for i, j in coords:
         if grain_ids[i, j] != 0:

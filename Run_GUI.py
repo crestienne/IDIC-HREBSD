@@ -2,7 +2,7 @@
 gui_qt.py — entry point for the DIC-HREBSD PyQt6 wizard GUI.
 
 Run:
-    python gui_qt.py
+    python Run_GUI.py
 
 Module layout
 ─────────────
@@ -23,6 +23,7 @@ import matplotlib
 matplotlib.use("QtAgg")
 
 from PyQt6.QtWidgets import QApplication, QWizard
+from PyQt6.QtGui import QFont
 
 from gui_theme import apply_theme
 from gui_pages import (
@@ -44,6 +45,9 @@ class HREBSDWizard(QWizard):
 
     def __init__(self):
         super().__init__()
+        self.ang_data            = None   # cached result of utilities.read_ang
+        self.ang_loaded_path     = ""     # ang path used for the current cache
+        self.ang_loaded_patshape = None   # patshape used when loading the cache
         self.setWindowTitle("DIC-HREBSD Pipeline")
         self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
         self.setMinimumSize(760, 720)
@@ -74,6 +78,7 @@ class HREBSDWizard(QWizard):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")   # Fusion gives QPalette full control on all platforms
+    app.setFont(QFont("Arial"))
     apply_theme(app)
     wiz = HREBSDWizard()
     wiz.show()

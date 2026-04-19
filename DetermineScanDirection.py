@@ -28,18 +28,24 @@ from Data import UP2
 # INPUTS
 # ============================================================
 
-up2_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/SiGe_largerRegion_20260322_512x512.up2'
+up2_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/20260322_514785_0_movie_countedframes_reversedSCAN_flipYonly_512x512.up2'
 Rows       = 132
 Columns    = 132
 
-output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/'
+output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/'  # where to save videos and plots
 fps        = 10      # frames per second
 
 # Process patterns before display? (high-pass + CLAHE — slower but clearer)
 process = False
 
 # Flip patterns vertically before display?
-flip_ud = True
+flip_ud = False
+
+# Flip patterns horizontally (across y-axis) before display?
+flip_lr = False
+
+# Rotate patterns 180° before display?
+rotate_180 = False
 
 # ============================================================
 # HELPERS
@@ -51,15 +57,22 @@ def pattern_index(row, col, ncols):
 
 
 def _read_frames(up2, indices, process):
-    """Read and normalise a list of patterns. Returns list of float32 arrays."""
+    """Read, normalise, and mildly boost contrast of a list of patterns."""
     frames = []
     for k, idx in enumerate(indices):
         pat = up2.read_pattern(idx, process=process).astype(np.float32)
         if flip_ud:
             pat = np.flipud(pat)
-        lo, hi = pat.min(), pat.max()
+        if flip_lr:
+            pat = np.fliplr(pat)
+        if rotate_180:
+            pat = np.rot90(pat, 2)
+        # Percentile stretch: clip the bottom 2 % and top 2 % of intensities
+        # for a mild contrast boost without the full processing pipeline
+        lo, hi = np.percentile(pat, 2), np.percentile(pat, 98)
         if hi > lo:
             pat = (pat - lo) / (hi - lo)
+        pat = np.clip(pat, 0, 1)
         frames.append(pat)
         if (k + 1) % 10 == 0 or (k + 1) == len(indices):
             print(f"  read {k+1}/{len(indices)}", end="\r")
@@ -126,17 +139,17 @@ def make_video(frames, labels, output_path, fps):
 
 def _make_overlay(ref, curr):
     """
-    Build a red/cyan two-channel overlay of two normalised patterns.
+    Build a red/blue two-channel overlay of two normalised patterns.
 
     ref and curr are both float32 arrays in [0, 1].
     Result is an (H, W, 3) uint8 RGB image:
         R channel = reference pattern
-        G channel = current pattern
+        G channel = 0
         B channel = current pattern
-    Aligned features appear white/grey; shifted features show
-    red fringing on one side and cyan fringing on the other.
+    Aligned features appear magenta/grey; shifted features show
+    red fringing on one side and blue fringing on the other.
     """
-    rgb = np.stack([ref, curr, curr], axis=-1)
+    rgb = np.stack([ref, np.zeros_like(curr), curr], axis=-1)
     return (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
 
 
@@ -178,7 +191,7 @@ def plot_overlay_grid(frames, labels, title, save_path, n_panels=12):
     for ax in axes_flat[len(indices):]:
         ax.axis("off")
 
-    fig.suptitle(title + "\n(red = reference, cyan = current position)", fontsize=11)
+    fig.suptitle(title + "\n(red = reference, blue = current position)", fontsize=11)
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.show(block=False)

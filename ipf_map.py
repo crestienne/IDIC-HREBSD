@@ -3,10 +3,10 @@ ipf_map.py  —  Inverse Pole Figure (IPF) map for EBSD .ang files
 =================================================================
 Supports cubic crystal symmetry (m-3m / Oh).
 
-Color convention (matches TSL / OIM standard):
-    [001] → blue
-    [011] → green
-    [111] → red
+Color convention:
+    [001] → red
+    [101] → green
+    [111] → blue
 
 Rotation convention:
     Bunge ZXZ passive  —  matches rotations.eu2om used throughout this project.
@@ -66,14 +66,14 @@ def compute_ipf_colors(
         This correctly applies all m-3m symmetry operations.
     4.  Apply the affine IPF colour map:
             xn = x / z,  yn = y / z           (normalised triangle coords)
-            R  = xn                            → [111] corner (red)
-            G  = yn − xn                       → [011] corner (green)
-            B  = 1 − yn                        → [001] corner (blue)
+            R  = 1 − yn                        → [001] corner (red)
+            G  = yn − xn                       → [101] corner (green)
+            B  = xn                            → [111] corner (blue)
         Then scale so that max(R, G, B) = 1 (full brightness).
         Corner verification:
-            [001] (0,0,1) → xn=0, yn=0 → (0,0,1) = blue   ✓
-            [011] (0,½,½) → xn=0, yn=1 → (0,1,0) = green  ✓
-            [111] (⅓,⅓,⅓)→ xn=1, yn=1 → (1,0,0) = red    ✓
+            [001] (0,0,1) → xn=0, yn=0 → (1,0,0) = red    ✓
+            [101] (0,½,½) → xn=0, yn=1 → (0,1,0) = green  ✓
+            [111] (⅓,⅓,⅓)→ xn=1, yn=1 → (0,0,1) = blue   ✓
 
     Reference: formula derived from the standard TSL/OIM IPF triangle;
                symmetry reduction follows Nolze & Hielscher (2016).
@@ -92,11 +92,7 @@ def compute_ipf_colors(
     # Passive convention: d_sample = R @ c_crystal  →  c_crystal = R^T @ d_sample
     d = np.asarray(sample_direction, dtype=np.float64)
     d = d / np.linalg.norm(d)
-    c = np.einsum("nij,j->ni", R, d)   # = R @ d gives sample coords of crystal axis
-    # Wait — we want the crystal direction that aligns with d_sample.
-    # In passive convention g maps crystal→sample: d_sample = g c_crystal
-    # so c_crystal = g^T d_sample = R^T d_sample
-    c = np.einsum("nji,j->ni", R, d)   # R^T @ d, shape (N, 3)
+    c = np.einsum("nij,j->ni", R, d)   # = R @ d 
 
     # ── Reduce to cubic fundamental zone ────────────────────────────────────
     c = np.abs(c)                         # apply mirror symmetries (m-3m)
@@ -115,9 +111,9 @@ def compute_ipf_colors(
     xn = x / z_safe
     yn = y / z_safe
 
-    r = xn
+    r = 1.0 - yn
     g = yn - xn
-    b = 1.0 - yn
+    b = xn
 
     rgb = np.stack([r, g, b], axis=-1)   # shape (N, 3)
 
@@ -141,10 +137,12 @@ def plot_ipf_triangle(ax=None, n: int = 300) -> plt.Axes:
     """
     Draw the cubic IPF colour key (standard triangle).
 
-    The triangle is plotted in the normalised (xn, yn) space where:
-        [001] corner → (xn=0, yn=0) = bottom-left  = blue
-        [011] corner → (xn=0, yn=1) = top-left     = green
-        [111] corner → (xn=1, yn=1) = top-right    = red
+    The triangle is flipped across the hypotenuse so that [001] and [101]
+    lie on the horizontal axis:
+        [001] corner → (u=0, v=0) = bottom-left  = red
+        [101] corner → (u=1, v=0) = bottom-right = green
+        [111] corner → (u=1, v=1) = top-right    = blue
+    where u = yn and v = xn (swapped relative to the raw IPF coordinates).
 
     Parameters
     ----------
@@ -156,17 +154,22 @@ def plot_ipf_triangle(ax=None, n: int = 300) -> plt.Axes:
     ax  : the Axes used
     """
     if ax is None:
-        _, ax = plt.subplots(figsize=(3.5, 3.5))
+        _, ax = plt.subplots(figsize=(4.0, 3.0))
 
-    xn_vals = np.linspace(0.0, 1.0, n)
-    yn_vals = np.linspace(0.0, 1.0, n)
-    XN, YN  = np.meshgrid(xn_vals, yn_vals)
+    # u = yn, v = xn  (flipped across the yn=xn hypotenuse)
+    # The [001]→[101] arc spans 45° and [101]→[111] spans ~35.26°.
+    # Scale the horizontal axis by this ratio so the base is visually longer.
+    W = 45.0 / 35.26   # ≈ 1.276
 
-    inside = (YN >= XN - 1e-6)   # valid region: yn ≥ xn
+    u_vals = np.linspace(0.0, 1.0, n)
+    v_vals = np.linspace(0.0, 1.0, n)
+    U, V   = np.meshgrid(u_vals, v_vals)
 
-    R = XN
-    G = YN - XN
-    B = 1.0 - YN
+    inside = (U >= V - 1e-6)   # valid region: yn ≥ xn  →  u ≥ v
+
+    R = 1.0 - U
+    G = U - V
+    B = V
 
     rgb = np.stack([R, G, B], axis=-1)
     mx  = rgb.max(axis=-1, keepdims=True)
@@ -174,28 +177,29 @@ def plot_ipf_triangle(ax=None, n: int = 300) -> plt.Axes:
     rgb = np.clip(rgb / mx, 0.0, 1.0)
     rgb[~inside] = 1.0   # white outside
 
+    # Stretch the horizontal extent by W so [001]–[101] is longer than [101]–[111]
     ax.imshow(
         rgb, origin="lower",
-        extent=[0, 1, 0, 1],
+        extent=[0, W, 0, 1],
         aspect="auto",
         interpolation="bilinear",
     )
 
-    # Corner markers + labels
+    # Corner markers + labels (x-coords scaled by W)
     corners = [
-        (0.0, 0.0, "[001]", "blue"),
-        (0.0, 1.0, "[011]", "green"),
-        (1.0, 1.0, "[111]", "red"),
+        (0.0, 0.0, "[001]", "red"),
+        (W,   0.0, "[101]", "green"),
+        (W,   1.0, "[111]", "blue"),
     ]
     for cx, cy, label, color in corners:
         ax.plot(cx, cy, "s", color=color, markersize=9, markeredgecolor="k", markeredgewidth=0.5)
 
-    ax.text(0.0, -0.10, "[001]", ha="center", va="top",    fontsize=9,  color="blue",  fontweight="bold")
-    ax.text(0.0,  1.10, "[011]", ha="center", va="bottom", fontsize=9,  color="darkgreen", fontweight="bold")
-    ax.text(1.10, 1.00, "[111]", ha="left",   va="center", fontsize=9,  color="red",   fontweight="bold")
+    ax.text(0.0,      -0.12, "[001]", ha="center", va="top",    fontsize=9, color="red",       fontweight="bold")
+    ax.text(W,        -0.12, "[101]", ha="center", va="top",    fontsize=9, color="darkgreen", fontweight="bold")
+    ax.text(W + 0.06,  1.00, "[111]", ha="left",   va="center", fontsize=9, color="blue",      fontweight="bold")
 
-    ax.set_xlim(-0.15, 1.25)
-    ax.set_ylim(-0.15, 1.20)
+    ax.set_xlim(-0.15, W + 0.25)
+    ax.set_ylim(-0.22, 1.15)
     ax.axis("off")
     ax.set_title("IPF colour key\n(cubic, m-3m)", fontsize=9)
 
@@ -265,13 +269,13 @@ def plot_ipf_map(
     print("Done.")
 
     # ── Plot ──────────────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(11, 5))
+    fig = plt.figure(figsize=(12, 5))
 
-    ax_map = fig.add_axes([0.04, 0.08, 0.68, 0.84])
+    ax_map = fig.add_axes([0.03, 0.08, 0.60, 0.84])
     ax_map.imshow(rgb_map, origin="upper", interpolation="nearest")
     ax_map.set_title(f"IPF Map  //  {direction_label}  ({rows}×{cols})", fontsize=13)
-    
-    ax_key = fig.add_axes([0.76, 0.15, 0.22, 0.70])
+
+    ax_key = fig.add_axes([0.68, 0.12, 0.28, 0.76])
     plot_ipf_triangle(ax_key)
 
     if save_path:
@@ -294,9 +298,9 @@ if __name__ == "__main__":
     # INPUTS  — edit these lines then run:  python ipf_map.py
     # =========================================================================
 
-    ang_file   = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/SiGe_largerRegion_selectedArea_20260322_512x512.ang'
+    ang_file  = '/Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.ang' 
     patshape   = (512, 512)   # (height_px, width_px) of the detector
-    output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/'
+    output_dir = '/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/Si-Indent/'
     direction  = 'ND'         # 'ND', 'RD', or 'TD'
 
     # =========================================================================

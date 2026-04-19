@@ -5,6 +5,7 @@ Edit the THEME dict to restyle the whole GUI without touching any other file.
 """
 
 import os
+import tempfile
 
 from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QFileDialog,
@@ -51,6 +52,18 @@ THEME = {
     "run_btn_bg":   "#2e7d32",   # Run Pipeline button background
     "run_btn_text": "#ffffff",
 }
+
+
+_CHECKMARK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14">'
+    '<polyline points="2,7 5,11 12,3" stroke="#111111" stroke-width="2.5"'
+    ' fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    '</svg>'
+)
+_tmp = tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w")
+_tmp.write(_CHECKMARK_SVG)
+_tmp.close()
+_CHECKMARK_PATH = _tmp.name
 
 
 def apply_theme(app) -> None:
@@ -138,6 +151,7 @@ def apply_theme(app) -> None:
             border-radius: 4px;
             padding: 3px 5px;
             selection-background-color: {t["accent"]};
+            font-family: "Arial";
         }}
         QSpinBox, QDoubleSpinBox {{
             background-color: {t["input_bg"]};
@@ -178,15 +192,16 @@ def apply_theme(app) -> None:
             spacing: 6px;
         }}
         QCheckBox::indicator {{
-            width: 14px;
-            height: 14px;
+            width: 16px;
+            height: 16px;
             border: 1px solid {t["border"]};
             border-radius: 3px;
-            background-color: {t["input_bg"]};
+            background-color: {t["surface_bg"]};
         }}
         QCheckBox::indicator:checked {{
             background-color: {t["accent"]};
             border-color: {t["accent"]};
+            image: url("{_CHECKMARK_PATH}");
         }}
         QScrollArea, QScrollBar {{
             background-color: {t["window_bg"]};
@@ -254,14 +269,20 @@ def apply_theme(app) -> None:
 # Shared widget helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_browse_row(parent_page, edit: QLineEdit, filt: str, title: str) -> QWidget:
-    """Return a widget containing [QLineEdit] [Browse…]."""
+def _make_browse_row(parent_page, edit: QLineEdit, filt: str, title: str,
+                     start_dir_fn=None) -> QWidget:
+    """Return a widget containing [QLineEdit] [Browse…].
+
+    start_dir_fn: optional zero-argument callable called at click time to
+                  get the initial directory.  Falls back to ~ if None or
+                  if the callable returns an empty/non-existent path.
+    """
     w = QWidget()
     h = QHBoxLayout(w)
     h.setContentsMargins(0, 0, 0, 0)
     btn = QPushButton("Browse…")
     btn.setFixedWidth(90)
-    btn.clicked.connect(lambda: _pick_file(parent_page, edit, filt, title))
+    btn.clicked.connect(lambda: _pick_file(parent_page, edit, filt, title, start_dir_fn))
     h.addWidget(edit)
     h.addWidget(btn)
     return w
@@ -279,10 +300,13 @@ def _make_browse_dir(parent_page, edit: QLineEdit) -> QWidget:
     return w
 
 
-def _pick_file(parent, edit: QLineEdit, filt: str, title: str):
-    path, _ = QFileDialog.getOpenFileName(
-        parent, title, os.path.expanduser("~"), filt
-    )
+def _pick_file(parent, edit: QLineEdit, filt: str, title: str, start_dir_fn=None):
+    start = os.path.expanduser("~")
+    if start_dir_fn is not None:
+        candidate = start_dir_fn()
+        if candidate and os.path.isdir(candidate):
+            start = candidate
+    path, _ = QFileDialog.getOpenFileName(parent, title, start, filt)
     if path:
         edit.setText(path)
 

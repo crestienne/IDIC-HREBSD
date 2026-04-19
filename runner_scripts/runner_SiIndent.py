@@ -13,19 +13,15 @@ import time
 from optimize_reference import optimize_pc_and_euler
 from ipf_map import plot_ipf_map
 
-use_simulated_reference = False
-master_pattern_path = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/MCoutput.h5'      # e.g. '/path/to/SiGe-master-20kV.h5'
-tilt_deg = 70.0 + 2.0               # sample tilt in degrees
-
 # ---- Inputs ----
-component = "SiGe_2rows_alternateRef"  # e.g. "SiGe_10x132_fullInit"
-date = "April_17_2026" 
+component = "SiIndent"
+date = "April_15_2026" 
 up2 = (
-   '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/20260322_514785_0_movie_countedframes_reversedSCAN_flipYonly_512x512.up2'
+   '/Users/crestiennedechaine/OriginalData/Si-Indent/001_Si_spherical_indent_20kV.up2' 
 )
 # up2 = "/Users/jameslamb/Documents/research/data/GaN-DED/20240508_27238_512x512_flipX.up2"
-ang = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/SiGe_dp_10rows132colums_largerRegion.ang'
-x0 = (0, 131) # reference pattern, order is y,x
+ang = '/Users/crestiennedechaine/OriginalData/Si-Indent/dp2-refined.ang'
+x0 = (0, 0) # reference pattern, order is y,x
 
 #do you want to do a prarameter sweep to see the effect of different processing parameters on the pattern quality? If so, set to True and it will save a figure showing the results in the output folder. If False, it will skip this step.
 do_parameter_sweep = False
@@ -34,20 +30,24 @@ do_parameter_sweep = False
 plot_first_row_linemap = True
 
 #order for roi_slice: [slice(y_start, y_stop), slice(x_start, x_stop)], set to none if want to look at whole pattern 
-roi_slice= [slice(0, 2), slice(0, 132)]
-#roi_slice = None
+#roi_slice= [slice(0, 2), slice(0, 50)]
+roi_slice = None
 
-
+# ------ Simulated reference options (set use_simulated_reference=True to enable) ------
+use_simulated_reference = False
+master_pattern_path = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/MCoutput.h5'      # e.g. '/path/to/SiGe-master-20kV.h5'
+tilt_deg = 70.0 + 2.0               # sample tilt in degrees
 debug_gradients = True        # set True to save debug/gradient_comparison.png
 # Set euler_angles_override to a (phi1, Phi, phi2) tuple in DEGREES to use a
 # fixed orientation instead of reading from the .ang file at x0.
 # Set to None to use the .ang file value (default).
+#euler_angles_override = euler_angles_deg = np.array([44.96, 90.14, 357.09])  # [phi1, Phi, phi2] in degrees # e.g. (0.0, 45.0, 0.0)
 euler_angles_override = None
 
 
 # ---- Output folder setup ----
 base_folder_name = f'{component}_{date}_npyfiles'
-foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/SiGe/{base_folder_name}/'
+foldername = f'/Users/crestiennedechaine/Scripts/DIC-HREBSD/DIC-HREBSD/results/Si-Indent/{base_folder_name}/'
 
 os.makedirs(foldername, exist_ok=True)  # Set to False since we want unique folders
 
@@ -56,18 +56,18 @@ os.makedirs(foldername, exist_ok=True)  # Set to False since we want unique fold
 pat_obj = Data.UP2(up2)
 pat_obj.set_processing(
     low_pass_sigma=1.5,
-    high_pass_sigma=80.0,
-    truncate_std_scale=3.5,
-    mask_type="none",               # options: "circular", "center_cross", "none"
+    high_pass_sigma=10.0,
+    truncate_std_scale=3.0,
+    mask_type="center_cross",       # options: "circular", "center_cross", "none"
     center_cross_half_width=6,
-    clahe_kernel=(4, 4),            # smaller = more local contrast at band edges
-    clahe_clip=0.02,                # more aggressive than default 0.005
+    clahe_kernel=(4, 4),
+    clahe_clip=0.02,
     clahe_nbins=256,
     use_clahe=False,                 # applied before low-pass, after high-pass
-    flip_x=False,                   # flip patterns horizontally (across y-axis)
-    rescale_to_uint16=True,         # stretch raw uint16 to full dynamic range
-    unsharp_sigma=0.0,              # sharpens Kikuchi band edges; try 1–4
-    unsharp_strength=1.5,           # boost amount; try 0.5–3
+    flip_x=False,
+    rescale_to_uint16=True,
+    unsharp_sigma=0.0,
+    unsharp_strength=1.5,
 )
 print(pat_obj)
 
@@ -108,7 +108,7 @@ else:
     print("Reference pattern Euler angles (degrees):", np.rad2deg(euler_angles_ref))
 pc_ref = ang_data.pc  # (xstar, ystar, zstar)
 print("Reference pattern PC:", pc_ref)
-use_simulated_reference = False  
+
 # ------ Refine PC and Euler angles against the experimental reference ------
 if use_simulated_reference:
     euler_angles_ref, pc_ref = optimize_pc_and_euler(
@@ -126,7 +126,7 @@ if use_simulated_reference:
 
 print(f"Scan shape from ang_data: {ang_data.shape}")
 optimize_params = dict(
-    init_type='partial',  # 'full' or 'partial' (partial uses the provided x0 as a reference pattern and initializes others with homography-based guess)
+    init_type='partial',  # 'full' or 'partial' (partial uses the reference pattern as the initial guess, full starts from identity homography)
     crop_fraction=0.9,
     max_iter=150,
     conv_tol=1e-3,
@@ -294,4 +294,15 @@ if plot_first_row_linemap:
     plt.close()
     print(f"Saved first-row line map to {linemap_path}")
 
-
+# ------ IPF map ------
+print("Generating IPF map from ANG file...")
+for direction in ("ND", "RD", "TD"):
+    plot_ipf_map(
+        ang_path        = ang,
+        direction_label = direction,
+        patshape        = pat_obj.patshape,
+        save_path       = f"{foldername}{component}_IPF_{direction}_{date}.png",
+        show            = False,
+    )
+    plt.close("all")
+print("IPF maps saved.")

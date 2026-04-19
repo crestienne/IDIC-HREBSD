@@ -62,17 +62,9 @@ class ParameterSweepDialog(QDialog):
         cfg_form = QFormLayout(cfg)
 
         self._hp_edit = QLineEdit("5, 10, 15, 20")
-        self._hp_edit.setToolTip(
-            "Comma-separated high-pass sigma values.\n"
-            "These become the rows of the result grid."
-        )
         cfg_form.addRow("High-pass \u03c3 values:", self._hp_edit)
 
         self._ck_edit = QLineEdit("4, 6, 8")
-        self._ck_edit.setToolTip(
-            "Comma-separated CLAHE kernel values (integers).\n"
-            "These become the columns of the result grid."
-        )
         cfg_form.addRow("CLAHE kernel values:", self._ck_edit)
 
         self._fixed_lbl = QLabel(self._fixed_str())
