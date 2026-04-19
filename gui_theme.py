@@ -5,6 +5,7 @@ Edit the THEME dict to restyle the whole GUI without touching any other file.
 """
 
 import os
+import tempfile
 
 from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QFileDialog,
@@ -51,6 +52,18 @@ THEME = {
     "run_btn_bg":   "#2e7d32",   # Run Pipeline button background
     "run_btn_text": "#ffffff",
 }
+
+
+_CHECKMARK_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14">'
+    '<polyline points="2,7 5,11 12,3" stroke="#111111" stroke-width="2.5"'
+    ' fill="none" stroke-linecap="round" stroke-linejoin="round"/>'
+    '</svg>'
+)
+_tmp = tempfile.NamedTemporaryFile(suffix=".svg", delete=False, mode="w")
+_tmp.write(_CHECKMARK_SVG)
+_tmp.close()
+_CHECKMARK_PATH = _tmp.name
 
 
 def apply_theme(app) -> None:
@@ -179,15 +192,16 @@ def apply_theme(app) -> None:
             spacing: 6px;
         }}
         QCheckBox::indicator {{
-            width: 14px;
-            height: 14px;
+            width: 16px;
+            height: 16px;
             border: 1px solid {t["border"]};
             border-radius: 3px;
-            background-color: {t["input_bg"]};
+            background-color: {t["surface_bg"]};
         }}
         QCheckBox::indicator:checked {{
             background-color: {t["accent"]};
             border-color: {t["accent"]};
+            image: url("{_CHECKMARK_PATH}");
         }}
         QScrollArea, QScrollBar {{
             background-color: {t["window_bg"]};
