@@ -53,9 +53,9 @@ class ScanGrid:
 
 _CONVENTIONS = {
     #                          x_sign  y_sign   description
-    "standard":        dict(x_sign=-1, y_sign=-1),  # origin lower-right, x←, y↑
+    "lower_right":     dict(x_sign=-1, y_sign=-1),  # origin lower-right, x←, y↑
     "direct_electron": dict(x_sign=-1, y_sign=+1),  # origin upper-right, x←, y↓
-    "upper_left":      dict(x_sign=+1, y_sign=+1),  # origin upper-left,  x→, y↓
+    "standard":      dict(x_sign=+1, y_sign=+1),  # origin upper-left,  x→, y↓
 }
 
 
