@@ -291,9 +291,6 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
     print(np.round(TS_inv[0, 0], 6))
     print("(expected: 3×3 identity)")
 
-    #print an example TS_inv matrix to check --- IGNORE ---
-    print("Example TS_inv matrix at [2,2]:")
-    print(np.round(TS_inv[1, 130], 6))
 
     W_corrected = TS_inv @ W
    #W_corrected = np.einsum('...ij,...jk->...ik', TS_inv, W)

@@ -70,7 +70,10 @@ class patternSimulation():
         '''
 
         #convert E to a tensor
-        E = torch.tensor(Euler, dtype=torch.float32, device =self.device)[None, :]
+        # subtract π/2 from φ₁ to align the crystal reference frame convention
+        # Euler_adj = np.array(Euler, dtype=np.float32)
+        # Euler_adj[0] = Euler_adj[0] - np.pi / 2.0
+        E = torch.tensor(Euler, dtype=torch.float32, device=self.device)[None, :]
         self.quats = bu2qu(E) #convert the Euler angles to quaternions
         self.quats = self.quats.repeat(self.batch, 1) #repeat the quaternions for the batch size
 
@@ -85,7 +88,7 @@ class patternSimulation():
         #convert the pattern center and tilt angles to SE3 vector
         rotation, translation = bruker_geometry_to_SE3(
             pattern_centers= self.pattern_centerInit,
-            primary_tilt_deg = torch.tensor([-(self.detector_tilt_deg - self.sample_tilt_deg)], device=self.device, dtype=self.dtype),
+            primary_tilt_deg = torch.tensor([-(self.sample_tilt_deg - self.detector_tilt_deg)], device=self.device, dtype=self.dtype),
             secondary_tilt_deg=torch.tensor([self.azimuthal_deg], device=self.device, dtype=self.dtype),
             detector_shape= self.det_shape,
         )

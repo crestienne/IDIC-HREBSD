@@ -155,6 +155,9 @@ class PipelineWorker(QThread):
         if ref_mode == "per_grain":
             h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols = \
                 self._run_per_grain(p, pat_obj, ang_data, core)
+        elif ref_mode == "simulated":
+            h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols = \
+                self._run_simulated(p, pat_obj, ang_data, core)
         else:
             h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols = \
                 self._run_single(p, pat_obj, ang_data, core)
@@ -334,6 +337,71 @@ class PipelineWorker(QThread):
             self.log_signal.emit(
                 f"Grain mask applied — {n_kept}/{len(bbox_mask)} pixels kept."
             )
+
+        return h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols
+
+    # ── Simulated-reference path ──────────────────────────────────────────────
+
+    def _run_simulated(self, p, pat_obj, ang_data, core):
+        import time
+
+        euler_rad = np.deg2rad(p["euler_deg"])   # (phi1, Phi, phi2) radians
+        pc_ref    = ang_data.pc
+
+        self.log_signal.emit(
+            f"Simulated reference — φ₁={p['euler_deg'][0]:.2f}°  "
+            f"Φ={p['euler_deg'][1]:.2f}°  φ₂={p['euler_deg'][2]:.2f}°"
+        )
+        self.log_signal.emit(f"Master pattern: {p['master_pattern_path']}")
+
+        optimize_params = dict(
+            init_type            = p["init_type"],
+            crop_fraction        = p["crop_fraction"],
+            max_iter             = p["max_iter"],
+            conv_tol             = 1e-3,
+            n_jobs               = p["n_jobs"],
+            verbose              = True,
+            roi_slice            = p.get("roi_slice", None),
+            scan_shape           = ang_data.shape,
+            mask                 = pat_obj.get_mask(),
+            use_simulated_reference = True,
+            master_pattern_path  = p["master_pattern_path"],
+            euler_angles_ref     = euler_rad,
+            pc_ref               = pc_ref,
+            tilt_deg             = p["tilt"],
+            debug_gradients      = False,
+        )
+
+        self.log_signal.emit("Starting optimization with simulated reference…")
+        t0     = time.perf_counter()
+        result = core.optimize(pat_obj, 0, **optimize_params)
+        if len(result) == 5:
+            h, h_guess, iterations, residuals, dp_norms = result
+        else:
+            h, iterations, residuals, dp_norms = result
+            h_guess = None
+        dt    = time.perf_counter() - t0
+        n_pat = iterations.size
+        self.log_signal.emit(
+            f"Optimization complete: {dt:.1f} s total, "
+            f"{dt / n_pat * 1000:.2f} ms/pattern"
+        )
+
+        if h.ndim == 3:
+            eff_rows, eff_cols = h.shape[0], h.shape[1]
+            h          = h.reshape(-1, 8)
+            if h_guess is not None:
+                h_guess = h_guess.reshape(-1, 8)
+            iterations = iterations.flatten()
+            residuals  = residuals.flatten()
+            dp_norms   = dp_norms.flatten()
+        else:
+            roi_slice = p.get("roi_slice", None)
+            if roi_slice is not None:
+                eff_rows = roi_slice[0].stop - roi_slice[0].start
+                eff_cols = roi_slice[1].stop - roi_slice[1].start
+            else:
+                eff_rows, eff_cols = ang_data.shape
 
         return h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols
 
@@ -712,6 +780,70 @@ class SweepWorker(QThread):
 # ─────────────────────────────────────────────────────────────────────────────
 # Pattern preview worker
 # ─────────────────────────────────────────────────────────────────────────────
+
+class SimRefWorker(QThread):
+    """Generate a simulated reference pattern via SimPatGen / ebsdtorch."""
+    done_signal  = pyqtSignal(object)   # numpy float32 array, normalised 0-1
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, master_path: str, euler_deg: tuple, pc: tuple,
+                 det_shape: tuple, det_tilt_deg: float, sample_tilt_deg: float = 70.0):
+        super().__init__()
+        self.master_path     = master_path
+        self.euler_deg       = euler_deg       # (phi1, Phi, phi2) in degrees
+        self.pc              = pc              # (x*, y*, z*) EDAX convention
+        self.det_shape       = det_shape       # (H, W)
+        self.det_tilt_deg    = det_tilt_deg    # detector tilt from Step 2
+        self.sample_tilt_deg = sample_tilt_deg # sample tilt from Step 2
+
+    def run(self):
+        try:
+            from PatternSimulation.SimPatGen import patternSimulation
+            sim = patternSimulation()
+            # ── Geometry from Step 2 ──────────────────────────────────────────
+            sim.detector_height  = self.det_shape[0]
+            sim.detector_width   = self.det_shape[1]
+            sim.det_shape        = self.det_shape
+            sim.detector_tilt_deg  = self.det_tilt_deg    # e.g. 10 °
+            sim.sample_tilt_deg    = self.sample_tilt_deg  # e.g. 70 °
+            # bruker_geometry_to_SE3 uses -(detector_tilt - sample_tilt)
+            print(f"Detector shape:   {sim.det_shape}")
+            print(f"Sample tilt:      {sim.sample_tilt_deg} °")
+            print(f"Detector tilt:    {sim.detector_tilt_deg} °")
+            print(f"Primary tilt arg: {-(sim.detector_tilt_deg - sim.sample_tilt_deg):.1f} °")
+            # ─────────────────────────────────────────────────────────────────
+            sim.mastersetup(self.master_path)
+            import conversions
+            euler_rad = np.deg2rad(self.euler_deg)
+
+            # ── PC convention passed to EandPCSet ─────────────────────────────
+            # self.pc is in EDAX/TSL convention (x*, y*, z*).
+            # EandPCSet calls bruker_geometry_to_SE3 internally, so Bruker PC
+            # must be supplied.  Change the line below if your PC is already
+            # in Bruker convention (comment out the conversion and pass self.pc).
+            pc_edax   = self.pc                              # received as EDAX
+            pc_bruker = conversions.Edax_to_Bruker_PC(pc_edax)   # → Bruker (pcy = 1 - y*)
+            print(f"PC (EDAX):   {pc_edax}")
+            print(f"PC (Bruker): {pc_bruker}")
+            # ─────────────────────────────────────────────────────────────────
+
+            sim.EandPCSet(euler_rad, list(pc_bruker), verbose=False)
+            pat = sim.GenPattern()
+            pat_np = pat.detach().cpu().numpy().astype(np.float32)
+            # project_hrebsd returns (B, H*W) — reshape to (H, W)
+            H, W = self.det_shape
+            pat_np = pat_np.reshape(H, W)
+            # ebsdtorch maps the detector column axis to sample-y with an
+            # implicit left-right orientation opposite to the stored image.
+            # Flip horizontally so the simulated pattern matches the
+            # experimental detector image convention.
+            pat_np = np.fliplr(pat_np)
+            lo, hi = pat_np.min(), pat_np.max()
+            pat_np = (pat_np - lo) / (hi - lo + 1e-9)
+            self.done_signal.emit(pat_np)
+        except Exception:
+            self.error_signal.emit(traceback.format_exc())
+
 
 class PatternPreviewWorker(QThread):
     """Load one pattern from a UP2 file, return raw and processed versions."""

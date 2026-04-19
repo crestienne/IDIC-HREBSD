@@ -25,12 +25,12 @@ from PyQt6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox,
     QRadioButton, QButtonGroup,
     QTextEdit, QWidget, QScrollArea,
-    QSizePolicy, QSplitter, QDialog,
+    QSizePolicy, QSplitter, QDialog, QFileDialog,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
 from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
-from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker
+from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker, SimRefWorker
 from gui_visualization import VisualizationDialog
 from gui_sweep import ParameterSweepDialog
 
@@ -1191,6 +1191,190 @@ class ROISelectionPage(QWizardPage):
 # Page 4 — Reference Pattern Selection
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Simulated-pattern live tuner dialog
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SimTunerDialog(QDialog):
+    """
+    Interactive dialog for live adjustment of Euler angles and pattern center.
+
+    Changing any spinbox triggers a 600 ms debounce timer; when it fires a new
+    SimRefWorker is launched and the canvas updates automatically.
+
+    applied_signal emits (euler_deg: tuple, pc_edax: tuple) when the user
+    clicks "Apply to Reference".
+    """
+    applied_signal = pyqtSignal(tuple, tuple)
+
+    def __init__(self, master_path: str, euler_deg: tuple, pc_edax: tuple,
+                 det_shape: tuple, det_tilt_deg: float, sample_tilt_deg: float = 70.0,
+                 parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Simulated Pattern Live Tuner")
+        self.setMinimumSize(960, 520)
+        self._master_path     = master_path
+        self._det_shape       = det_shape
+        self._det_tilt_deg    = det_tilt_deg
+        self._sample_tilt_deg = sample_tilt_deg
+        self._worker          = None
+
+        # ── Debounce timer ────────────────────────────────────────────────────
+        self._timer = QTimer()
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(600)   # ms — increase if generation is slow
+        self._timer.timeout.connect(self._generate)
+
+        # ── Controls (left column) ────────────────────────────────────────────
+        ctrl = QVBoxLayout()
+        ctrl.setSpacing(8)
+
+        # Euler angles
+        eu_group  = QGroupBox("Euler Angles (Bunge ZXZ, degrees)")
+        eu_layout = QFormLayout()
+
+        eu_step_combo = QComboBox()
+        eu_step_combo.addItems(["0.01", "0.1", "1.0", "5.0", "10.0"])
+        eu_step_combo.setCurrentText("1.0")
+        eu_layout.addRow("Arrow-key step (°):", eu_step_combo)
+
+        self._phi1 = QDoubleSpinBox(); self._phi1.setRange(0, 360); self._phi1.setDecimals(3); self._phi1.setSuffix(" °"); self._phi1.setValue(euler_deg[0]); self._phi1.setSingleStep(1.0)
+        self._Phi  = QDoubleSpinBox(); self._Phi.setRange(0, 180);  self._Phi.setDecimals(3);  self._Phi.setSuffix(" °");  self._Phi.setValue(euler_deg[1]);  self._Phi.setSingleStep(1.0)
+        self._phi2 = QDoubleSpinBox(); self._phi2.setRange(0, 360); self._phi2.setDecimals(3); self._phi2.setSuffix(" °"); self._phi2.setValue(euler_deg[2]); self._phi2.setSingleStep(1.0)
+        eu_layout.addRow("φ₁ (phi1):", self._phi1)
+        eu_layout.addRow("Φ  (Phi):",  self._Phi)
+        eu_layout.addRow("φ₂ (phi2):", self._phi2)
+        eu_group.setLayout(eu_layout)
+        ctrl.addWidget(eu_group)
+
+        eu_step_combo.currentTextChanged.connect(
+            lambda t: [w.setSingleStep(float(t)) for w in (self._phi1, self._Phi, self._phi2)]
+        )
+
+        # Pattern center
+        pc_group  = QGroupBox("Pattern Center (EDAX/TSL convention)")
+        pc_layout = QFormLayout()
+
+        pc_step_combo = QComboBox()
+        pc_step_combo.addItems(["0.0001", "0.001", "0.005", "0.01"])
+        pc_step_combo.setCurrentText("0.001")
+        pc_layout.addRow("Arrow-key step:", pc_step_combo)
+
+        self._pcx = QDoubleSpinBox(); self._pcx.setRange(0, 2); self._pcx.setDecimals(5); self._pcx.setValue(pc_edax[0]); self._pcx.setSingleStep(0.001)
+        self._pcy = QDoubleSpinBox(); self._pcy.setRange(0, 2); self._pcy.setDecimals(5); self._pcy.setValue(pc_edax[1]); self._pcy.setSingleStep(0.001)
+        self._pcz = QDoubleSpinBox(); self._pcz.setRange(0, 2); self._pcz.setDecimals(5); self._pcz.setValue(pc_edax[2]); self._pcz.setSingleStep(0.001)
+        pc_layout.addRow("x*:", self._pcx)
+        pc_layout.addRow("y*:", self._pcy)
+        pc_layout.addRow("z*:", self._pcz)
+        pc_group.setLayout(pc_layout)
+        ctrl.addWidget(pc_group)
+
+        pc_step_combo.currentTextChanged.connect(
+            lambda t: [w.setSingleStep(float(t)) for w in (self._pcx, self._pcy, self._pcz)]
+        )
+
+        # Fixed geometry (read-only info from Step 2)
+        geo_group  = QGroupBox("Detector Geometry  (from Step 2 — read-only)")
+        geo_layout = QFormLayout()
+        geo_layout.addRow("Detector size:",   QLabel(f"{det_shape[0]} × {det_shape[1]} px"))
+        geo_layout.addRow("Sample tilt:",     QLabel(f"{sample_tilt_deg:.1f} °"))
+        geo_layout.addRow("Detector tilt:",   QLabel(f"{det_tilt_deg:.1f} °"))
+        geo_group.setLayout(geo_layout)
+        ctrl.addWidget(geo_group)
+
+        # Wire all spinboxes to debounce
+        for w in (self._phi1, self._Phi, self._phi2, self._pcx, self._pcy, self._pcz):
+            w.valueChanged.connect(self._on_value_changed)
+
+        # Status + buttons
+        self._status = QLabel("Generating initial pattern…")
+        self._status.setWordWrap(True)
+        self._status.setStyleSheet(f"color: {THEME['warning']}; font-size: 11px;")
+        ctrl.addWidget(self._status)
+
+        apply_btn = QPushButton("Apply to Reference Page")
+        apply_btn.setToolTip("Push current Euler angles and PC back to the reference page spinboxes.")
+        apply_btn.clicked.connect(self._apply)
+        ctrl.addWidget(apply_btn)
+        ctrl.addStretch()
+
+        # ── Canvas (right) ────────────────────────────────────────────────────
+        self._fig = Figure(figsize=(5, 5))
+        self._fig.subplots_adjust(left=0.02, right=0.98, top=0.92, bottom=0.02)
+        self._ax  = self._fig.add_subplot(111)
+        self._ax.axis("off")
+        self._canvas = FigureCanvas(self._fig)
+        self._canvas.setMinimumSize(420, 420)
+
+        # ── Assemble ──────────────────────────────────────────────────────────
+        outer = QHBoxLayout()
+        outer.setSpacing(12)
+        ctrl_w = QWidget()
+        ctrl_w.setLayout(ctrl)
+        ctrl_w.setFixedWidth(300)
+        outer.addWidget(ctrl_w)
+        outer.addWidget(self._canvas, stretch=1)
+        self.setLayout(outer)
+
+        # Fire first generation immediately
+        self._generate()
+
+    # ── Slots ─────────────────────────────────────────────────────────────────
+
+    def _on_value_changed(self):
+        self._timer.start()   # restart debounce each time a spinbox changes
+
+    def _generate(self):
+        # Silently drop the previous worker's result if it's still running
+        if self._worker and self._worker.isRunning():
+            try:
+                self._worker.done_signal.disconnect()
+                self._worker.error_signal.disconnect()
+            except RuntimeError:
+                pass
+
+        euler_deg = (self._phi1.value(), self._Phi.value(), self._phi2.value())
+        pc_edax   = (self._pcx.value(), self._pcy.value(), self._pcz.value())
+
+        self._status.setText("Generating…")
+        self._status.setStyleSheet(f"color: {THEME['warning']}; font-size: 11px;")
+
+        self._worker = SimRefWorker(
+            self._master_path, euler_deg, pc_edax,
+            self._det_shape,
+            det_tilt_deg    = self._det_tilt_deg,
+            sample_tilt_deg = self._sample_tilt_deg,
+        )
+        self._worker.done_signal.connect(self._on_done)
+        self._worker.error_signal.connect(self._on_error)
+        self._worker.start()
+
+    def _on_done(self, pat_np: np.ndarray):
+        eu = (self._phi1.value(), self._Phi.value(), self._phi2.value())
+        pc = (self._pcx.value(), self._pcy.value(), self._pcz.value())
+        self._ax.cla()
+        self._ax.imshow(pat_np, cmap="gray", vmin=0, vmax=1, origin="upper")
+        self._ax.set_title(
+            f"φ₁={eu[0]:.2f}°  Φ={eu[1]:.2f}°  φ₂={eu[2]:.2f}°\n"
+            f"PC (EDAX): ({pc[0]:.4f}, {pc[1]:.4f}, {pc[2]:.4f})",
+            fontsize=9,
+        )
+        self._ax.axis("off")
+        self._canvas.draw()
+        self._status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
+        self._status.setStyleSheet(f"color: {THEME['success']}; font-size: 11px;")
+
+    def _on_error(self, msg: str):
+        self._status.setText(f"Error: {msg.splitlines()[-1]}")
+        self._status.setStyleSheet(f"color: {THEME['error']}; font-size: 11px;")
+
+    def _apply(self):
+        euler_deg = (self._phi1.value(), self._Phi.value(), self._phi2.value())
+        pc_edax   = (self._pcx.value(), self._pcy.value(), self._pcz.value())
+        self.applied_signal.emit(euler_deg, pc_edax)
+        self.close()
+
+
 class ReferencePatternPage(QWizardPage):
 
     def __init__(self):
@@ -1204,19 +1388,27 @@ class ReferencePatternPage(QWizardPage):
         self._ref_marker    = None
         self._grain_markers = []   # per-grain mode: one marker per grain
         self._ipf_worker    = None
+        self._sim_worker    = None
         self._ref_pattern_set: ReferencePatternSet = None
+        self._sim_pat_array = None   # last generated simulated pattern
+        self._sim_exp_pat   = None   # experimental pattern at the clicked position
+        self._sim_ref_row   = 0
+        self._sim_ref_col   = 0
 
         # ── Mode selector ─────────────────────────────────────────────────────
         mode_group  = QGroupBox("Reference Mode")
         mode_layout = QHBoxLayout()
         self._single_radio   = QRadioButton("Single reference")
         self._pergrain_radio = QRadioButton("Per-grain (auto)")
+        self._sim_radio      = QRadioButton("Simulated")
         self._single_radio.setChecked(True)
         self._mode_grp = QButtonGroup(self)
         self._mode_grp.addButton(self._single_radio,   0)
         self._mode_grp.addButton(self._pergrain_radio, 1)
+        self._mode_grp.addButton(self._sim_radio,      2)
         mode_layout.addWidget(self._single_radio)
         mode_layout.addWidget(self._pergrain_radio)
+        mode_layout.addWidget(self._sim_radio)
         mode_layout.addStretch()
         mode_group.setLayout(mode_layout)
 
@@ -1264,6 +1456,47 @@ class ReferencePatternPage(QWizardPage):
         ))
         self._grain_info_group.setLayout(grain_info_layout)
         left_layout.addWidget(self._grain_info_group)
+
+        # Simulated reference group
+        self._sim_group  = QGroupBox("Simulated Reference")
+        sim_layout = QFormLayout()
+
+        self._sim_mp_edit = QLineEdit()
+        self._sim_mp_edit.setPlaceholderText("Path to EMsoft .h5 master pattern…")
+        self._sim_mp_btn  = QPushButton("Browse…")
+        self._sim_mp_btn.setFixedWidth(80)
+        self._sim_mp_btn.clicked.connect(self._browse_master_pattern)
+        mp_row = QWidget(); mph = QHBoxLayout(mp_row); mph.setContentsMargins(0,0,0,0)
+        mph.addWidget(self._sim_mp_edit); mph.addWidget(self._sim_mp_btn)
+        sim_layout.addRow("Master pattern:", mp_row)
+
+        self._sim_phi1 = QDoubleSpinBox(); self._sim_phi1.setRange(0, 360); self._sim_phi1.setDecimals(3); self._sim_phi1.setSuffix(" °")
+        self._sim_Phi  = QDoubleSpinBox(); self._sim_Phi.setRange(0, 180);  self._sim_Phi.setDecimals(3);  self._sim_Phi.setSuffix(" °")
+        self._sim_phi2 = QDoubleSpinBox(); self._sim_phi2.setRange(0, 360); self._sim_phi2.setDecimals(3); self._sim_phi2.setSuffix(" °")
+        sim_layout.addRow("φ₁ (phi1):", self._sim_phi1)
+        sim_layout.addRow("Φ  (Phi):",  self._sim_Phi)
+        sim_layout.addRow("φ₂ (phi2):", self._sim_phi2)
+        sim_layout.addRow(_note("Click the IPF map to auto-fill from scan orientation."))
+
+        self._sim_gen_btn = QPushButton("Generate Pattern")
+        self._sim_gen_btn.clicked.connect(self._generate_sim_pattern)
+        sim_layout.addRow("", self._sim_gen_btn)
+
+        self._sim_tuner_btn = QPushButton("Open Live Tuner…")
+        self._sim_tuner_btn.setToolTip(
+            "Open an interactive window where you can adjust Euler angles "
+            "and PC values and see the simulated pattern update in real time."
+        )
+        self._sim_tuner_btn.clicked.connect(self._open_sim_tuner)
+        sim_layout.addRow("", self._sim_tuner_btn)
+
+        self._sim_status = QLabel("")
+        self._sim_status.setStyleSheet("color: gray; font-size: 11px;")
+        self._sim_status.setWordWrap(True)
+        sim_layout.addRow(self._sim_status)
+
+        self._sim_group.setLayout(sim_layout)
+        left_layout.addWidget(self._sim_group)
 
         # Pattern preview
         pat_group  = QGroupBox("Pattern Preview")
@@ -1330,8 +1563,30 @@ class ReferencePatternPage(QWizardPage):
         outer.addLayout(panels, stretch=1)
         self.setLayout(outer)
 
+        # Simulated pattern viewer window
+        _bg = THEME["surface_bg"]
+        self._sim_dialog = QDialog(self)
+        self._sim_dialog.setWindowTitle("Simulated vs Experimental Reference Pattern")
+        self._sim_dialog.resize(1300, 520)
+        _sdlg_layout = QVBoxLayout(self._sim_dialog)
+        self._sim_pat_fig = Figure(tight_layout=True, facecolor=_bg)
+        self._sim_pat_ax_exp  = self._sim_pat_fig.add_subplot(131)   # left:   experimental
+        self._sim_pat_ax_sim  = self._sim_pat_fig.add_subplot(132)   # centre: simulated
+        self._sim_pat_ax_diff = self._sim_pat_fig.add_subplot(133)   # right:  difference
+        for ax in (self._sim_pat_ax_exp, self._sim_pat_ax_sim, self._sim_pat_ax_diff):
+            ax.set_facecolor(_bg)
+        self._sim_pat_canvas = FigureCanvas(self._sim_pat_fig)
+        self._sim_pat_canvas.setStyleSheet(f"background-color: {_bg};")
+        self._sim_pat_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._sim_dlg_status = QLabel("")
+        self._sim_dlg_status.setStyleSheet("color: gray; font-size: 11px;")
+        self._sim_dlg_status.setWordWrap(True)
+        _sdlg_layout.addWidget(self._sim_pat_canvas, stretch=1)
+        _sdlg_layout.addWidget(self._sim_dlg_status)
+
         # Initial visibility
         self._grain_info_group.setVisible(False)
+        self._sim_group.setVisible(False)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1359,11 +1614,14 @@ class ReferencePatternPage(QWizardPage):
     def _on_mode_changed(self, btn_id: int, checked: bool):
         if not checked:
             return
-        is_single = (btn_id == 0)
-        self._pos_group.setVisible(is_single)
-        self._grain_info_group.setVisible(not is_single)
-        if not is_single:
+        self._pos_group.setVisible(btn_id == 0)
+        self._grain_info_group.setVisible(btn_id == 1)
+        self._sim_group.setVisible(btn_id == 2)
+        if btn_id == 1:
             self._auto_select_references()
+        elif btn_id == 0:
+            self._clear_grain_markers()
+            self._update_ref_marker()
         else:
             self._clear_grain_markers()
             self._update_ref_marker()
@@ -1468,6 +1726,17 @@ class ReferencePatternPage(QWizardPage):
             self.ref_row.blockSignals(False)
             self.ref_col.blockSignals(False)
             self._update_ref_marker()
+        elif self._sim_radio.isChecked():
+            self._sim_ref_row = row
+            self._sim_ref_col = col
+            ang_data = wiz.ang_data
+            if ang_data is not None:
+                eu = ang_data.eulers[row, col]  # radians
+                self._sim_phi1.setValue(float(np.degrees(eu[0])))
+                self._sim_Phi.setValue( float(np.degrees(eu[1])))
+                self._sim_phi2.setValue(float(np.degrees(eu[2])))
+                self._sim_status.setText(f"Euler angles loaded from row {row}, col {col}.")
+            self._update_ref_marker()
         else:
             # Per-grain: update the active grain's reference
             gid = self._grain_combo.currentData()
@@ -1549,11 +1818,171 @@ class ReferencePatternPage(QWizardPage):
         except Exception as exc:
             self._pat_status.setText(f"Error: {exc}")
 
+    # ── Simulated reference ───────────────────────────────────────────────────
+
+    def _browse_master_pattern(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select EMsoft master pattern", "",
+            "HDF5 Master Pattern (*.h5 *.hdf5);;All files (*)"
+        )
+        if path:
+            self._sim_mp_edit.setText(path)
+
+    def _generate_sim_pattern(self):
+        mp_path = self._sim_mp_edit.text().strip()
+        if not mp_path or not os.path.exists(mp_path):
+            self._sim_status.setText("Please select a valid master pattern file first.")
+            return
+
+        wiz  = self.wizard()
+        geom = wiz.geometry_page.get_params()
+        pc   = geom["pc_edax"]
+        det_shape = (geom["pat_h"], geom["pat_w"])
+        euler_deg = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
+
+        # Load the experimental pattern at the clicked position for comparison
+        self._sim_exp_pat = None
+        up2_path = wiz.field("up2_path")
+        if up2_path and os.path.exists(up2_path):
+            try:
+                import Data
+                pat_obj = Data.UP2(up2_path)
+                idx = self._sim_ref_row * geom["cols"] + self._sim_ref_col
+                if idx < pat_obj.nPatterns:
+                    raw = pat_obj.read_pattern(idx, process=False).astype(np.float32)
+                    lo, hi = raw.min(), raw.max()
+                    self._sim_exp_pat = (raw - lo) / (hi - lo + 1e-9)
+            except Exception:
+                pass
+
+        self._sim_gen_btn.setEnabled(False)
+        self._sim_status.setText("Generating simulated pattern…")
+
+        self._sim_worker = SimRefWorker(
+            mp_path, euler_deg, pc, det_shape,
+            det_tilt_deg    = geom["det_tilt"],
+            sample_tilt_deg = geom["tilt"],
+        )
+        self._sim_worker.done_signal.connect(self._on_sim_done)
+        self._sim_worker.error_signal.connect(self._on_sim_error)
+        self._sim_worker.start()
+
+    def _on_sim_done(self, pat_np):
+        self._sim_pat_array = pat_np
+        self._sim_gen_btn.setEnabled(True)
+        eu = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
+        self._sim_status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
+
+        # Left: experimental (or placeholder if no UP2 loaded)
+        self._sim_pat_ax_exp.clear()
+        if self._sim_exp_pat is not None:
+            self._sim_pat_ax_exp.imshow(self._sim_exp_pat, cmap="gray", origin="upper")
+            self._sim_pat_ax_exp.set_title(
+                f"Experimental\nrow={self._sim_ref_row}, col={self._sim_ref_col}", fontsize=9
+            )
+        else:
+            self._sim_pat_ax_exp.text(0.5, 0.5, "No UP2 file\navailable",
+                                      ha="center", va="center", transform=self._sim_pat_ax_exp.transAxes,
+                                      fontsize=10, color="gray")
+            self._sim_pat_ax_exp.set_title("Experimental", fontsize=9)
+        self._sim_pat_ax_exp.axis("off")
+
+        # Centre: simulated
+        self._sim_pat_ax_sim.clear()
+        self._sim_pat_ax_sim.imshow(pat_np, cmap="gray", origin="upper")
+        self._sim_pat_ax_sim.set_title(
+            f"Simulated\nφ₁={eu[0]:.2f}°  Φ={eu[1]:.2f}°  φ₂={eu[2]:.2f}°", fontsize=9
+        )
+        self._sim_pat_ax_sim.axis("off")
+
+        # Right: absolute difference + NCC score
+        self._sim_pat_ax_diff.clear()
+        if self._sim_exp_pat is not None:
+            exp_r = self._sim_exp_pat
+            sim_r = pat_np
+            # Resize sim to match exp if shapes differ
+            if exp_r.shape != sim_r.shape:
+                from PIL import Image as _PIL
+                sim_r = np.array(
+                    _PIL.fromarray(sim_r).resize((exp_r.shape[1], exp_r.shape[0]),
+                                                 resample=_PIL.BILINEAR)
+                )
+            diff = np.abs(sim_r - exp_r)
+            # Normalised cross-correlation
+            e = exp_r - exp_r.mean(); s = sim_r - sim_r.mean()
+            denom = np.sqrt((e**2).sum() * (s**2).sum())
+            ncc = float((e * s).sum() / denom) if denom > 1e-10 else 0.0
+            im = self._sim_pat_ax_diff.imshow(diff, cmap="hot", origin="upper", vmin=0, vmax=1)
+            self._sim_pat_fig.colorbar(im, ax=self._sim_pat_ax_diff, fraction=0.046, pad=0.04)
+            self._sim_pat_ax_diff.set_title(f"|Sim − Exp|\nNCC = {ncc:.4f}", fontsize=9)
+        else:
+            self._sim_pat_ax_diff.text(0.5, 0.5, "No experimental\npattern available",
+                                       ha="center", va="center",
+                                       transform=self._sim_pat_ax_diff.transAxes,
+                                       fontsize=10, color="gray")
+            self._sim_pat_ax_diff.set_title("Difference", fontsize=9)
+            ncc = None
+        self._sim_pat_ax_diff.axis("off")
+
+        self._sim_pat_fig.tight_layout(pad=0.5)
+        self._sim_pat_canvas.draw()
+        ncc_str = f"  |  NCC = {ncc:.4f}" if ncc is not None else ""
+        self._sim_dlg_status.setText(
+            f"Experimental: row={self._sim_ref_row}, col={self._sim_ref_col}  |  "
+            f"Simulated: {pat_np.shape[0]}×{pat_np.shape[1]} px{ncc_str}"
+        )
+        self._sim_dialog.show()
+
+    def _on_sim_error(self, msg: str):
+        self._sim_gen_btn.setEnabled(True)
+        self._sim_status.setText(f"Error: {msg.splitlines()[-1]}")
+
+    def _open_sim_tuner(self):
+        mp_path = self._sim_mp_edit.text().strip()
+        if not mp_path or not os.path.exists(mp_path):
+            self._sim_status.setText("Select a master pattern file before opening the tuner.")
+            return
+
+        wiz      = self.wizard()
+        geom     = wiz.geometry_page.get_params()
+        pc_edax  = geom["pc_edax"]
+        det_shape = (geom["pat_h"], geom["pat_w"])
+        euler_deg = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
+
+        dlg = SimTunerDialog(
+            master_path     = mp_path,
+            euler_deg       = euler_deg,
+            pc_edax         = pc_edax,
+            det_shape       = det_shape,
+            det_tilt_deg    = geom["det_tilt"],
+            sample_tilt_deg = geom["tilt"],
+            parent          = self,
+        )
+        dlg.applied_signal.connect(self._on_tuner_applied)
+        dlg.show()
+
+    def _on_tuner_applied(self, euler_deg: tuple, _pc_edax: tuple):
+        """Push values from the tuner back into the reference page spinboxes."""
+        self._sim_phi1.setValue(euler_deg[0])
+        self._sim_Phi.setValue(euler_deg[1])
+        self._sim_phi2.setValue(euler_deg[2])
+        self._sim_status.setText(
+            f"Tuner applied — φ₁={euler_deg[0]:.2f}°  "
+            f"Φ={euler_deg[1]:.2f}°  φ₂={euler_deg[2]:.2f}°"
+        )
+
     def get_params(self) -> dict:
         if self._single_radio.isChecked():
             return {
                 "ref_mode":     "single",
                 "ref_position": (self.ref_row.value(), self.ref_col.value()),
+            }
+        if self._sim_radio.isChecked():
+            return {
+                "ref_mode":            "simulated",
+                "master_pattern_path": self._sim_mp_edit.text().strip(),
+                "euler_deg":           (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value()),
+                "sim_pat_array":       self._sim_pat_array,
             }
         return {
             "ref_mode":         "per_grain",
@@ -1805,15 +2234,53 @@ class PatternProcessingPage(QWizardPage):
     def _run_preview(self):
         wiz      = self.wizard()
         up2_path = wiz.field("up2_path")
+
+        ref_params = wiz.reference_page.get_params()
+
+        # ── Simulated reference: apply filters to the generated array directly ─
+        if ref_params.get("ref_mode") == "simulated":
+            sim_pat = ref_params.get("sim_pat_array")
+            if sim_pat is None:
+                self._prev_status.setText(
+                    "No simulated pattern yet — go back to Step 4 and click Generate."
+                )
+                return
+            self._prev_status.setText("Processing simulated pattern…")
+            try:
+                import Data
+                p = self.get_params()
+                pat_obj = Data.UP2(up2_path) if up2_path and os.path.exists(up2_path) else None
+                if pat_obj is not None:
+                    mask_type = p["mask_type"] if p["mask_type"] != "None" else None
+                    pat_obj.set_processing(
+                        low_pass_sigma          = p["low_pass_sigma"],
+                        high_pass_sigma         = p["high_pass_sigma"],
+                        truncate_std_scale      = 3.0,
+                        mask_type               = mask_type,
+                        center_cross_half_width = 6,
+                        use_clahe               = p.get("use_clahe", False),
+                        clahe_kernel            = (p["clahe_kernel"], p["clahe_kernel"]),
+                        clahe_clip              = p["clahe_clip"],
+                        clahe_nbins             = 256,
+                        flip_x                  = p["flip_x"],
+                    )
+                    processed = pat_obj.process_pattern(sim_pat.copy())
+                else:
+                    processed = sim_pat
+                self._on_preview_done(sim_pat, processed)
+                self._prev_status.setText("Simulated reference pattern (Step 4).")
+            except Exception as exc:
+                self._prev_status.setText(f"Error processing simulated pattern: {exc}")
+            return
+
+        # ── Experimental reference ────────────────────────────────────────────
         if not up2_path or not os.path.exists(up2_path):
             self._prev_status.setText("No UP2 file loaded — go back to Step 1.")
             return
 
-        # Use the reference pattern index if available, otherwise 0
         try:
-            ref_params = wiz.reference_page.get_params()
-            geom       = wiz.geometry_page.get_params()
-            if ref_params.get("ref_mode", "single") == "per_grain":
+            geom = wiz.geometry_page.get_params()
+            if ref_params.get("ref_mode") == "per_grain":
                 rps = ref_params.get("ref_pattern_set")
                 pat_idx = rps[0].ref_pat_idx if rps and len(rps) > 0 else 0
             else:
@@ -2072,7 +2539,9 @@ class OptimizationRunPage(QWizardPage):
             f"ROI              : {roi_str}",
             f"Reference mode   : {ref.get('ref_mode', 'single')}" + (
                 f"  (row={ref['ref_position'][0]}, col={ref['ref_position'][1]})"
-                if ref.get("ref_mode", "single") == "single"
+                if ref.get("ref_mode") == "single"
+                else f"  (φ₁={ref['euler_deg'][0]:.2f}° Φ={ref['euler_deg'][1]:.2f}° φ₂={ref['euler_deg'][2]:.2f}°)"
+                if ref.get("ref_mode") == "simulated"
                 else f"  ({len(ref.get('ref_pattern_set') or [])} grains)"
             ),
             f"Sample tilt      : {geom['tilt']} °",
