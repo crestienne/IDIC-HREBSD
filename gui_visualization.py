@@ -149,6 +149,17 @@ class VisualizationDialog(QDialog):
         self._apply_pc_correction = QCheckBox("Apply pattern centre drift correction")
         self._apply_pc_correction.setChecked(run_params.get("apply_pc_correction", False))
 
+        self._pc_warning = QLabel(
+            "\u26a0\ufe0f  Warning: for large scans, not accounting for PC shifts "
+            "can result in errors in the strain of significant magnitude."
+        )
+        self._pc_warning.setWordWrap(True)
+        self._pc_warning.setStyleSheet("color: #fab387; font-size: 11px;")
+        self._pc_warning.setVisible(not self._apply_pc_correction.isChecked())
+        self._apply_pc_correction.stateChanged.connect(
+            lambda state: self._pc_warning.setVisible(state == 0)
+        )
+
         self._scan_strategy = QComboBox()
         self._scan_strategy.addItems(["standard", "direct_electron", "upper_left"])
         self._scan_strategy.setCurrentText(run_params.get("scan_strategy", "standard"))
@@ -171,6 +182,7 @@ class VisualizationDialog(QDialog):
         self._pixel_size.setValue(run_params.get("pixel_size", 1.0))
 
         pc_corr_layout.addRow("", self._apply_pc_correction)
+        pc_corr_layout.addRow("", self._pc_warning)
         pc_corr_layout.addRow("Scan strategy:", self._scan_strategy)
         pc_corr_layout.addRow("Step size:", self._step_size)
         pc_corr_layout.addRow("Pixel size:", self._pixel_size)
