@@ -41,7 +41,7 @@ class _StdoutCapture(io.TextIOBase):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_SKIP_PARAMS = {"roi_slice", "_ang_data"}   # non-serialisable / not useful to log
+_SKIP_PARAMS = {"roi_slice", "_ang_data", "_grain_ids", "ref_pattern_set", "_roi_grain_mask", "_roi_grain_id"}   # non-serialisable / not useful to log
 
 def _write_params_txt(path: str, params: dict):
     """Write all GUI run parameters to a human-readable .txt file."""
@@ -108,7 +108,6 @@ class PipelineWorker(QThread):
             sys.stdout = old_stdout
 
     def _run_pipeline(self):
-        import time
         import Data
         import utilities
         import get_homography_cpu as core
@@ -140,81 +139,38 @@ class PipelineWorker(QThread):
         else:
             self.log_signal.emit("Using cached ANG data.")
 
-        x0 = np.ravel_multi_index(p["ref_position"], ang_data.shape)
-        self.log_signal.emit(
-            f"Reference pattern index: {x0}  "
-            f"(row={p['ref_position'][0]}, col={p['ref_position'][1]})"
-        )
-
-        euler_angles_ref = ang_data.eulers[np.unravel_index(x0, ang_data.shape)]
         pc_ref = ang_data.pc
         self.log_signal.emit(f"PC: {pc_ref}")
 
         os.makedirs(p["output_dir"], exist_ok=True)
 
-        # ── Save run parameters to a text file ───────────────────────────────
         _comp = p.get("component", "run")
         _date = p.get("date", "")
         params_txt_path = os.path.join(p["output_dir"], f"{_comp}_params_{_date}.txt")
         _write_params_txt(params_txt_path, p)
         self.log_signal.emit(f"Parameters saved → {os.path.basename(params_txt_path)}")
 
-        optimize_params = dict(
-            init_type=p["init_type"],
-            crop_fraction=p["crop_fraction"],
-            max_iter=p["max_iter"],
-            conv_tol=1e-3,
-            n_jobs=p["n_jobs"],
-            verbose=True,
-            roi_slice=p.get("roi_slice", None),
-            scan_shape=ang_data.shape,
-            mask=pat_obj.get_mask(),
-            use_simulated_reference=False,
-            master_pattern_path=None,
-            euler_angles_ref=euler_angles_ref,
-            pc_ref=pc_ref,
-            tilt_deg=p["tilt"],
-            debug_gradients=False,
-        )
+        ref_mode = p.get("ref_mode", "single")
 
-        self.log_signal.emit("Starting optimization…")
-        t0 = time.perf_counter()
-        _result = core.optimize(pat_obj, x0, **optimize_params)
-        if len(_result) == 5:
-            h, h_guess, iterations, residuals, dp_norms = _result
+        if ref_mode == "per_grain":
+            h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols = \
+                self._run_per_grain(p, pat_obj, ang_data, core)
         else:
-            h, iterations, residuals, dp_norms = _result
-            h_guess = None
-        dt = time.perf_counter() - t0
-        n_pat = iterations.size
-        self.log_signal.emit(
-            f"Optimization complete: {dt:.1f} s total, "
-            f"{dt / n_pat * 1000:.2f} ms/pattern"
-        )
+            h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols = \
+                self._run_single(p, pat_obj, ang_data, core)
 
-        # The optimizer returns h as (rows, cols, 8) when an ROI is used,
-        # or (N, 8) for the full scan. Derive eff_rows/eff_cols from the
-        # actual shape, then flatten to (N, 8) for downstream processing.
-        if h.ndim == 3:
-            eff_rows, eff_cols = h.shape[0], h.shape[1]
-            h = h.reshape(-1, 8)
-            if h_guess is not None:
-                h_guess = h_guess.reshape(-1, 8)
-            iterations = iterations.flatten()
-            residuals  = residuals.flatten()
-            dp_norms   = dp_norms.flatten()
-        else:
-            roi_slice = p.get("roi_slice", None)
-            if roi_slice is not None:
-                eff_rows = roi_slice[0].stop - roi_slice[0].start
-                eff_cols = roi_slice[1].stop - roi_slice[1].start
-            else:
-                eff_rows, eff_cols = ang_data.shape
-
+        # ── PC drift correction ───────────────────────────────────────────────
+        # For per-grain mode h spans the full scan (NaN where grain_id == 0).
+        # Temporarily replace NaN rows with zeros so the matrix math doesn't
+        # propagate NaN into neighbouring positions, then restore afterwards.
+        nan_mask = None
         if p.get("apply_pc_correction", True):
             from pc_homography_correction import correct_homographies
             self.log_signal.emit("Applying PC drift correction…")
-            h = correct_homographies(
+            if ref_mode == "per_grain":
+                nan_mask = np.any(np.isnan(h), axis=1)
+                h[nan_mask] = 0.0
+            h, _ = correct_homographies(
                 h=h,
                 scan_shape=(eff_rows, eff_cols),
                 step_size_um=p["step_size"],
@@ -225,6 +181,8 @@ class PipelineWorker(QThread):
                 detector_tilt_deg=p["det_tilt"],
                 convention=p.get("scan_strategy", "standard"),
             )
+            if nan_mask is not None:
+                h[nan_mask] = np.nan
             self.log_signal.emit("PC drift correction applied.")
 
         comp   = p["component"]
@@ -238,20 +196,40 @@ class PipelineWorker(QThread):
         if h_guess is not None:
             np.save(os.path.join(folder, f"{comp}_h_guess_{date}.npy"), h_guess)
 
-        # ── Compute strain / rotation and save results npz ────────────────────
+        # ── Strain / rotation ─────────────────────────────────────────────────
         self.log_signal.emit("Computing strain and rotation tensors…")
         import conversions
 
         pc_edax        = np.asarray(pc_ref, dtype=float)
         pc_bruker      = conversions.Edax_to_Bruker_PC(pc_edax)
         xo             = conversions.Bruker_to_fractional_PC(pc_bruker, pat_obj.patshape)
-        F              = conversions.h2F(h, xo)
-        epsilon, omega = conversions.F2strain(F)
 
-        R = utilities.rotation_matrix_passive(p["det_tilt"], p["tilt"])
-        for i in range(epsilon.shape[0]):
-            epsilon[i] = R @ epsilon[i] @ R.T
-            omega[i]   = R @ omega[i]   @ R.T
+        # h2F / F2strain don't handle NaN; compute only on valid rows.
+        # This applies to both per-grain mode and single-reference grain-ROI runs.
+        if ref_mode == "per_grain" or np.any(np.isnan(h)):
+            valid = ~np.any(np.isnan(h), axis=1)
+            h_valid = h[valid]
+            F_valid        = conversions.h2F(h_valid, xo)
+            eps_v, omega_v = conversions.F2strain(F_valid)
+            R = utilities.rotation_matrix_passive(p["det_tilt"], p["tilt"])
+            for i in range(eps_v.shape[0]):
+                eps_v[i]   = R @ eps_v[i]   @ R.T
+                omega_v[i] = R @ omega_v[i] @ R.T
+            N   = eff_rows * eff_cols
+            nan3 = np.full((N, 3, 3), np.nan)
+            F       = nan3.copy()
+            epsilon = nan3.copy()
+            omega   = nan3.copy()
+            F[valid]       = F_valid
+            epsilon[valid] = eps_v
+            omega[valid]   = omega_v
+        else:
+            F              = conversions.h2F(h, xo)
+            epsilon, omega = conversions.F2strain(F)
+            R = utilities.rotation_matrix_passive(p["det_tilt"], p["tilt"])
+            for i in range(epsilon.shape[0]):
+                epsilon[i] = R @ epsilon[i] @ R.T
+                omega[i]   = R @ omega[i]   @ R.T
 
         def _2d(arr):
             return arr.reshape(eff_rows, eff_cols)
@@ -272,6 +250,200 @@ class PipelineWorker(QThread):
         })
         self.log_signal.emit(f"Strain/rotation saved → {comp}_results_{date}.npy")
         self.log_signal.emit(f"All results saved to: {folder}")
+
+    # ── Single-reference path ─────────────────────────────────────────────────
+
+    def _run_single(self, p, pat_obj, ang_data, core):
+        import time
+
+        x0 = np.ravel_multi_index(p["ref_position"], ang_data.shape)
+        self.log_signal.emit(
+            f"Reference pattern index: {x0}  "
+            f"(row={p['ref_position'][0]}, col={p['ref_position'][1]})"
+        )
+
+        euler_angles_ref = ang_data.eulers[np.unravel_index(x0, ang_data.shape)]
+        pc_ref           = ang_data.pc
+
+        optimize_params = dict(
+            init_type=p["init_type"],
+            crop_fraction=p["crop_fraction"],
+            max_iter=p["max_iter"],
+            conv_tol=1e-3,
+            n_jobs=p["n_jobs"],
+            verbose=True,
+            roi_slice=p.get("roi_slice", None),
+            scan_shape=ang_data.shape,
+            mask=pat_obj.get_mask(),
+            use_simulated_reference=False,
+            master_pattern_path=None,
+            euler_angles_ref=euler_angles_ref,
+            pc_ref=pc_ref,
+            tilt_deg=p["tilt"],
+            debug_gradients=False,
+        )
+
+        self.log_signal.emit("Starting optimization…")
+        t0     = time.perf_counter()
+        result = core.optimize(pat_obj, x0, **optimize_params)
+        if len(result) == 5:
+            h, h_guess, iterations, residuals, dp_norms = result
+        else:
+            h, iterations, residuals, dp_norms = result
+            h_guess = None
+        dt    = time.perf_counter() - t0
+        n_pat = iterations.size
+        self.log_signal.emit(
+            f"Optimization complete: {dt:.1f} s total, "
+            f"{dt / n_pat * 1000:.2f} ms/pattern"
+        )
+
+        if h.ndim == 3:
+            eff_rows, eff_cols = h.shape[0], h.shape[1]
+            h           = h.reshape(-1, 8)
+            if h_guess is not None:
+                h_guess = h_guess.reshape(-1, 8)
+            iterations  = iterations.flatten()
+            residuals   = residuals.flatten()
+            dp_norms    = dp_norms.flatten()
+        else:
+            roi_slice = p.get("roi_slice", None)
+            if roi_slice is not None:
+                eff_rows = roi_slice[0].stop - roi_slice[0].start
+                eff_cols = roi_slice[1].stop - roi_slice[1].start
+            else:
+                eff_rows, eff_cols = ang_data.shape
+
+        # NaN out pixels inside the bounding box that don't belong to the
+        # selected grain (only applies when grain ROI mode is active)
+        grain_mask_full = p.get("_roi_grain_mask")
+        if grain_mask_full is not None:
+            roi_slice = p.get("roi_slice", None)
+            if roi_slice is not None:
+                bbox_mask = grain_mask_full[roi_slice[0], roi_slice[1]].ravel()
+            else:
+                bbox_mask = grain_mask_full.ravel()
+            non_grain = ~bbox_mask
+            h[non_grain]          = np.nan
+            iterations[non_grain] = np.nan
+            residuals[non_grain]  = np.nan
+            dp_norms[non_grain]   = np.nan
+            if h_guess is not None:
+                h_guess[non_grain] = np.nan
+            n_kept = int(bbox_mask.sum())
+            self.log_signal.emit(
+                f"Grain mask applied — {n_kept}/{len(bbox_mask)} pixels kept."
+            )
+
+        return h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols
+
+    # ── Per-grain path ────────────────────────────────────────────────────────
+
+    def _run_per_grain(self, p, pat_obj, ang_data, core):
+        import time
+
+        rps       = p["ref_pattern_set"]
+        grain_ids = p.get("_grain_ids")
+        if grain_ids is None:
+            raise RuntimeError(
+                "Per-grain mode requires grain_ids — run Step 3 segmentation first."
+            )
+
+        eff_rows, eff_cols = ang_data.shape
+        N = eff_rows * eff_cols
+
+        h_full          = np.full((N, 8),  np.nan, dtype=np.float64)
+        h_guess_full    = np.full((N, 8),  np.nan, dtype=np.float64)
+        iterations_full = np.full(N,       np.nan, dtype=np.float64)
+        residuals_full  = np.full(N,       np.nan, dtype=np.float64)
+        dp_norms_full   = np.full(N,       np.nan, dtype=np.float64)
+        has_h_guess     = False
+
+        common_opt = dict(
+            init_type=p["init_type"],
+            crop_fraction=p["crop_fraction"],
+            max_iter=p["max_iter"],
+            conv_tol=1e-3,
+            n_jobs=p["n_jobs"],
+            verbose=True,
+            scan_shape=ang_data.shape,
+            mask=pat_obj.get_mask(),
+            use_simulated_reference=False,
+            master_pattern_path=None,
+            pc_ref=ang_data.pc,
+            tilt_deg=p["tilt"],
+            debug_gradients=False,
+        )
+
+        t_total = time.perf_counter()
+
+        for gi, entry in enumerate(rps):
+            gid = entry.grain_id
+            self.log_signal.emit(
+                f"Grain {gid}  ({gi+1}/{len(rps)})  —  "
+                f"ref at row={entry.ref_row}, col={entry.ref_col}"
+            )
+
+            # Pixel mask for this grain and its bounding box
+            grain_mask = (grain_ids == gid)
+            row_idx, col_idx = np.where(grain_mask)
+            rmin, rmax = int(row_idx.min()), int(row_idx.max())
+            cmin, cmax = int(col_idx.min()), int(col_idx.max())
+            roi_slice = (slice(rmin, rmax + 1), slice(cmin, cmax + 1))
+
+            euler_ref = np.array(entry.euler) if entry.euler is not None \
+                else ang_data.eulers[entry.ref_row, entry.ref_col]
+
+            t0     = time.perf_counter()
+            result = core.optimize(
+                pat_obj, entry.ref_pat_idx,
+                roi_slice=roi_slice,
+                euler_angles_ref=euler_ref,
+                **common_opt,
+            )
+            if len(result) == 5:
+                h_g, h_guess_g, iters_g, resid_g, dp_g = result
+                has_h_guess = True
+            else:
+                h_g, iters_g, resid_g, dp_g = result
+                h_guess_g = None
+            dt = time.perf_counter() - t0
+
+            # Flatten to (bbox_rows * bbox_cols, ...)
+            if h_g.ndim == 3:
+                h_g      = h_g.reshape(-1, 8)
+                if h_guess_g is not None:
+                    h_guess_g = h_guess_g.reshape(-1, 8)
+                iters_g  = iters_g.flatten()
+                resid_g  = resid_g.flatten()
+                dp_g     = dp_g.flatten()
+
+            # Indices within the bbox that belong to this grain
+            bbox_mask = grain_mask[rmin:rmax+1, cmin:cmax+1]
+            bbox_flat = np.where(bbox_mask.ravel())[0]
+
+            # Corresponding flat indices in the full scan
+            full_flat = row_idx * eff_cols + col_idx
+
+            h_full[full_flat]          = h_g[bbox_flat]
+            iterations_full[full_flat] = iters_g[bbox_flat]
+            residuals_full[full_flat]  = resid_g[bbox_flat]
+            dp_norms_full[full_flat]   = dp_g[bbox_flat]
+            if h_guess_g is not None:
+                h_guess_full[full_flat] = h_guess_g[bbox_flat]
+
+            n_pat = iters_g.size
+            self.log_signal.emit(
+                f"  → done in {dt:.1f} s  ({dt / n_pat * 1000:.2f} ms/pattern)"
+            )
+
+        self.log_signal.emit(
+            f"All grains complete in {time.perf_counter() - t_total:.1f} s."
+        )
+
+        h_guess_out = h_guess_full if has_h_guess else None
+        return (h_full, h_guess_out, iterations_full, residuals_full,
+                dp_norms_full, eff_rows, eff_cols)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
