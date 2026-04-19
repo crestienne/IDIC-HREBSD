@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox,
     QRadioButton, QButtonGroup,
     QTextEdit, QWidget, QScrollArea,
-    QSizePolicy, QSplitter,
+    QSizePolicy, QSplitter, QDialog,
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -36,6 +36,7 @@ from gui_sweep import ParameterSweepDialog
 
 
 from gui_materials import _load_material_presets, NewMaterialDialog
+from multiple_ref import ReferencePatternSet, select_references
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +169,6 @@ class LoadFilesPage(QWizardPage):
         self._C44.setReadOnly(True); self._C44.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
 
         self._new_material_btn = QPushButton("New material…")
-        self._new_material_btn.setToolTip("Create a new material JSON file and add it to the preset list.")
         self._new_material_btn.clicked.connect(self._open_new_material_dialog)
 
         mat_layout.addRow("C\u2081\u2081:", self._C11)
@@ -204,10 +204,15 @@ class LoadFilesPage(QWizardPage):
 
         self.setLayout(layout)
 
-        self.registerField("up2_path*", self.up2_edit)
-        self.registerField("ang_path*", self.ang_edit)
-        self.registerField("run_name*", self.run_name_edit)
-        self.registerField("output_dir*", self.out_edit)
+        # No mandatory (*) so Next is never greyed out during development.
+        # Default values let you click through all steps without real files.
+        self.registerField("up2_path",  self.up2_edit)
+        self.registerField("ang_path",  self.ang_edit)
+        self.registerField("run_name",  self.run_name_edit)
+        self.registerField("output_dir", self.out_edit)
+
+        self.run_name_edit.setText("test_run")
+        self.out_edit.setText(os.path.join(os.path.expanduser("~"), "hrebsd_results"))
 
         self.up2_edit.textChanged.connect(self._update_preview)
         self.ang_edit.textChanged.connect(self._on_ang_path_changed)
@@ -269,8 +274,7 @@ class LoadFilesPage(QWizardPage):
             wiz.ang_loaded_patshape = patshape
         rows, cols = ang_data.shape
         self._ang_load_status.setText(
-            f"ANG loaded — {rows}×{cols}, PC=({ang_data.pc[0]:.4f}, "
-            f"{ang_data.pc[1]:.4f}, {ang_data.pc[2]:.4f})"
+            f"ANG loaded — Scan Shape: {rows}×{cols}"
         )
         self._ang_load_status.setStyleSheet("color: #88cc88; font-style: italic;")
 
@@ -381,7 +385,7 @@ class ScanGeometryPage(QWizardPage):
         super().__init__()
         self.setTitle("Step 2 of 6 — Scan Geometry")
         self.setSubTitle(
-            "Fields marked with  ✦  are auto-populated from your files. "
+            "Fields marked with  ✦  are auto-populated from your files "
             "Check them and adjust if needed."
         )
 
@@ -402,13 +406,11 @@ class ScanGeometryPage(QWizardPage):
         self.tilt.setRange(0, 90)
         self.tilt.setValue(70.0)
         self.tilt.setSuffix(" °")
-        self.tilt.setToolTip("Sample tilt angle in degrees (typically 70°).")
 
         self.det_tilt = QDoubleSpinBox()
         self.det_tilt.setRange(0, 30)
         self.det_tilt.setValue(10.0)
         self.det_tilt.setSuffix(" °")
-        self.det_tilt.setToolTip("Detector tilt angle in degrees (typically 0–10°).")
 
         tilt_layout.addRow("Sample tilt:", self.tilt)
         tilt_layout.addRow("Detector tilt:", self.det_tilt)
@@ -424,21 +426,18 @@ class ScanGeometryPage(QWizardPage):
         self.pc_x.setDecimals(5)
         self.pc_x.setSingleStep(0.001)
         self.pc_x.setValue(0.5)
-        self.pc_x.setToolTip("x*  — horizontal position of the pattern centre (EDAX fractional, 0–1).")
 
         self.pc_y = QDoubleSpinBox()
         self.pc_y.setRange(0.0, 1.0)
         self.pc_y.setDecimals(5)
         self.pc_y.setSingleStep(0.001)
         self.pc_y.setValue(0.5)
-        self.pc_y.setToolTip("y*  — vertical position of the pattern centre (EDAX fractional, 0–1, measured from bottom).")
 
         self.pc_z = QDoubleSpinBox()
         self.pc_z.setRange(0.01, 3.0)
         self.pc_z.setDecimals(5)
         self.pc_z.setSingleStep(0.001)
         self.pc_z.setValue(0.65)
-        self.pc_z.setToolTip("z*  — detector distance as a fraction of the pattern height.")
 
         pc_layout.addRow("x*  (xstar):", self.pc_x)
         pc_layout.addRow("y*  (ystar):", self.pc_y)
@@ -463,17 +462,14 @@ class ScanGeometryPage(QWizardPage):
         self.pixel_size.setDecimals(2)
         self.pixel_size.setValue(30.0)
         self.pixel_size.setSuffix(" µm")
-        self.pixel_size.setToolTip("Physical size of one detector pixel in microns (NOTE: patterns should not be binned).")
 
         self.pat_h = QSpinBox()
         self.pat_h.setRange(1, 4096)
         self.pat_h.setValue(512)
-        self.pat_h.setToolTip("Pattern height in pixels — auto-populated from UP2 file.")
 
         self.pat_w = QSpinBox()
         self.pat_w.setRange(1, 4096)
         self.pat_w.setValue(512)
-        self.pat_w.setToolTip("Pattern width in pixels — auto-populated from UP2 file.")
 
         det_layout.addRow("Detector pixel size:", self.pixel_size)
         det_layout.addRow("Pattern height  ✦:", self.pat_h)
@@ -488,19 +484,16 @@ class ScanGeometryPage(QWizardPage):
         self.rows = QSpinBox()
         self.rows.setRange(1, 99999)
         self.rows.setValue(1)
-        self.rows.setToolTip("Number of scan rows (NROWS in ANG header).")
 
         self.cols = QSpinBox()
         self.cols.setRange(1, 99999)
         self.cols.setValue(1)
-        self.cols.setToolTip("Number of scan columns (NCOLS_ODD in ANG header).")
 
         self.step_size = QDoubleSpinBox()
         self.step_size.setRange(0.001, 10000.0)
         self.step_size.setDecimals(4)
         self.step_size.setValue(1.0)
         self.step_size.setSuffix(" µm")
-        self.step_size.setToolTip("Step size between scan points in microns (XSTEP in ANG header).")
 
         scan_layout.addRow("Rows:", self.rows)
         scan_layout.addRow("Columns:", self.cols)
@@ -511,29 +504,34 @@ class ScanGeometryPage(QWizardPage):
         # ── Scan Strategy ─────────────────────────────────────────────────────
         strategy_group  = QGroupBox("Scan Strategy")
         strategy_layout = QVBoxLayout()
+        
+        self._strategy_standard  = QRadioButton("Standard (origin: upper-left, x →, y ↓)")
+        self._strategy_lr = QRadioButton("Lower Right (origin: lower-right, x ←, y ↑)")
+        self._strategy_de  = QRadioButton("Direct Electron  (origin: upper-right, x ←, y ↓)")
 
-        self._strategy_standard = QRadioButton("Standard  (origin: lower-right, x ←, y ↑)")
-        self._strategy_de       = QRadioButton("Direct Electron  (origin: upper-right, x ←, y ↓)")
-        self._strategy_ul       = QRadioButton("Upper Left  (origin: upper-left, x →, y ↓)")
         self._strategy_standard.setChecked(True)
-        self._strategy_standard.setToolTip(
-            "Use when your scan origin is at the lower-right corner of the sample.")
-        self._strategy_de.setToolTip(
-            "Use when your scan origin is at the upper-right corner (Direct Electron detector).")
-        self._strategy_ul.setToolTip(
-            "Use when your scan origin is at the upper-left corner of the sample.")
 
         strategy_layout.addWidget(self._strategy_standard)
+        strategy_layout.addWidget(self._strategy_lr)
         strategy_layout.addWidget(self._strategy_de)
-        strategy_layout.addWidget(self._strategy_ul)
+
 
         self._apply_pc_correction = QCheckBox("Apply pattern centre drift correction")
         self._apply_pc_correction.setChecked(True)
-        self._apply_pc_correction.setToolTip(
-            "Removes the geometric homography contribution caused by the pattern centre "
-            "shifting as the beam steps across the tilted sample.")
         strategy_layout.addSpacing(4)
         strategy_layout.addWidget(self._apply_pc_correction)
+
+        self._pc_warning = QLabel(
+            "\u26a0\ufe0f  Warning: for large scans, not accounting for PC shifts "
+            "can result in errors in the strain of significant magnitude."
+        )
+        self._pc_warning.setWordWrap(True)
+        self._pc_warning.setStyleSheet("color: #fab387; font-size: 11px;")
+        self._pc_warning.setVisible(False)
+        strategy_layout.addWidget(self._pc_warning)
+        self._apply_pc_correction.stateChanged.connect(
+            lambda state: self._pc_warning.setVisible(state == 0)
+        )
 
         strategy_group.setLayout(strategy_layout)
         right_col.addWidget(strategy_group)
@@ -639,7 +637,7 @@ class ScanGeometryPage(QWizardPage):
             "cols":                self.cols.value(),
             "step_size":           self.step_size.value(),
             "scan_strategy":       ("direct_electron" if self._strategy_de.isChecked()
-                                   else "upper_left" if self._strategy_ul.isChecked()
+                                   else "lower_right" if self._strategy_lr.isChecked()
                                    else "standard"),
             "apply_pc_correction": self._apply_pc_correction.isChecked(),
         }
@@ -667,8 +665,13 @@ class ROISelectionPage(QWizardPage):
         self._ipf_worker  = None
         self._seg_worker  = None
         self._rgb_map     = None
-        self._grain_ids   = None
-        self._roi_rects   = [None, None]
+        self._grain_ids             = None
+        self._grain_remapped        = None
+        self._grain_remap           = None
+        self._grain_lut             = None
+        self._grain_norm            = None
+        self._grain_discrete_colors = None
+        self._roi_rects             = [None, None]
 
         # ── Grain segmentation group ──────────────────────────────────────────
         seg_group  = QGroupBox("Grain Segmentation  (optional)")
@@ -678,18 +681,21 @@ class ROISelectionPage(QWizardPage):
         self.seg_threshold.setRange(0.1, 30.0)
         self.seg_threshold.setValue(2.0)
         self.seg_threshold.setSuffix(" °")
-        self.seg_threshold.setToolTip(
-            "Misorientation threshold for flood-fill grain segmentation. "
-            "Neighbouring pixels within this angle are merged into the same grain."
+
+        self._misor_warning = QLabel(
+            "\u26a0\ufe0f  Warning: Remapping is not currently implemented, so increased error may occur" \
+            "when the misorientation threshold is above ~5°. Use with caution and check results carefully if adjusting above this value."
+        )
+        self._misor_warning.setWordWrap(True)
+        self._misor_warning.setStyleSheet("color: #fab387; font-size: 11px;")
+        self._misor_warning.setVisible(False)
+        self.seg_threshold.valueChanged.connect(
+            lambda v: self._misor_warning.setVisible(v > 5.0)
         )
 
         self.min_grain_size = QSpinBox()
         self.min_grain_size.setRange(1, 99999)
         self.min_grain_size.setValue(1)
-        self.min_grain_size.setToolTip(
-            "Grains with fewer patterns than this are relabelled to grain 0 "
-            "(shown as black in the IPF map)."
-        )
 
         self._seg_btn = QPushButton("Run Segmentation")
         self._seg_btn.clicked.connect(self._start_segmentation)
@@ -706,13 +712,13 @@ class ROISelectionPage(QWizardPage):
 
         self._dir_combo = QComboBox()
         self._dir_combo.addItems(list(self._DIRECTIONS.keys()))
-        self._dir_combo.setToolTip("IPF projection direction.")
         self._dir_combo.currentIndexChanged.connect(self._recompute_ipf)
 
         dir_w = QWidget(); dh = QHBoxLayout(dir_w); dh.setContentsMargins(0, 0, 0, 0)
         dh.addWidget(self._dir_combo); dh.addStretch()
 
         seg_layout.addRow("Threshold:", self.seg_threshold)
+        seg_layout.addRow("", self._misor_warning)
         seg_layout.addRow("Min grain size:", self.min_grain_size)
         seg_layout.addRow("", seg_btn_row)
         seg_layout.addRow(self._seg_status)
@@ -721,6 +727,7 @@ class ROISelectionPage(QWizardPage):
         # ── ROI + IPF direction group ─────────────────────────────────────────
         roi_group  = QGroupBox("Select a Region of Interest")
         roi_layout = QFormLayout()
+        self._roi_form_layout = roi_layout
 
         # Mode: rectangle vs grain
         self._rect_radio  = QRadioButton("Rectangle")
@@ -754,17 +761,19 @@ class ROISelectionPage(QWizardPage):
                    self.roi_col_start, self.roi_col_stop):
             sb.valueChanged.connect(self._update_roi_rects)
 
-        row_w = QWidget(); rh = QHBoxLayout(row_w); rh.setContentsMargins(0, 0, 0, 0)
+        self._roi_row_w = QWidget(); rh = QHBoxLayout(self._roi_row_w); rh.setContentsMargins(0, 0, 0, 0)
         rh.addWidget(QLabel("start")); rh.addWidget(self.roi_row_start)
         rh.addWidget(QLabel("  stop")); rh.addWidget(self.roi_row_stop); rh.addStretch()
 
-        col_w = QWidget(); ch = QHBoxLayout(col_w); ch.setContentsMargins(0, 0, 0, 0)
+        self._roi_col_w = QWidget(); ch = QHBoxLayout(self._roi_col_w); ch.setContentsMargins(0, 0, 0, 0)
         ch.addWidget(QLabel("start")); ch.addWidget(self.roi_col_start)
         ch.addWidget(QLabel("  stop")); ch.addWidget(self.roi_col_stop); ch.addStretch()
 
-        roi_layout.addRow("Rows  (y):", row_w)
-        roi_layout.addRow("Columns  (x):", col_w)
-        roi_layout.addRow(_note("Indices are 0-based — top-left corner is (row 0, col 0)."))
+        self._roi_note = _note("Indices are 0-based — top-left corner is (row 0, col 0).")
+
+        roi_layout.addRow("Rows  (y):", self._roi_row_w)
+        roi_layout.addRow("Columns  (x):", self._roi_col_w)
+        roi_layout.addRow(self._roi_note)
         roi_group.setLayout(roi_layout)
 
         # ── IPF direction group (standalone, sits between top row and maps) ────
@@ -780,10 +789,11 @@ class ROISelectionPage(QWizardPage):
         ipf_vbox   = QVBoxLayout(ipf_panel)
         ipf_vbox.setContentsMargins(0, 0, 4, 0)
 
-        self._ipf_fig = Figure(tight_layout=True)
+        self._ipf_fig = Figure()
+        self._ipf_fig.subplots_adjust(left=0.04, right=0.70, top=0.93, bottom=0.04)
         self._ipf_ax  = self._ipf_fig.add_subplot(111)
         self._ipf_ax.set_visible(False)
-        self._key_ax  = self._ipf_fig.add_axes([0.80, 0.03, 0.22, 0.33])
+        self._key_ax  = self._ipf_fig.add_axes([0.73, 0.10, 0.24, 0.78])
         self._key_ax.set_visible(False)
         self._ipf_canvas = FigureCanvas(self._ipf_fig)
         self._ipf_canvas.setSizePolicy(
@@ -797,11 +807,13 @@ class ROISelectionPage(QWizardPage):
         ipf_vbox.addWidget(self._ipf_canvas)
         ipf_vbox.addWidget(self._ipf_status)
 
-        self._grain_panel = QWidget()
-        grain_vbox = QVBoxLayout(self._grain_panel)
-        grain_vbox.setContentsMargins(4, 0, 0, 0)
-
         _bg = THEME["surface_bg"]
+        self._grain_dialog = QDialog(self)
+        self._grain_dialog.setWindowTitle("Grain ID Map")
+        self._grain_dialog.resize(700, 600)
+        grain_vbox = QVBoxLayout(self._grain_dialog)
+        grain_vbox.setContentsMargins(4, 4, 4, 4)
+
         self._grain_fig = Figure(tight_layout=True, facecolor=_bg)
         self._grain_ax  = self._grain_fig.add_subplot(111)
         self._grain_ax.set_facecolor(_bg)
@@ -815,13 +827,10 @@ class ROISelectionPage(QWizardPage):
         self._grain_status.setStyleSheet("color: gray;")
         self._grain_status.setWordWrap(True)
 
-        grain_vbox.addWidget(QLabel("Grain ID Map"))
         grain_vbox.addWidget(self._grain_canvas)
         grain_vbox.addWidget(self._grain_status)
-        self._grain_panel.setVisible(False)
 
         self._splitter.addWidget(ipf_panel)
-        self._splitter.addWidget(self._grain_panel)
 
         # ── Assemble page ─────────────────────────────────────────────────────
         top_row = QHBoxLayout()
@@ -898,8 +907,44 @@ class ROISelectionPage(QWizardPage):
 
         self._grain_ax.set_visible(True)
         self._grain_ax.clear()
-        self._grain_ax.imshow(grain_ids, cmap="tab20b", interpolation="nearest", origin="upper")
-        title = f"Grain IDs  ({n_grains} grains"
+
+        import matplotlib.pyplot as _plt
+        import matplotlib.colors as _mcolors
+        import matplotlib.patches as mpatches
+
+        # Surviving grain IDs (non-zero, non-discarded) — may be non-contiguous
+        surviving_ids = [gid for gid in range(1, len(sizes)) if sizes[gid] > 0]
+        n_surviving   = len(surviving_ids)
+
+        # Remap surviving IDs to compact indices 1..n so colors are well-defined.
+        # Discarded grains (sizes[gid]==0) stay as 0 after remapping → black.
+        remap = np.zeros(len(sizes), dtype=np.int32)
+        for compact_idx, gid in enumerate(surviving_ids, start=1):
+            remap[gid] = compact_idx
+        remapped = remap[grain_ids]   # (rows, cols), 0 = grain-0/discarded
+        self._grain_remapped = remapped
+        self._grain_remap    = remap
+
+        # Build a ListedColormap cycling tab20b for exactly n_surviving grains.
+        # BoundaryNorm gives each integer compact index a unique discrete color
+        # with no interpolation.
+        _base_colors = list(_plt.cm.tab20b.colors)   # 20 RGBA tuples
+        discrete_colors = [_base_colors[i % 20] for i in range(n_surviving)]
+        grain_lut  = _mcolors.ListedColormap(discrete_colors, name="grain_discrete")
+        grain_lut.set_bad(color="black")
+        grain_norm = _mcolors.BoundaryNorm(
+            np.arange(0.5, n_surviving + 1.5), ncolors=n_surviving
+        )
+        self._grain_lut           = grain_lut
+        self._grain_norm          = grain_norm
+        self._grain_discrete_colors = discrete_colors
+
+        _masked_remap = np.ma.masked_where(remapped == 0, remapped)
+        self._grain_ax.imshow(
+            _masked_remap, cmap=grain_lut, norm=grain_norm,
+            interpolation="nearest", origin="upper",
+        )
+        title = f"Grain IDs  ({n_surviving} grains"
         if n_small:
             title += f", {n_small} discarded)"
         else:
@@ -907,28 +952,13 @@ class ROISelectionPage(QWizardPage):
         self._grain_ax.set_title(title, fontsize=9)
         self._grain_ax.axis("off")
 
-        # Overlay actual grain boundaries (not bounding boxes)
-        boundary = np.zeros(grain_ids.shape, dtype=bool)
-        h_diff = grain_ids[:-1, :] != grain_ids[1:, :]
-        v_diff = grain_ids[:, :-1] != grain_ids[:, 1:]
-        boundary[:-1, :] |= h_diff
-        boundary[1:,  :] |= h_diff
-        boundary[:, :-1] |= v_diff
-        boundary[:, 1:]  |= v_diff
-        bnd_overlay = np.zeros((*grain_ids.shape, 4), dtype=float)
-        bnd_overlay[boundary] = [1.0, 1.0, 1.0, 0.9]
-        self._grain_ax.imshow(bnd_overlay, origin="upper", interpolation="nearest")
 
         # ── Grain legend ──────────────────────────────────────────────────────
-        import matplotlib.patches as mpatches
-        # Reuse the cmap/norm from the grain imshow so colours match exactly
-        grain_img  = self._grain_ax.get_images()[0]
-        grain_cmap = grain_img.cmap
-        grain_norm = grain_img.norm
-
+        # Colors derived from the same LUT so they are guaranteed to match.
+        # compact_idx is 1-based → grain_lut maps 1→color[0], 2→color[1], …
         legend_entries = [
-            (gid, int(sizes[gid]), grain_cmap(grain_norm(gid)))
-            for gid in range(1, len(sizes)) if sizes[gid] > 0
+            (gid, int(sizes[gid]), discrete_colors[(ci - 1) % 20])
+            for ci, gid in enumerate(surviving_ids, start=1)
         ]
 
         MAX_LEGEND = 30
@@ -961,26 +991,17 @@ class ROISelectionPage(QWizardPage):
         self._grain_fig.tight_layout(pad=0.5)
 
         if self._rgb_map is not None:
-            from segment import plot_ipf_with_grain_boxes
-            # Paint grain-0 pixels black before overlaying grain boxes
             masked_rgb = self._rgb_map.copy()
             masked_rgb[grain_ids == 0] = 0.0
             self._ipf_ax.clear()
-            plot_ipf_with_grain_boxes(
-                grain_ids, masked_rgb,
-                ax=self._ipf_ax,
-                box_color="white",
-                linewidth=0.8,
-            )
+            self._ipf_ax.imshow(masked_rgb, origin="upper", interpolation="nearest")
             label = self._dir_combo.currentText().split()[0]
-            self._ipf_ax.set_title(f"IPF Map  //  {label}  +  grain boundaries", fontsize=9)
+            self._ipf_ax.set_title(f"IPF Map  //  {label}", fontsize=9)
             self._ipf_ax.axis("off")
-            self._ipf_fig.tight_layout(pad=0.5)
             self._roi_rects[0] = None
             self._ipf_canvas.draw()
 
-        self._grain_panel.setVisible(True)
-        self._splitter.setSizes([500, 500])
+        self._grain_dialog.show()
 
         self._roi_rects[1] = None
         self._update_roi_rects()
@@ -1034,7 +1055,6 @@ class ROISelectionPage(QWizardPage):
         self._roi_rects[0] = None
         self._update_roi_rects()
 
-        self._ipf_fig.tight_layout(pad=0.5)
         self._ipf_canvas.draw()
 
         rows, cols, _ = rgb_map.shape
@@ -1049,9 +1069,15 @@ class ROISelectionPage(QWizardPage):
             return
         is_grain = (btn_id == 1)
         self._grain_roi_combo.setVisible(is_grain)
-        for sb in (self.roi_row_start, self.roi_row_stop,
-                   self.roi_col_start, self.roi_col_stop):
-            sb.setEnabled(not is_grain)
+        show_rect = not is_grain
+        for w in (self._roi_row_w, self._roi_col_w, self._roi_note):
+            w.setVisible(show_rect)
+            layout = self._roi_form_layout
+            row, _ = layout.getWidgetPosition(w)
+            if row >= 0:
+                label_item = layout.itemAt(row, layout.ItemRole.LabelRole)
+                if label_item and label_item.widget():
+                    label_item.widget().setVisible(show_rect)
         if is_grain and self._grain_ids is not None:
             self._on_grain_roi_changed(self._grain_roi_combo.currentIndex())
 
@@ -1096,6 +1122,22 @@ class ROISelectionPage(QWizardPage):
             sb.blockSignals(False)
         self._update_roi_rects()
 
+        # Highlight the selected grain on the grain map (others → white)
+        if self._grain_remapped is not None and self._grain_discrete_colors is not None:
+            import matplotlib.colors as _mcolors
+            highlight_lut = _mcolors.ListedColormap(self._grain_discrete_colors, name="grain_highlight")
+            highlight_lut.set_bad(color="white")
+            masked = np.ma.masked_where(self._grain_ids != grain_id, self._grain_remapped)
+            self._grain_ax.clear()
+            self._grain_ax.set_facecolor("white")
+            self._grain_ax.imshow(
+                masked, cmap=highlight_lut, norm=self._grain_norm,
+                interpolation="nearest", origin="upper",
+            )
+            self._grain_ax.set_title(f"Grain {grain_id}  (selected)", fontsize=9)
+            self._grain_ax.axis("off")
+            self._grain_canvas.draw()
+
     # ── ROI rectangle ─────────────────────────────────────────────────────────
 
     def _update_roi_rects(self):
@@ -1132,12 +1174,17 @@ class ROISelectionPage(QWizardPage):
     # ── Params ────────────────────────────────────────────────────────────────
 
     def get_params(self) -> dict:
-        return {
+        result = {
             "roi_slice": [
                 slice(self.roi_row_start.value(), self.roi_row_stop.value()),
                 slice(self.roi_col_start.value(), self.roi_col_stop.value()),
             ]
         }
+        if self._grain_radio.isChecked():
+            gid = self._grain_roi_combo.currentData()
+            if gid is not None:
+                result["_roi_grain_id"] = gid
+        return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1150,12 +1197,30 @@ class ReferencePatternPage(QWizardPage):
         super().__init__()
         self.setTitle("Step 4 of 6 — Reference Pattern")
         self.setSubTitle(
-            "Click a point on the IPF map to set the reference pattern, "
-            "or enter row / column manually, then preview the pattern."
+            "Choose single-reference or per-grain mode, then click a point on "
+            "the IPF map to set the reference pattern."
         )
 
-        self._ref_marker = None
-        self._ipf_worker = None
+        self._ref_marker    = None
+        self._grain_markers = []   # per-grain mode: one marker per grain
+        self._ipf_worker    = None
+        self._ref_pattern_set: ReferencePatternSet = None
+
+        # ── Mode selector ─────────────────────────────────────────────────────
+        mode_group  = QGroupBox("Reference Mode")
+        mode_layout = QHBoxLayout()
+        self._single_radio   = QRadioButton("Single reference")
+        self._pergrain_radio = QRadioButton("Per-grain (auto)")
+        self._single_radio.setChecked(True)
+        self._mode_grp = QButtonGroup(self)
+        self._mode_grp.addButton(self._single_radio,   0)
+        self._mode_grp.addButton(self._pergrain_radio, 1)
+        mode_layout.addWidget(self._single_radio)
+        mode_layout.addWidget(self._pergrain_radio)
+        mode_layout.addStretch()
+        mode_group.setLayout(mode_layout)
+
+        self._mode_grp.idToggled.connect(self._on_mode_changed)
 
         # ── Left panel (1/3): position controls + pattern preview ─────────────
         left        = QWidget()
@@ -1163,18 +1228,17 @@ class ReferencePatternPage(QWizardPage):
         left_layout.setContentsMargins(0, 0, 6, 0)
         left_layout.setSpacing(8)
 
-        pos_group  = QGroupBox("Reference Position")
+        # Single-reference position group
+        self._pos_group  = QGroupBox("Reference Position")
         pos_layout = QFormLayout()
 
         self.ref_row = QSpinBox()
         self.ref_row.setRange(0, 9999)
         self.ref_row.setValue(0)
-        self.ref_row.setToolTip("Row index of the reference pattern (0 = top row).")
 
         self.ref_col = QSpinBox()
         self.ref_col.setRange(0, 9999)
         self.ref_col.setValue(0)
-        self.ref_col.setToolTip("Column index of the reference pattern (0 = leftmost column).")
 
         self.ref_row.valueChanged.connect(self._update_ref_marker)
         self.ref_col.valueChanged.connect(self._update_ref_marker)
@@ -1182,9 +1246,26 @@ class ReferencePatternPage(QWizardPage):
         pos_layout.addRow("Row  (y):", self.ref_row)
         pos_layout.addRow("Col  (x):", self.ref_col)
         pos_layout.addRow(_note("(0, 0) is the top-left corner of the scan."))
-        pos_group.setLayout(pos_layout)
-        left_layout.addWidget(pos_group)
+        self._pos_group.setLayout(pos_layout)
+        left_layout.addWidget(self._pos_group)
 
+        # Per-grain info group (hidden in single mode)
+        self._grain_info_group  = QGroupBox("Per-Grain References")
+        grain_info_layout = QVBoxLayout()
+        self._grain_count_lbl = QLabel("No segmentation found — run Step 3 first.")
+        self._grain_count_lbl.setWordWrap(True)
+        self._active_grain_lbl = QLabel("Active grain for override:")
+        self._grain_combo = QComboBox()
+        grain_info_layout.addWidget(self._grain_count_lbl)
+        grain_info_layout.addWidget(self._active_grain_lbl)
+        grain_info_layout.addWidget(self._grain_combo)
+        grain_info_layout.addWidget(_note(
+            "Click on the IPF map to move the selected grain's reference point."
+        ))
+        self._grain_info_group.setLayout(grain_info_layout)
+        left_layout.addWidget(self._grain_info_group)
+
+        # Pattern preview
         pat_group  = QGroupBox("Pattern Preview")
         pat_layout = QVBoxLayout(pat_group)
 
@@ -1237,10 +1318,20 @@ class ReferencePatternPage(QWizardPage):
         right_layout.addWidget(ipf_group)
 
         # ── Outer layout ──────────────────────────────────────────────────────
-        outer = QHBoxLayout()
-        outer.addWidget(left,  stretch=1)
-        outer.addWidget(right, stretch=2)
+        top_row = QHBoxLayout()
+        top_row.addWidget(mode_group)
+
+        outer = QVBoxLayout()
+        outer.addLayout(top_row)
+
+        panels = QHBoxLayout()
+        panels.addWidget(left,  stretch=1)
+        panels.addWidget(right, stretch=2)
+        outer.addLayout(panels, stretch=1)
         self.setLayout(outer)
+
+        # Initial visibility
+        self._grain_info_group.setVisible(False)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1263,6 +1354,82 @@ class ReferencePatternPage(QWizardPage):
         self._ipf_worker.done_signal.connect(self._on_ipf_done)
         self._ipf_worker.start()
 
+    # ── Mode switching ────────────────────────────────────────────────────────
+
+    def _on_mode_changed(self, btn_id: int, checked: bool):
+        if not checked:
+            return
+        is_single = (btn_id == 0)
+        self._pos_group.setVisible(is_single)
+        self._grain_info_group.setVisible(not is_single)
+        if not is_single:
+            self._auto_select_references()
+        else:
+            self._clear_grain_markers()
+            self._update_ref_marker()
+
+    def _auto_select_references(self):
+        """Build a ReferencePatternSet from the current segmentation result."""
+        wiz = self.wizard()
+        grain_ids = getattr(wiz.roi_page, "_grain_ids", None)
+        ang_data  = wiz.ang_data
+
+        if grain_ids is None:
+            self._grain_count_lbl.setText(
+                "No segmentation found — go back to Step 3 and run segmentation first."
+            )
+            self._ref_pattern_set = None
+            self._grain_combo.clear()
+            self._clear_grain_markers()
+            return
+
+        if ang_data is None:
+            self._grain_count_lbl.setText("ANG data not loaded yet — please wait.")
+            return
+
+        geom = wiz.geometry_page.get_params()
+        self._ref_pattern_set = select_references(grain_ids, ang_data, geom["cols"])
+
+        n = len(self._ref_pattern_set)
+        self._grain_count_lbl.setText(f"{n} grain{'s' if n != 1 else ''} found — one reference auto-selected per grain.")
+
+        self._grain_combo.blockSignals(True)
+        self._grain_combo.clear()
+        for entry in self._ref_pattern_set:
+            self._grain_combo.addItem(
+                f"Grain {entry.grain_id}  (row={entry.ref_row}, col={entry.ref_col})",
+                userData=entry.grain_id,
+            )
+        self._grain_combo.blockSignals(False)
+
+        self._draw_grain_markers()
+
+    def _draw_grain_markers(self):
+        """Place one '+' marker per grain on the IPF map."""
+        self._clear_grain_markers()
+        if not self._ipf_ax.get_visible() or self._ref_pattern_set is None:
+            return
+        colors = ["#fdca40", "#f38ba8", "#a6e3a1", "#89dceb", "#cba6f7",
+                  "#fab387", "#89b4fa", "#eba0ac", "#94e2d5", "#b4befe"]
+        for i, entry in enumerate(self._ref_pattern_set):
+            color = colors[i % len(colors)]
+            marker, = self._ipf_ax.plot(
+                entry.ref_col, entry.ref_row,
+                marker="+", color=color,
+                markersize=14, markeredgewidth=2.5, zorder=10, linestyle="none",
+            )
+            self._grain_markers.append(marker)
+        self._ipf_canvas.draw_idle()
+
+    def _clear_grain_markers(self):
+        for m in self._grain_markers:
+            try:
+                m.remove()
+            except Exception:
+                pass
+        self._grain_markers.clear()
+        self._ipf_canvas.draw_idle()
+
     # ── IPF map ───────────────────────────────────────────────────────────────
 
     def _on_ipf_done(self, rgb_map, error: str):
@@ -1275,9 +1442,13 @@ class ReferencePatternPage(QWizardPage):
         self._ipf_ax.axis("off")
         self._ipf_fig.tight_layout(pad=0.5)
         self._ref_marker = None
-        self._update_ref_marker()
+        self._grain_markers.clear()
+        if self._single_radio.isChecked():
+            self._update_ref_marker()
+        else:
+            self._draw_grain_markers()
         self._ipf_canvas.draw()
-        self._ipf_status.setText("Click any point to set it as the reference pattern.")
+        self._ipf_status.setText("Click any point to set the reference pattern.")
 
     def _on_ipf_click(self, event):
         if event.inaxes is not self._ipf_ax or not self._ipf_ax.get_visible():
@@ -1288,15 +1459,33 @@ class ReferencePatternPage(QWizardPage):
         row  = int(round(event.ydata))
         col  = max(0, min(col, geom["cols"] - 1))
         row  = max(0, min(row, geom["rows"] - 1))
-        self.ref_row.blockSignals(True)
-        self.ref_col.blockSignals(True)
-        self.ref_row.setValue(row)
-        self.ref_col.setValue(col)
-        self.ref_row.blockSignals(False)
-        self.ref_col.blockSignals(False)
-        self._update_ref_marker()
+
+        if self._single_radio.isChecked():
+            self.ref_row.blockSignals(True)
+            self.ref_col.blockSignals(True)
+            self.ref_row.setValue(row)
+            self.ref_col.setValue(col)
+            self.ref_row.blockSignals(False)
+            self.ref_col.blockSignals(False)
+            self._update_ref_marker()
+        else:
+            # Per-grain: update the active grain's reference
+            gid = self._grain_combo.currentData()
+            if gid is None or self._ref_pattern_set is None:
+                return
+            pat_idx = row * geom["cols"] + col
+            ang_data = wiz.ang_data
+            euler = None
+            if ang_data is not None:
+                euler = tuple(ang_data.eulers[row, col])
+            self._ref_pattern_set.update_ref(gid, row, col, pat_idx, euler)
+            # Update combo label
+            idx = self._grain_combo.currentIndex()
+            self._grain_combo.setItemText(idx, f"Grain {gid}  (row={row}, col={col})")
+            self._draw_grain_markers()
 
     def _update_ref_marker(self):
+        """Single-reference mode marker."""
         if not self._ipf_ax.get_visible():
             return
         if self._ref_marker is not None:
@@ -1316,12 +1505,22 @@ class ReferencePatternPage(QWizardPage):
     # ── Pattern preview ───────────────────────────────────────────────────────
 
     def _load_preview(self):
-        wiz   = self.wizard()
-        path  = wiz.field("up2_path")
-        geom  = wiz.geometry_page.get_params()
-        row   = self.ref_row.value()
-        col   = self.ref_col.value()
-        idx   = row * geom["cols"] + col
+        wiz  = self.wizard()
+        path = wiz.field("up2_path")
+        geom = wiz.geometry_page.get_params()
+
+        if self._single_radio.isChecked():
+            row = self.ref_row.value()
+            col = self.ref_col.value()
+        else:
+            gid = self._grain_combo.currentData()
+            if gid is None or self._ref_pattern_set is None:
+                self._pat_status.setText("No grain reference selected.")
+                return
+            entry = self._ref_pattern_set.by_grain(gid)
+            row, col = entry.ref_row, entry.ref_col
+
+        idx = row * geom["cols"] + col
 
         if not path or not os.path.exists(path):
             self._pat_status.setText("No UP2 file found. Go back to Step 1.")
@@ -1351,14 +1550,27 @@ class ReferencePatternPage(QWizardPage):
             self._pat_status.setText(f"Error: {exc}")
 
     def get_params(self) -> dict:
+        if self._single_radio.isChecked():
+            return {
+                "ref_mode":     "single",
+                "ref_position": (self.ref_row.value(), self.ref_col.value()),
+            }
         return {
-            "ref_position": (self.ref_row.value(), self.ref_col.value()),
+            "ref_mode":         "per_grain",
+            "ref_pattern_set":  self._ref_pattern_set,
         }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page 5 — Pattern Processing
 # ─────────────────────────────────────────────────────────────────────────────
+
+class _SquareCanvas(FigureCanvas):
+    """FigureCanvas that always requests a square bounding box."""
+    def hasHeightForWidth(self) -> bool:
+        return True
+    def heightForWidth(self, width: int) -> int:
+        return width
 
 class PatternProcessingPage(QWizardPage):
 
@@ -1375,6 +1587,8 @@ class PatternProcessingPage(QWizardPage):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(350)
         self._preview_timer.timeout.connect(self._run_preview)
+        self._crop_rect    = None
+        self._preview_shape = None
 
         # ── Controls (left panel, fixed width) ───────────────────────────────
         scroll = QScrollArea()
@@ -1391,17 +1605,10 @@ class PatternProcessingPage(QWizardPage):
         self.high_pass = QDoubleSpinBox()
         self.high_pass.setRange(0, 200)
         self.high_pass.setValue(10.0)
-        self.high_pass.setToolTip(
-            "High-pass Gaussian sigma. Removes slowly-varying background. "
-            "Larger = more aggressive. Typical: 5–15."
-        )
 
         self.low_pass = QDoubleSpinBox()
         self.low_pass.setRange(0, 100)
         self.low_pass.setValue(0.0)
-        self.low_pass.setToolTip(
-            "Low-pass Gaussian sigma. Smooths high-frequency noise. 0 = disabled."
-        )
 
         filt_layout.addRow("High-pass sigma:", self.high_pass)
         filt_layout.addRow("Low-pass sigma:",  self.low_pass)
@@ -1414,12 +1621,6 @@ class PatternProcessingPage(QWizardPage):
 
         self.mask_type = QComboBox()
         self.mask_type.addItems(["None", "circular", "center_cross"])
-        self.mask_type.setToolTip(
-            "Mask applied before cross-correlation.\n"
-            "  None           — no mask\n"
-            "  circular       — circular detector region\n"
-            "  center_cross   — suppress beam-stop cross"
-        )
 
         mask_layout.addRow("Mask type:", self.mask_type)
         mask_group.setLayout(mask_layout)
@@ -1431,23 +1632,15 @@ class PatternProcessingPage(QWizardPage):
 
         self.use_clahe = QCheckBox("Enable CLAHE")
         self.use_clahe.setChecked(False)
-        self.use_clahe.setToolTip("Apply adaptive histogram equalisation. Uncheck to skip.")
 
         self.clahe_kernel = QSpinBox()
         self.clahe_kernel.setRange(1, 32)
         self.clahe_kernel.setValue(6)
-        self.clahe_kernel.setToolTip(
-            "Tile size for local histogram equalisation. "
-            "Smaller = more local. Typical: 4–8."
-        )
 
         self.clahe_clip = QDoubleSpinBox()
         self.clahe_clip.setRange(0.001, 1.0)
         self.clahe_clip.setValue(0.01)
         self.clahe_clip.setSingleStep(0.005)
-        self.clahe_clip.setToolTip(
-            "Clip limit. Lower = less clipping. Typical: 0.01–0.05."
-        )
 
         def _toggle_clahe(enabled):
             self.clahe_kernel.setEnabled(enabled)
@@ -1468,27 +1661,45 @@ class PatternProcessingPage(QWizardPage):
         orient_layout = QFormLayout()
 
         self.flip_x = QCheckBox("Flip patterns vertically")
-        self.flip_x.setToolTip(
-            "Flip each pattern about the horizontal axis before processing."
-        )
 
         orient_layout.addRow("", self.flip_x)
         orient_group.setLayout(orient_layout)
         ctrl.addWidget(orient_group)
 
-        # Parameter sweep button
+        # IC-GN region
+        crop_group  = QGroupBox("IC-GN Region")
+        crop_layout = QFormLayout()
+
+        self.crop_fraction = QDoubleSpinBox()
+        self.crop_fraction.setRange(0.1, 0.99)
+        self.crop_fraction.setValue(0.9)
+        self.crop_fraction.setSingleStep(0.05)
+        self.crop_fraction.valueChanged.connect(self._update_crop_rect)
+
+        crop_layout.addRow("Crop fraction:", self.crop_fraction)
+        crop_layout.addRow(_note("Green outline shows the region the optimizer sees."))
+        crop_group.setLayout(crop_layout)
+        ctrl.addWidget(crop_group)
+
+        # Advanced options group
+        adv_group  = QGroupBox("Advanced Options")
+        adv_layout = QVBoxLayout()
+
+        self._show_gradients = QCheckBox("Show gradients")
+        self._show_gradients.setChecked(False)
+        adv_layout.addWidget(self._show_gradients)
+
         self._sweep_btn = QPushButton("Parameter Sweep…")
-        self._sweep_btn.setToolTip(
-            "Try a grid of high-pass sigma × CLAHE kernel values on the\n"
-            "reference pattern and click any result to apply those parameters."
-        )
         self._sweep_btn.setStyleSheet(
             f"background-color: {THEME['surface_bg']}; "
             f"color: {THEME['accent']}; "
             f"border: 1px solid {THEME['accent']}; border-radius: 4px; padding: 4px;"
         )
         self._sweep_btn.clicked.connect(self._open_sweep_dialog)
-        ctrl.addWidget(self._sweep_btn)
+        adv_layout.addWidget(self._sweep_btn)
+
+        adv_group.setLayout(adv_layout)
+        ctrl.addWidget(adv_group)
 
         ctrl.addStretch()
         scroll.setWidget(inner)
@@ -1498,29 +1709,18 @@ class PatternProcessingPage(QWizardPage):
         preview_vbox   = QVBoxLayout(preview_widget)
         preview_vbox.setContentsMargins(6, 0, 0, 0)
 
-        # Show-gradients toggle
-        grad_toggle_row = QHBoxLayout()
-        self._show_gradients = QCheckBox("Show gradients")
-        self._show_gradients.setToolTip(
-            "Display Gx, Gy and |G| of the processed pattern.\n"
-            "These are the gradients the IC-GN optimizer sees."
-        )
-        self._show_gradients.setChecked(False)
-        grad_toggle_row.addWidget(self._show_gradients)
-        grad_toggle_row.addStretch()
-        preview_vbox.addLayout(grad_toggle_row)
-
         panels_row = QHBoxLayout()
 
         _fig_bg = THEME["surface_bg"]
 
         raw_box    = QGroupBox("Raw pattern")
         raw_vbox   = QVBoxLayout(raw_box)
-        self._fig_raw  = Figure(tight_layout=True, facecolor=_fig_bg)
+        self._fig_raw  = Figure(facecolor=_fig_bg)
+        self._fig_raw.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self._ax_raw   = self._fig_raw.add_subplot(111)
         self._ax_raw.set_facecolor(_fig_bg)
         self._ax_raw.set_visible(False)
-        self._canvas_raw = FigureCanvas(self._fig_raw)
+        self._canvas_raw = _SquareCanvas(self._fig_raw)
         self._canvas_raw.setStyleSheet(f"background-color: {_fig_bg};")
         self._canvas_raw.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -1529,11 +1729,12 @@ class PatternProcessingPage(QWizardPage):
 
         proc_box   = QGroupBox("Filtered pattern")
         proc_vbox  = QVBoxLayout(proc_box)
-        self._fig_proc = Figure(tight_layout=True, facecolor=_fig_bg)
+        self._fig_proc = Figure(facecolor=_fig_bg)
+        self._fig_proc.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self._ax_proc  = self._fig_proc.add_subplot(111)
         self._ax_proc.set_facecolor(_fig_bg)
         self._ax_proc.set_visible(False)
-        self._canvas_proc = FigureCanvas(self._fig_proc)
+        self._canvas_proc = _SquareCanvas(self._fig_proc)
         self._canvas_proc.setStyleSheet(f"background-color: {_fig_bg};")
         self._canvas_proc.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -1610,9 +1811,14 @@ class PatternProcessingPage(QWizardPage):
 
         # Use the reference pattern index if available, otherwise 0
         try:
-            ref_pos = wiz.reference_page.get_params()["ref_position"]
-            geom    = wiz.geometry_page.get_params()
-            pat_idx = int(np.ravel_multi_index(ref_pos, (geom["rows"], geom["cols"])))
+            ref_params = wiz.reference_page.get_params()
+            geom       = wiz.geometry_page.get_params()
+            if ref_params.get("ref_mode", "single") == "per_grain":
+                rps = ref_params.get("ref_pattern_set")
+                pat_idx = rps[0].ref_pat_idx if rps and len(rps) > 0 else 0
+            else:
+                ref_pos = ref_params["ref_position"]
+                pat_idx = int(np.ravel_multi_index(ref_pos, (geom["rows"], geom["cols"])))
         except Exception:
             pat_idx = 0
 
@@ -1632,14 +1838,18 @@ class PatternProcessingPage(QWizardPage):
         self._ax_raw.clear()
         self._ax_raw.imshow(raw, cmap="gray", origin="upper")
         self._ax_raw.axis("off")
-        self._fig_raw.tight_layout()
         self._canvas_raw.draw()
 
         self._ax_proc.set_visible(True)
         self._ax_proc.clear()
         self._ax_proc.imshow(processed, cmap="gray", origin="upper")
         self._ax_proc.axis("off")
-        self._fig_proc.tight_layout()
+
+        # Store shape and draw crop-fraction outline
+        self._preview_shape = processed.shape
+        self._crop_rect = None
+        self._update_crop_rect()
+
         self._canvas_proc.draw()
 
         # Compute and cache gradients (cheap — always done so the panel is
@@ -1671,6 +1881,28 @@ class PatternProcessingPage(QWizardPage):
         self._prev_status.setText("Preview error — check console.")
         print("\n--- Preview error ---\n" + msg)
 
+    def _update_crop_rect(self):
+        """Draw / redraw the green crop-fraction outline on the filtered pattern."""
+        if not self._ax_proc.get_visible() or self._preview_shape is None:
+            return
+        import matplotlib.patches as _mp
+        if self._crop_rect is not None:
+            try:
+                self._crop_rect.remove()
+            except Exception:
+                pass
+            self._crop_rect = None
+        H, W = self._preview_shape
+        cf       = self.crop_fraction.value()
+        margin_x = (1.0 - cf) / 2.0 * W
+        margin_y = (1.0 - cf) / 2.0 * H
+        self._crop_rect = _mp.Rectangle(
+            (margin_x - 0.5, margin_y - 0.5), cf * W, cf * H,
+            linewidth=1.5, edgecolor="#a6e3a1", facecolor="none", zorder=5,
+        )
+        self._ax_proc.add_patch(self._crop_rect)
+        self._canvas_proc.draw_idle()
+
     # ── Parameter sweep ───────────────────────────────────────────────────────
 
     def _open_sweep_dialog(self):
@@ -1681,9 +1913,14 @@ class PatternProcessingPage(QWizardPage):
             return
 
         try:
-            ref_pos = wiz.reference_page.get_params()["ref_position"]
-            geom    = wiz.geometry_page.get_params()
-            pat_idx = int(np.ravel_multi_index(ref_pos, (geom["rows"], geom["cols"])))
+            ref_params = wiz.reference_page.get_params()
+            geom       = wiz.geometry_page.get_params()
+            if ref_params.get("ref_mode", "single") == "per_grain":
+                rps = ref_params.get("ref_pattern_set")
+                pat_idx = rps[0].ref_pat_idx if rps and len(rps) > 0 else 0
+            else:
+                ref_pos = ref_params["ref_position"]
+                pat_idx = int(np.ravel_multi_index(ref_pos, (geom["rows"], geom["cols"])))
         except Exception:
             pat_idx = 0
 
@@ -1722,6 +1959,7 @@ class PatternProcessingPage(QWizardPage):
             "use_clahe":       self.use_clahe.isChecked(),
             "clahe_kernel":    self.clahe_kernel.value(),
             "clahe_clip":      self.clahe_clip.value(),
+            "crop_fraction":   self.crop_fraction.value(),
         }
 
 
@@ -1751,36 +1989,16 @@ class OptimizationRunPage(QWizardPage):
         self.max_iter = QSpinBox()
         self.max_iter.setRange(1, 1000)
         self.max_iter.setValue(150)
-        self.max_iter.setToolTip("Maximum IC-GN iterations per pattern before giving up. 100–200 is typical.")
 
         self.n_jobs = QSpinBox()
         self.n_jobs.setRange(-1, 64)
         self.n_jobs.setValue(8)
-        self.n_jobs.setToolTip(
-            "Number of CPU cores to use in parallel. -1 = use all available cores."
-        )
-
-        self.crop_fraction = QDoubleSpinBox()
-        self.crop_fraction.setRange(0.1, 0.99)
-        self.crop_fraction.setValue(0.9)
-        self.crop_fraction.setSingleStep(0.05)
-        self.crop_fraction.setToolTip(
-            "Fraction of each pattern used for correlation (crops edges slightly). "
-            "0.9 is a good default."
-        )
 
         self.init_type = QComboBox()
         self.init_type.addItems(["none", "partial", "full"])
-        self.init_type.setToolTip(
-            "How to initialise the homography before iterating.\n"
-            "  none    — identity start (fastest, good for small strains)\n"
-            "  partial — use the previous pattern as a warm start\n"
-            "  full    — full initialisation (slowest, most robust)"
-        )
 
         opt_layout.addRow("Max iterations:", self.max_iter)
         opt_layout.addRow("n_jobs:", self.n_jobs)
-        opt_layout.addRow("Crop fraction:", self.crop_fraction)
         opt_layout.addRow("Init type:", self.init_type)
         opt_group.setLayout(opt_layout)
         layout.addWidget(opt_group)
@@ -1852,7 +2070,11 @@ class OptimizationRunPage(QWizardPage):
             f"Output folder    : {wiz.field('output_dir')}",
             f"",
             f"ROI              : {roi_str}",
-            f"Reference pos    : row={ref['ref_position'][0]}, col={ref['ref_position'][1]}",
+            f"Reference mode   : {ref.get('ref_mode', 'single')}" + (
+                f"  (row={ref['ref_position'][0]}, col={ref['ref_position'][1]})"
+                if ref.get("ref_mode", "single") == "single"
+                else f"  ({len(ref.get('ref_pattern_set') or [])} grains)"
+            ),
             f"Sample tilt      : {geom['tilt']} °",
             f"Detector tilt    : {geom['det_tilt']} °",
             f"Pattern center   : x*={geom['pc_edax'][0]:.5f}  y*={geom['pc_edax'][1]:.5f}  z*={geom['pc_edax'][2]:.5f}",
@@ -1884,7 +2106,6 @@ class OptimizationRunPage(QWizardPage):
         params.update({
             "max_iter":      self.max_iter.value(),
             "n_jobs":        self.n_jobs.value(),
-            "crop_fraction": self.crop_fraction.value(),
             "init_type":     self.init_type.currentText(),
             "up2":           wiz.field("up2_path"),
             "ang":           wiz.field("ang_path"),
@@ -1894,6 +2115,18 @@ class OptimizationRunPage(QWizardPage):
         })
 
         params.update(wiz.roi_page.get_params())
+
+        # Per-grain mode needs the grain_ids array from the ROI page
+        if params.get("ref_mode") == "per_grain":
+            params["_grain_ids"] = getattr(wiz.roi_page, "_grain_ids", None)
+
+        # Single-reference grain ROI: build exact pixel mask so non-grain pixels
+        # inside the bounding box are NaN'd out after optimization
+        if params.get("_roi_grain_id") is not None:
+            grain_ids = getattr(wiz.roi_page, "_grain_ids", None)
+            if grain_ids is not None:
+                params["_roi_grain_mask"] = (grain_ids == params["_roi_grain_id"])
+
         self._run_params = params   # keep for the vis dialog
 
         self._run_btn.setEnabled(False)
