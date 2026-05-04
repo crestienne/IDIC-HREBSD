@@ -607,18 +607,37 @@ def rotate_stiffness_to_sample_frame(C: np.ndarray, quats: np.ndarray) -> np.nda
     C_rot = C_rot.reshape(out_shape)
     return C_rot
 
+def rotation_matrix_alt(det_tilt_deg: float, sample_tilt_deg: float) -> np.ndarray:
+    """Alternate sample-to-detector rotation: a single CCW rotation about +x
+    (looking from +x toward 0) by angle (180° − det_tilt − sample_tilt).
+
+    Returns a 3x3 orthogonal rotation matrix.  Selected via the GUI's
+    'Alternate rotation' checkbox in Step 2.
+    """
+    theta = np.deg2rad(-(180.0 - det_tilt_deg - sample_tilt_deg))
+    c, s  = np.cos(theta), np.sin(theta)
+    return np.array([
+        [1.0, 0.0, 0.0],
+        [0.0,  c,  -s ],
+        [0.0,  s,   c ],
+    ])
+
+
+def get_sample_to_detector_rotation(det_tilt_deg: float, sample_tilt_deg: float,
+                                    alternate: bool = False) -> np.ndarray:
+    """Return the active sample-to-detector rotation matrix used for tensor
+    transformations.  When `alternate=True` returns the simple R_x(180° − det
+    − sample) form; otherwise returns the default 3-step EDAX→ATEX chain.
+    """
+    if alternate:
+        return rotation_matrix_alt(det_tilt_deg, sample_tilt_deg)
+    return rotation_matrix_passive_version2(det_tilt_deg, sample_tilt_deg)
+
+
 def rotation_matrix_passive(det_tilt_deg: float, sample_tilt_deg: float) -> np.ndarray:
     """
-    Passive frame-change rotation chain:
-    DO NOT EDIT (THIS IS CORRECT FOR EDAX/TSL TO ATEX TRANSFORM)
-
-      1) detector tilt about x
-      2) then -90 deg about z'
-      3) then (180 - (90 - sample tilt)) deg about y''
-
-    Goes from EDAX sample frame to ATEX detector frame. To go the other way, take the transpose.
-
-    Returns a 3x3 orthogonal rotation matrix.
+    OLD VERSION DO NOT USE:
+    Passive frame-change rotation chain
     """
     delta = np.deg2rad(-1 * det_tilt_deg)
     beta = np.deg2rad(180.0 - (90.0 - sample_tilt_deg))  # = 90 + sample_tilt
@@ -643,6 +662,52 @@ def rotation_matrix_passive(det_tilt_deg: float, sample_tilt_deg: float) -> np.n
         [ 0.0,          1.0,  0.0         ],
         [ np.sin(beta), 0.0,  np.cos(beta)],
     ])
+
+    R = Q3 @ Q2 @ Q1
+    return R
+
+def rotation_matrix_passive_version2(det_tilt_deg: float, sample_tilt_deg: float) -> np.ndarray:
+    """
+    Passive frame-change rotation chain:
+    DO NOT EDIT (THIS IS CORRECT FOR EDAX/TSL TO ATEX TRANSFORM)
+
+      1) detector tilt about x
+      2) then -90 deg about z'
+      3) then (180 - (90 - sample tilt)) deg about y''
+
+    Goes from EDAX sample frame to ATEX detector frame. To go the other way, take the transpose.
+
+    Returns a 3x3 orthogonal rotation matrix.
+    """
+    delta = np.deg2rad(90 - sample_tilt_deg + det_tilt_deg)
+    #beta = np.deg2rad((90.0 - sample_tilt_deg))  # = 90 + sample_tilt
+
+    # Step 1: passive +delta about x  -> active Rx(-delta)
+    Q1 = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, np.cos(delta),  np.sin(delta)],
+        [0.0, -np.sin(delta), np.cos(delta)],
+    ])
+
+    #180 rotation
+    Q2 = np.array([
+    [-1.0,  0.0, 0.0],
+    [ 0.0, -1.0, 0.0],
+    [ 0.0,  0.0, 1.0],
+    ])
+
+    #reverse y direction 
+    Q3 = np.array([
+    [ 1.0,  0.0,  0.0],
+    [ 0.0, -1.0,  0.0],
+    [ 0.0,  0.0,  1.0],
+    ])
+
+    # Q4 = np.array([
+    #     [1.0, 0.0, 0.0],
+    #     [0.0, np.cos(beta),  np.sin(beta)],
+    #     [0.0, -np.sin(beta), np.cos(beta)],
+    # ])
 
     R = Q3 @ Q2 @ Q1
     return R
