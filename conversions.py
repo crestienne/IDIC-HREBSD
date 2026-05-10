@@ -50,6 +50,7 @@ def xyt2h(shifts: np.ndarray, PC: tuple | list | np.ndarray) -> np.ndarray:
     x_hat = x
     y_hat = y
     # Get omegas
+
     w1 = np.around(np.arctan(-y_hat / DD), 3)  # w32
     w2 = np.around(np.arctan(x_hat / DD), 3)  # W13
     w3 = np.around(theta, 3)  # w21
@@ -123,7 +124,7 @@ def h2F(H, X0):
 
     # Negate the detector distance becase our coordinates have +z pointing from the sample towards the detector
     # The calculation is the opposite, so we need to negate the distance
-    DD = -DD
+    #DD = -DD done earlier in the pipeline now
 
     # Calculate the deformation gradient
     beta0 = 1 - h31 * x01 - h32 * x02
@@ -269,11 +270,12 @@ def F2strain(
     # -------------------------
     omega = np.zeros_like(Fe)
     omega[..., 0, 1] = -w3
-    omega[..., 0, 2] =  w2
+    omega[..., 0, 2] =  w2 
     omega[..., 1, 0] =  w3
-    omega[..., 1, 2] = -w1
+    omega[..., 1, 2] = w1
     omega[..., 2, 0] = -w2
-    omega[..., 2, 1] =  w1
+    omega[..., 2, 1] =  -w1
+
 
     #just making sure that we don't end up with negative 0 (added Feb25, 2026)
     eps = 1e-12
@@ -347,7 +349,7 @@ def Bruker_to_Edax_PC(bruker_pc):
 
     return np.array([x_edax, y_edax, z_edax])
 
-def Bruker_to_fractional_PC(bruker_pc, patshape, pixel_size, homography_center = np.array([0.5, 0.5])):
+def Bruker_to_fractional_PC(bruker_pc, patshape, pixel_size=None, homography_center = np.array([0.5, 0.5])):
     """
     Convert Bruker fractional PC to the h2F fractional PC format. Is the vector that goes from the pattern center to the homography center, in fractional coordinates relative to the pattern shape. This is the format that h2F expects for the PC input.
 
@@ -367,10 +369,19 @@ def Bruker_to_fractional_PC(bruker_pc, patshape, pixel_size, homography_center =
     homography_center : array-like of shape (2,), optional
         Fractional coordinates of the homography center (x, y) relative to the pattern shape. Default is (0.5, 0.5) for centred-pixel format.
     """
-    print("Bruker PC (from upper left, fractional):", bruker_pc)
-    print("Homography center (fractional):", homography_center)
+    import sys
+    print(">>> Bruker_to_fractional_PC called", flush=True, file=sys.stderr)
+    print("    Bruker PC (from upper left, fractional):", bruker_pc, flush=True, file=sys.stderr)
+    print("    Homography center (fractional):", homography_center, flush=True, file=sys.stderr)
+    print("    patshape:", patshape, flush=True, file=sys.stderr)
+
+    # xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
 
     xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
+
+
+
+    print('    xo (from PC to homography center, in pixels):', xo, flush=True, file=sys.stderr)
 
     return xo
 
