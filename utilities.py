@@ -607,30 +607,84 @@ def rotate_stiffness_to_sample_frame(C: np.ndarray, quats: np.ndarray) -> np.nda
     C_rot = C_rot.reshape(out_shape)
     return C_rot
 
-def rotation_matrix_alt(det_tilt_deg: float, sample_tilt_deg: float) -> np.ndarray:
-    """Alternate sample-to-detector rotation: a single CCW rotation about +x
-    (looking from +x toward 0) by angle (180° − det_tilt − sample_tilt).
+def average_exp_amplitude_spectrum(
+    pat_obj,
+    n_samples: int = 10,
+    exclude_idx: int | list | tuple | None = None,
+    rng_seed: int = 0,
+) -> np.ndarray:
+    """Compute the average |FFT| magnitude across `n_samples` random patterns
+    from `pat_obj`.  Used as the spectral target for `spectral_match_pattern`.
 
-    Returns a 3x3 orthogonal rotation matrix.  Selected via the GUI's
-    'Alternate rotation' checkbox in Step 2.
+    Args:
+        pat_obj      : Data.UP2 pattern container (must have read_pattern).
+        n_samples    : how many patterns to average.  10 is a robust default;
+                       very small (≤3) is noisy, very large (≥50) is slow.
+        exclude_idx  : pattern index or list of indices to skip (e.g. the
+                       reference index, so it doesn't bias the template).
+        rng_seed     : seed for reproducible sampling.
+
+    Returns:
+        np.ndarray : average |FFT(p − mean(p))| over the sampled patterns,
+                     shape == patshape.
     """
-    theta = np.deg2rad(-(180.0 - det_tilt_deg - sample_tilt_deg))
-    c, s  = np.cos(theta), np.sin(theta)
-    return np.array([
-        [1.0, 0.0, 0.0],
-        [0.0,  c,  -s ],
-        [0.0,  s,   c ],
-    ])
+    rng = np.random.default_rng(rng_seed)
+    N   = pat_obj.nPatterns
+    excl = set()
+    if exclude_idx is not None:
+        excl.update(int(i) for i in (exclude_idx if hasattr(exclude_idx, "__iter__")
+                                     else [exclude_idx]))
+    candidate = [i for i in range(N) if i not in excl]
+    take = rng.choice(candidate, size=min(n_samples, len(candidate)), replace=False)
+
+    accum = None
+    for idx in take:
+        p = pat_obj.read_pattern(int(idx), process=True).astype(np.float32)
+        F = np.abs(np.fft.fft2(p - p.mean()))
+        accum = F if accum is None else (accum + F)
+    return (accum / float(len(take))).astype(np.float32)
 
 
-def get_sample_to_detector_rotation(det_tilt_deg: float, sample_tilt_deg: float,
-                                    alternate: bool = False) -> np.ndarray:
-    """Return the active sample-to-detector rotation matrix used for tensor
-    transformations.  When `alternate=True` returns the simple R_x(180° − det
-    − sample) form; otherwise returns the default 3-step EDAX→ATEX chain.
+def spectral_match_pattern(
+    ref_pat: np.ndarray,
+    target_amp: np.ndarray,
+    eps: float = 1e-3,
+    cap: float = 5.0,
+) -> np.ndarray:
+    """Reshape `ref_pat`'s amplitude spectrum to match `target_amp`, preserving
+    the reference's phase.  Auto-tuning fix for sim/exp gradient anisotropy
+    (the polar gradient flower from Figure 7 of debug_two_patterns).
+
+    The math:  ref' = IFFT( FFT(ref) · min(target_amp / |FFT(ref)|, cap) )
+
+    The phase carries the geometry (where Kikuchi bands are); the amplitude
+    carries how strong each (kx, ky) frequency is.  Re-scaling amplitude
+    fixes directional gradient deficits without moving any features.
+
+    Args:
+        ref_pat    : (H, W) reference pattern (sim).  Will be returned with
+                     same shape and dtype.
+        target_amp : (H, W) target amplitude spectrum, e.g. from
+                     `average_exp_amplitude_spectrum(pat_obj)`.
+        eps        : floor on the boost denominator (fraction of |FFT(ref)|.max).
+        cap        : maximum per-frequency boost factor.
+
+    Returns:
+        ref_pat_matched : same shape & dtype as ref_pat.
     """
-    if alternate:
-        return rotation_matrix_alt(det_tilt_deg, sample_tilt_deg)
+    ref_F      = np.fft.fft2(ref_pat - ref_pat.mean())
+    eps_floor  = float(eps) * float(np.abs(ref_F).max())
+    ratio      = np.minimum(target_amp / (np.abs(ref_F) + eps_floor), float(cap))
+    ref_F_match = ref_F * ratio
+    out         = np.real(np.fft.ifft2(ref_F_match))
+    return out.astype(ref_pat.dtype, copy=False)
+
+
+def get_sample_to_detector_rotation(det_tilt_deg: float, sample_tilt_deg: float) -> np.ndarray:
+    """Return the sample-to-detector frame-change matrix used for tensor
+    transformations: the 3-step EDAX → ATEX chain implemented in
+    ``rotation_matrix_passive_version2``.
+    """
     return rotation_matrix_passive_version2(det_tilt_deg, sample_tilt_deg)
 
 
@@ -696,7 +750,7 @@ def rotation_matrix_passive_version2(det_tilt_deg: float, sample_tilt_deg: float
     [ 0.0,  0.0, 1.0],
     ])
 
-    #reverse y direction 
+    #reverse y direction
     Q3 = np.array([
     [ 1.0,  0.0,  0.0],
     [ 0.0, -1.0,  0.0],
@@ -709,7 +763,7 @@ def rotation_matrix_passive_version2(det_tilt_deg: float, sample_tilt_deg: float
     #     [0.0, -np.sin(beta), np.cos(beta)],
     # ])
 
-    R = Q3 @ Q2 @ Q1
+    R = Q3 @ Q1
     return R
 
 
