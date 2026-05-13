@@ -54,8 +54,9 @@ class ScanGrid:
 _CONVENTIONS = {
     #                          x_sign  y_sign   description
     "lower_right":     dict(x_sign=-1, y_sign=-1),  # origin lower-right, x←, y↑
+    "lower_left":      dict(x_sign=+1, y_sign=-1),  # origin lower-left,  x→, y↑
     "direct_electron": dict(x_sign=-1, y_sign=+1),  # origin upper-right, x←, y↓
-    "standard":      dict(x_sign=+1, y_sign=+1),  # origin upper-left,  x→, y↓
+    "standard":        dict(x_sign=+1, y_sign=+1),  # origin upper-left,  x→, y↓
 }
 
 
@@ -231,7 +232,7 @@ def warp_to_h(W):
 
 def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
                          pixel_size_um, sample_tilt_deg, detector_tilt_deg,
-                         convention="standard"):
+                         convention="standard", ref_position=(0, 0)):
     """
     Correct an array of homographies for pattern-centre drift across the scan.
 
@@ -242,63 +243,93 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
 
         W_corrected = TS_inv @ W_measured
 
+    The "zero PC drift" anchor is at the scan position ``ref_position``
+    (default (0, 0) preserves the original behaviour).  Setting it to the
+    actual IC-GN reference (row, col) ensures the correction's zero matches
+    the physical reference pattern, so the corrected homographies represent
+    the true strain measured against that reference (no spurious geometric
+    offset across the scan).
+
     Pipeline
     --------
-    1. h (N, 8) → W (n_rows, n_cols, 3, 3)        h_to_warp
-    2. Build physical scan grid                     make_scan_grid
-    3. Compute per-position PC                      scan_grid_to_pc_grid
-    4. Δpc = pc_grid − pc_ref
-    5. Build TS_inv matrices                        delta_pc_to_TS
-    6. W_corrected = TS_inv @ W                     einsum
-    7. W_corrected → h_corrected (N, 8)             warp_to_h
+    1. h (N, 8) → W (n_rows, n_cols, 3, 3)         h_to_warp
+    2. Build physical scan grid                      make_scan_grid
+    3. Re-anchor scan_grid.data so (0, 0) physical
+       sits at ref_position
+    4. Compute per-position PC                       scan_grid_to_pc_grid
+    5. Δpc = pc_grid − pc_ref           (= 0 at ref_position by construction)
+    6. Build TS_inv matrices                         delta_pc_to_TS
+    7. W_corrected = TS_inv @ W                      einsum
+    8. W_corrected → h_corrected (N, 8)              warp_to_h
 
     Parameters
     ----------
     h                 : ndarray (N, 8)        measured homographies, row-major
     scan_shape        : (int, int)            (n_rows, n_cols)
     step_size_um      : float                 scan step size in microns
-    pc_ref            : array-like (3,)       (xstar, ystar, zstar) at origin [0,0]
+    pc_ref            : array-like (3,)       (xstar, ystar, zstar) at the scan
+                                              position given by ``ref_position``
     patshape          : (int, int)            (pattern_height_px, pattern_width_px)
     pixel_size_um     : float                 detector pixel size in microns
     sample_tilt_deg   : float                 sample tilt from horizontal (e.g. 70)
     detector_tilt_deg : float                 detector tilt from vertical  (e.g. 10)
     convention        : str                   scan grid convention (default "standard")
+    ref_position      : (int, int)            (row, col) of the IC-GN reference
+                                              pattern in the (eff_rows, eff_cols)
+                                              array passed via ``scan_shape``.
+                                              Default (0, 0) reproduces the
+                                              legacy "anchor at array origin"
+                                              behaviour.
 
     Returns
     -------
     h_corrected : ndarray (N, 8)
     TS_inv      : ndarray (n_rows, n_cols, 3, 3)
         The per-position correction matrices applied to each warp.
-        At the scan origin [0,0] this is the 3×3 identity.
+        At ``ref_position`` this is the 3×3 identity.
     """
     n_rows, n_cols = scan_shape
     N = n_rows * n_cols
 
+    ref_row, ref_col = int(ref_position[0]), int(ref_position[1])
+    if not (0 <= ref_row < n_rows and 0 <= ref_col < n_cols):
+        raise ValueError(
+            f"ref_position={ref_position} out of bounds for scan_shape "
+            f"{scan_shape}.  ref_row must be in [0, {n_rows-1}], "
+            f"ref_col must be in [0, {n_cols-1}]."
+        )
+
     # 1. h → W, reshaped to (n_rows, n_cols, 3, 3)
     W = h_to_warp(h).reshape(n_rows, n_cols, 3, 3)
 
-    # 2-4. scan grid → per-position PC shifts
+    # 2. Build physical scan grid (origin is at array[0, 0] by construction)
     scan_grid = make_scan_grid(scan_shape, step_size_um, convention=convention)
-    pc_grid   = scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
-                                     sample_tilt_deg, detector_tilt_deg)
+
+    # 3. Re-anchor: subtract the physical position at ref_position from every
+    #    grid point so the new physical origin sits at ref_position.  After
+    #    this, scan_grid.data[ref_row, ref_col] = (0, 0), and the resulting
+    #    pc_grid[ref_row, ref_col] = pc_ref (no drift at the reference point).
+    scan_grid.data = scan_grid.data - scan_grid.data[ref_row, ref_col]
+
+    # 4-5. per-position PC and Δpc relative to the reference
+    pc_grid = scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
+                                   sample_tilt_deg, detector_tilt_deg)
     Δpc = pc_grid - np.array(pc_ref)
 
-    # 5. TS_inv per position
+    # 6. TS_inv per position
     TS_inv = delta_pc_to_TS(Δpc, pc_ref, patshape)   # (n_rows, n_cols, 3, 3)
 
-    # ── sanity check: at the origin [0,0] Δpc=0 so TS_inv must be identity ──
-    print("TS_inv at origin [0,0]:")
-    print(np.round(TS_inv[0, 0], 6))
+    # ── sanity check: at ref_position Δpc=0 so TS_inv must be identity ──
+    print(f"TS_inv at ref_position [{ref_row}, {ref_col}]:")
+    print(np.round(TS_inv[ref_row, ref_col], 6))
     print("(expected: 3×3 identity)")
 
-
     W_corrected = TS_inv @ W
-   #W_corrected = np.einsum('...ij,...jk->...ik', TS_inv, W)
 
-    # 7. back to (N, 8)
+    # 8. back to (N, 8)
     h_corrected = warp_to_h(W_corrected).reshape(N, 8)
     print(f"PC correction applied — convention: '{convention}'  "
-          f"scan: {n_rows}×{n_cols}")
+          f"scan: {n_rows}×{n_cols}  ref_position: ({ref_row}, {ref_col})")
     return h_corrected, TS_inv
 
 
