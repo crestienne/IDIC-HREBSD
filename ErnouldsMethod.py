@@ -471,10 +471,13 @@ if __name__ == "__main__":
 
     # Determine deformation gradient
     Fe = determineF(e, w)
-    h = F2h(Fe, Ernould_PC)
+    # NOTE: F2h is currently inconsistent with h2F (DD = -DD is commented out in
+    # F2h, so F2h(h2F(h)) does not round-trip).  Skip the h text overlay until
+    # the sign convention is fixed in conversions.py:F2h.
+    # h = F2h(Fe, Ernould_PC)
 
     # Generate deformed pattern
     deformed_pattern = generate_patterns(Fe, Ernould_PC, ref_coords, source_pattern)
 
-    # Visualize the result
-    visualize_interpolation(source_pattern, coordtransform(ref_coords, Ernould_PC, Fe), deformed_pattern, PC=Ernould_PC, e=e, w=w, F=Fe, h=h)
+    # Visualize the result (h omitted — see note above)
+    visualize_interpolation(source_pattern, coordtransform(ref_coords, Ernould_PC, Fe), deformed_pattern, PC=Ernould_PC, e=e, w=w, F=Fe)
