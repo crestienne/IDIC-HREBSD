@@ -63,9 +63,9 @@ class HREBSDWizard(QWizard):
 
         self.addPage(self.files_page)
         self.addPage(self.geometry_page)
-        self.addPage(self.roi_page)
-        self.addPage(self.reference_page)
         self.addPage(self.processing_page)
+        self.addPage(self.reference_page)
+        self.addPage(self.roi_page)
         self.addPage(self.run_page)
 
     def _show_help(self):
