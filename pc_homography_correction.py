@@ -10,13 +10,17 @@ PC / detector frame  (EDAX fractional)
 The sign with which a physical sample step maps onto a PC shift depends on
 the scan convention (which direction x and y point on the sample).  Rather
 than hard-coding signs into the conversion function, each ScanGrid carries
-its own x_sign and y_sign so the conversion is always self-consistent:
+its own x_sign, y_sign, and z_sign so the conversion is always
+self-consistent:
 
-    Δxstar =  x_sign * ΔX / (pattern_width  * pixel_size)
-    Δystar =  y_sign * ΔY * cos(θ) / (pattern_height * pixel_size)
-    Δzstar = -y_sign * ΔY * sin(θ) / (pattern_height * pixel_size)
+    Δxstar =  x_sign           * ΔX / (pattern_width  * pixel_size)
+    Δystar =  y_sign           * ΔY * cos(θ) / (pattern_height * pixel_size)
+    Δzstar = -y_sign * z_sign  * ΔY * sin(θ) / (pattern_height * pixel_size)
 
 where  θ = (90 − sample_tilt) + detector_tilt
+
+z_sign defaults to +1 — flip to -1 if your geometry has zstar drifting the
+opposite way along ΔY than the −y_sign·sin(θ) coupling predicts.
 """
 
 import numpy as np
@@ -38,13 +42,21 @@ class ScanGrid:
     data        : ndarray (n_rows, n_cols, 2)  — [x_um, y_um] at each position
     x_sign      : +1 or -1  — sign for Δxstar  (+1 → positive x increases xstar,
                                                   -1 → positive x decreases xstar)
-    y_sign      : +1 or -1  — sign for Δystar  (same logic, also flips Δzstar)
+    y_sign      : +1 or -1  — sign for Δystar
+    z_sign      : +1 or -1  — extra multiplier on Δzstar so the detector-distance
+                              drift can be flipped independently of y_sign.
+                              Default is +1, which preserves the original
+                              y_sign-coupled formula
+                                  Δzstar = -y_sign · ΔY · sin(θ) / (pat_h · px)
+                              Set to -1 if your geometry's zstar drift goes the
+                              opposite way.
     convention  : str        — human-readable label
     """
     data:       np.ndarray
     x_sign:     int
     y_sign:     int
     convention: str
+    z_sign:     int = +1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,11 +64,11 @@ class ScanGrid:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CONVENTIONS = {
-    #                          x_sign  y_sign   description
-    "lower_right":     dict(x_sign=-1, y_sign=-1),  # origin lower-right, x←, y↑
-    "lower_left":      dict(x_sign=+1, y_sign=-1),  # origin lower-left,  x→, y↑
-    "direct_electron": dict(x_sign=-1, y_sign=+1),  # origin upper-right, x←, y↓
-    "standard":        dict(x_sign=+1, y_sign=+1),  # origin upper-left,  x→, y↓
+    #                          x_sign  y_sign  z_sign   description
+    "lower_right":     dict(x_sign=-1, y_sign=-1, z_sign=+1),  # origin lower-right, x←, y↑
+    "lower_left":      dict(x_sign=+1, y_sign=-1, z_sign=+1),  # origin lower-left,  x→, y↑
+    "direct_electron": dict(x_sign=-1, y_sign=+1, z_sign=+1),  # origin upper-right, x←, y↓
+    "standard":        dict(x_sign=+1, y_sign=+1, z_sign=+1),  # origin upper-left,  x→, y↓
 }
 
 
@@ -154,14 +166,14 @@ def scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
         pc_grid[r, c] = (xstar, ystar, zstar) at scan position (r, c)
     """
     pat_h, pat_w = patshape
-    θ = np.radians((90 - sample_tilt_deg) + detector_tilt_deg)
+    θ = np.radians((90 - sample_tilt_deg) - detector_tilt_deg)
 
     ΔX = scan_grid.data[..., 0]
     ΔY = scan_grid.data[..., 1]
 
     Δxstar =  scan_grid.x_sign * ΔX / (pat_w * pixel_size_um)
     Δystar =  scan_grid.y_sign * ΔY * np.cos(θ) / (pat_h * pixel_size_um)
-    Δzstar =  -scan_grid.y_sign * ΔY * np.sin(θ) / (pat_h * pixel_size_um)
+    Δzstar =  scan_grid.y_sign * scan_grid.z_sign * ΔY * np.sin(θ) / (pat_h * pixel_size_um)
 
     xstar = pc_ref[0] + Δxstar
     ystar = pc_ref[1] + Δystar
@@ -367,7 +379,7 @@ def delta_pc_to_TS(Δpc, pc_ref, patshape):
 
     # Scale factor: ratio of new detector distance to reference (dimensionless, ≈ 1)
     # Δzstar is fractional, pc_ref[2] is fractional → pure ratio, no unit issue
-    alpha = (pc_ref[2] + Δzstar) / pc_ref[2]
+    alpha = (pc_ref[2] - Δzstar) / pc_ref[2]
 
     # Build the translation matrix T (n_rows, n_cols, 3, 3)
     n_rows, n_cols = Δpc.shape[:2]
