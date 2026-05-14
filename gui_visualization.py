@@ -41,6 +41,8 @@ class VisualizationDialog(QDialog):
         self._roi_slice  = run_params.get("roi_slice", None)
         self._full_rows  = run_params.get("full_rows", run_params.get("rows", 1))
         self._full_cols  = run_params.get("full_cols", run_params.get("cols", 1))
+        # Carry through pipeline-level params not exposed in the viz UI
+        self._run_params = dict(run_params)
 
         outer     = QVBoxLayout()
         outer.setSpacing(10)
@@ -306,6 +308,9 @@ class VisualizationDialog(QDialog):
             "strain_lim":        self._strain_lim.value(),
             "rot_lim":           self._rot_lim.value(),
             "linemap_row":       self._linemap_row.value(),
+            "tfbc_use_single_euler": self._run_params.get("tfbc_use_single_euler", False),
+            "tfbc_euler_deg":        self._run_params.get("tfbc_euler_deg", (0.0, 0.0, 0.0)),
+            "small_strain":          self._run_params.get("small_strain", False),
             "crystal_C11":         self._C11.value(),
             "crystal_C12":         self._C12.value(),
             "crystal_C44":         self._C44.value(),
