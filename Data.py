@@ -79,19 +79,21 @@ class UP2:
 
     def set_processing(
         self,
-        low_pass_sigma: float = 0.0,
-        high_pass_sigma: float = 30.0,
+        low_pass_sigma: float = 1.0,
+        high_pass_sigma: float = 10.0,
+        high_pass_kernel_px: float = None,
         truncate_std_scale: float = 3.0,
-        mask_type: str = "circular",
+        mask_type: str = "none",
         center_cross_half_width: int = 5,
         clahe_kernel: tuple = (5, 5),
         clahe_clip: float = 0.005,
         clahe_nbins: int = 256,
         flip_x: bool = False,
-        use_clahe: bool = True,
+        use_clahe: bool = False,
         rescale_to_uint16: bool = False,
         unsharp_sigma: float = 0.0,
         unsharp_strength: float = 1.0,
+        gamma: float = 0.33,
     ):
         """Set the parameters for processing the patterns.
         Values of 0.0 will skip the step.
@@ -101,6 +103,9 @@ class UP2:
                 background removal (Ernould et al. step 2). 1–2 pixels improves IC-GN convergence
                 speed without loss of accuracy. 0.0 disables the step.
             high_pass_sigma (float): The sigma for the high pass filter. Roughly 20% of the image size works well.
+            high_pass_kernel_px (float, optional): If given, overrides high_pass_sigma using
+                the 3σ rule (sigma = kernel_px / 6).  Convenience for matching tools that
+                specify a kernel size in pixels (CrossCourt, OpenXY, Wilkinson papers).
             truncate_std_scale (float): The number of standard deviations to truncate. 3.0 is a good value.
             mask_type (str): "circular", "center_cross", or None (no mask). Controls which mask is applied in process_pattern.
             center_cross_half_width (int): Half-width of the cross arms in pixels when mask_type="center_cross" (default 5 → 10 px total).
@@ -119,6 +124,9 @@ class UP2:
                 but more noise amplification. Typical range: 0.5–3.0. Default 1.0.
         """
         self.low_pass_sigma = low_pass_sigma
+        if high_pass_kernel_px is not None and high_pass_kernel_px > 0:
+            high_pass_sigma = float(high_pass_kernel_px) / 6.0
+            print(f"  [high-pass] kernel_px={high_pass_kernel_px} → sigma={high_pass_sigma:.3f} (3σ rule)")
         self.high_pass_sigma = high_pass_sigma
         self.truncate_std_scale = truncate_std_scale
         self.mask_type = mask_type
@@ -131,7 +139,8 @@ class UP2:
         self.rescale_to_uint16 = rescale_to_uint16
         self.unsharp_sigma = unsharp_sigma
         self.unsharp_strength = unsharp_strength
-        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}, use_clahe={use_clahe}, flip_x={flip_x}, rescale_to_uint16={rescale_to_uint16}, unsharp_sigma={unsharp_sigma}, unsharp_strength={unsharp_strength}")
+        self.gamma = gamma
+        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}, use_clahe={use_clahe}, flip_x={flip_x}, rescale_to_uint16={rescale_to_uint16}, unsharp_sigma={unsharp_sigma}, unsharp_strength={unsharp_strength}, gamma={gamma}")
 
     def read(self, chunks, i=None):
         """Read the next `chunks` bytes from the file. If `i` is not None, read from the current position."""
@@ -235,9 +244,19 @@ class UP2:
             """Gaussian filter that treats masked pixels as non-existent (normalized convolution).
             Masked pixels contribute zero weight so they never bias the result."""
             float_mask = mask.astype(np.float32)
-            weighted = ndimage.gaussian_filter(image * float_mask, sigma)
-            weights  = ndimage.gaussian_filter(float_mask, sigma)
-            return np.where(weights > 0, weighted / weights, 0.0)
+            # mode='constant', cval=0 ensures out-of-bounds pixels contribute
+            # zero weight; 'reflect' (the default) mirrors real values at the
+            # image edge, inflating weights near corners and washing out contrast.
+            weighted = ndimage.gaussian_filter(image * float_mask, sigma, mode='constant', cval=0.0)
+            weights  = ndimage.gaussian_filter(float_mask, sigma, mode='constant', cval=0.0)
+            # Use np.divide with `where=` so the division ONLY runs where weights
+            # are positive; everywhere else the output keeps its initial 0.0.
+            # This eliminates the spurious "invalid value encountered in divide"
+            # RuntimeWarning that `np.where` would trigger (np.where evaluates
+            # both branches in full, so the bad division still happens).
+            out = np.zeros_like(weighted)
+            np.divide(weighted, weights, out=out, where=(weights > 0))
+            return out
 
         # High-pass filter in log domain (Ernould et al.)
         # EBSD background is multiplicative, so subtract in log space:
@@ -315,8 +334,8 @@ class UP2:
         img_renorm = to_uint8(img, mask)
 
         # Gamma correction
-        gamma_val = 0.66
-        img[mask] = img[mask] ** gamma_val
+        if self.gamma != 1.0:
+            img[mask] = img[mask] ** self.gamma
         img[~mask] = 0.0
 
         img_gamma = to_uint8(img, mask)
@@ -431,313 +450,6 @@ class UP2:
         plt.savefig(out_path, dpi=200, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved {out_path}")
-
-    def process_pattern_version2(
-        self,
-        img: np.ndarray,
-    ) -> np.ndarray:
-        """Cleans patterns by equalizing the histogram and normalizing.
-        Applies a bandpass filter to the patterns and truncates the extreme values.
-        Images will be in the range [0, 1].
-
-        Args:
-            img (np.ndarray): The patterns to clean. (H, W)
-            low_pass_sigma (float): The sigma for the low pass filter.
-            high_pass_sigma (float): The sigma for the high pass filter.
-            truncate_std_scale (float): The number of standard deviations to truncate.
-
-        Returns:
-            np.ndarray: The cleaned patterns. (H, W)
-        """
-
-        # Correct dtype
-        img = img.astype(np.float32)
-
-        # Normalize
-        img = (img - img.min()) / (img.max() - img.min())
-
-        img_noprocessing = img.copy()
-        img_noprocessing = np.around(
-            255 * (img_noprocessing - img_noprocessing.min())
-            / (img_noprocessing.max() - img_noprocessing.min())
-        ).astype(np.uint8)
-
-        # Low pass filter
-        if self.low_pass_sigma > 0:
-            img = ndimage.gaussian_filter(img, self.low_pass_sigma)
-
-        img_lowpass = img.copy()
-        img_lowpass = np.around(
-            255 * (img_lowpass - img_lowpass.min())
-            / (img_lowpass.max() - img_lowpass.min())
-        ).astype(np.uint8)
-
-        # High pass filter
-        if self.high_pass_sigma > 0:
-            background = ndimage.gaussian_filter(img, self.high_pass_sigma)
-            img = img - background
-
-        img_highpass = img.copy()
-        img_highpass = np.around(
-            255 * (img_highpass - img_highpass.min())
-            / (img_highpass.max() - img_highpass.min())
-        ).astype(np.uint8)
-
-                # ---- adaptive histogram equalization ----
-        clahe_kernel = (16, 16)
-        clahe_clip = 0.01
-        clahe_nbins = 256
-
-        img = exposure.equalize_adapthist(
-            img,
-            kernel_size=clahe_kernel,
-            clip_limit=clahe_clip,
-            nbins=clahe_nbins,
-        ).astype(np.float32)
-
-        img_CLAHE = img.copy()
-        img_CLAHE = np.around(
-            255 * (img_CLAHE - img_CLAHE.min())
-            / (img_CLAHE.max() - img_CLAHE.min())
-        ).astype(np.uint8)
-
-        # Truncate step
-        if self.truncate_std_scale > 0:
-            mean, std = img.mean(), img.std()
-            img = np.clip(
-                img,
-                mean - self.truncate_std_scale * std,
-                mean + self.truncate_std_scale * std,
-            )
-
-        img_truncated = img.copy()
-        img_truncated = np.around(
-            255 * (img_truncated - img_truncated.min())
-            / (img_truncated.max() - img_truncated.min())
-        ).astype(np.uint8)
-
-        # Re-normalize
-        img = (img - img.min()) / (img.max() - img.min())
-
-        img_renorm = img.copy()
-        img_renorm = np.around(
-            255 * (img_renorm - img_renorm.min())
-            / (img_renorm.max() - img_renorm.min())
-        ).astype(np.uint8)
-
-        # Gamma correction
-        gamma_val = 1.33
-        img = img**gamma_val
-
-        img_gamma = img.copy()
-        img_gamma = np.around(
-            255 * (img_gamma - img_gamma.min())
-            / (img_gamma.max() - img_gamma.min())
-        ).astype(np.uint8)
-
-        # -------------------------
-        # Save all steps as subplots
-        # -------------------------
-        images = [
-            img_noprocessing,
-            img_CLAHE,
-            img_lowpass,
-            img_highpass,
-            img_truncated,
-            img_renorm,
-            img_gamma,
-        ]
-
-        titles = [
-            "Normalized Input",
-            f"CLAHE\nkernel={clahe_kernel}, clip={clahe_clip}",
-            f"Low-pass\nsigma={self.low_pass_sigma}",
-            f"High-pass\nsigma={self.high_pass_sigma}",
-            f"Truncate\nstd scale={self.truncate_std_scale}",
-            "Re-normalized",
-            f"Gamma Corrected\ngamma={gamma_val}",
-        ]
-
-        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-        axes = axes.ravel()
-
-        for i, (image_step, title) in enumerate(zip(images, titles)):
-            axes[i].imshow(image_step, cmap="gray")
-            axes[i].set_title(title)
-            axes[i].axis("off")
-
-        # Turn off any unused subplot
-        for j in range(len(images), len(axes)):
-            axes[j].axis("off")
-
-        plt.tight_layout()
-        plt.savefig("debug/pattern_processing_steps.png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        return img
-
-    def process_pattern_old(
-        self,
-        img: np.ndarray,
-    ) -> np.ndarray:
-        """Cleans patterns by equalizing the histogram and normalizing.
-        Applies a bandpass filter to the patterns and truncates the extreme values.
-        Images will be in the range [0, 1].
-
-        Args:
-            img (np.ndarray): The patterns to clean. (H, W)
-            low_pass_sigma (float): The sigma for the low pass filter.
-            high_pass_sigma (float): The sigma for the high pass filter.
-            truncate_std_scale (float): The number of standard deviations to truncate.
-        Returns:
-            np.ndarray: The cleaned patterns. (N, H, W)"""
-
-        # Correct dtype
-        img = img.astype(np.float32)
-
-        # Normalize
-        img = (img - img.min()) / (img.max() - img.min())
-
-        img_noprocessing = img.copy()
-        img_noprocessing = np.around(255 * (img_noprocessing - img_noprocessing.min()) / (img_noprocessing.max() - img_noprocessing.min())).astype(np.uint8)
-        io.imsave("debug/preprocessing_image.png", img_noprocessing)
-
-        # ---- adaptive histogram equilization ----
-
-        # Adaptive histogram equalization
-        img = exposure.equalize_adapthist(
-            img,
-            kernel_size=(16, 16),
-            clip_limit=0.01,
-            nbins=256,
-        ).astype(np.float32)
-        img_CLAHE = img.copy()
-        img_CLAHE = np.around(255 * (img_CLAHE - img_CLAHE.min()) / (img_CLAHE.max() - img_CLAHE.min())).astype(np.uint8)
-        io.imsave("debug/CLAHE_filtered.png", img_CLAHE)
-
-        print('the val of low pass', self.low_pass_sigma)
-        # Low pass filter
-        if self.low_pass_sigma > 0:
-            img = ndimage.gaussian_filter(img, self.low_pass_sigma)
-        #copy img and conver to a usable format to save
-        img_lowpass = img.copy()
-        img_lowpass = np.around(255 * (img_lowpass - img_lowpass.min()) / (img_lowpass.max() - img_lowpass.min())).astype(np.uint8)
-        # save intermediate result 
-        io.imsave("debug/low_pass_filtered.png", img_lowpass)
-        # High pass filter
-        if self.high_pass_sigma > 0:
-            background = ndimage.gaussian_filter(img, self.high_pass_sigma)
-            img = img - background
-        img_highpass = img.copy()
-        img_highpass = np.around(255 * (img_highpass - img_highpass.min()) / (img_highpass.max() - img_highpass.min())).astype(np.uint8)
-        io.imsave("debug/high_pass_filtered.png", img_highpass)
-
-        # Truncate step
-        if self.truncate_std_scale > 0:
-            mean, std = img.mean(), img.std()
-            img = np.clip(
-                img,
-                mean - self.truncate_std_scale * std,
-                mean + self.truncate_std_scale * std,
-            )
-        
-
-        # Re normalize
-        img = (img - img.min()) / (img.max() - img.min())
-
-        img = img**1.1  # gamma correction
-        img_gamma = img.copy()
-        img_gamma = np.around(255 * (img_gamma - img_gamma.min()) / (img_gamma.max() - img_gamma.min())).astype(np.uint8)
-
-        io.imsave("debug/gamma_filtered.png", img_gamma)
-        #also save the final 
-      
-    
-            # -------------------------
-        # Save all steps as subplots
-        # -------------------------
-        images = [
-            img_noprocessing,
-            img_CLAHE,
-            img_lowpass,
-            img_highpass,
-            img_gamma,
-        ]
-
-        titles = [
-            "Normalized Input",
-            "CLAHE",
-            "Low-pass",
-            "High-pass",
-            "Gamma Corrected",
-        ]
-
-        fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-        axes = axes.ravel()
-
-        for i, (image_step, title) in enumerate(zip(images, titles)):
-            axes[i].imshow(image_step, cmap="gray")
-            axes[i].set_title(title)
-            axes[i].axis("off")
-
-        # Turn off any unused subplot
-        for j in range(len(images), len(axes)):
-            axes[j].axis("off")
-
-        plt.tight_layout()
-        plt.savefig("debug/pattern_processing_steps.png", dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        return img
-
-def process_pattern_no_class(
-    
-        img: np.ndarray,
-    ) -> np.ndarray:
-        """Cleans patterns by equalizing the histogram and normalizing.
-        Applies a bandpass filter to the patterns and truncates the extreme values.
-        Images will be in the range [0, 1].
-
-        Args:
-            img (np.ndarray): The patterns to clean. (H, W)
-            low_pass_sigma (float): The sigma for the low pass filter.
-            high_pass_sigma (float): The sigma for the high pass filter.
-            truncate_std_scale (float): The number of standard deviations to truncate.
-        Returns:
-            np.ndarray: The cleaned patterns. (N, H, W)"""
-        
-        low_pass_sigma = 2.0
-        high_pass_sigma = 101.0
-        truncate_std_scale = 3.0
-
-        # Correct dtype
-        img = img.astype(np.float32)
-
-        # Normalize
-        img = (img - img.min()) / (img.max() - img.min())
-
-        # # Low pass filter
-        # if low_pass_sigma > 0:
-        #     img = ndimage.gaussian_filter(img, low_pass_sigma)
-
-        # # High pass filter
-        # if high_pass_sigma > 0:
-        #     background = ndimage.gaussian_filter(img, high_pass_sigma)
-        #     img = img - background
-
-        # # Truncate step
-        # if truncate_std_scale > 0:
-        #     mean, std = img.mean(), img.std()
-        #     img = np.clip(
-        #         img,
-        #         mean - truncate_std_scale * std,
-        #         mean + truncate_std_scale * std,
-        #     )
-
-        # # Re normalize
-        # img = (img - img.min()) / (img.max() - img.min())
-
-        return img
 
 #------ New clasee to read a region of interest from UP2 files -------
 
