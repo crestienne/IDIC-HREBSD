@@ -38,6 +38,17 @@ def style_outline_axis(ax):
                    labelbottom=False, labeltop=False, labelleft=False, labelright=False)
 
 
+def extract_via_pipeline(h, xo):
+    """Run h through h2F → F2strain (the GUI's pipeline) and return
+    (eps, omega_deg) — both 3x3 arrays.  Use this in every panel below so the
+    displayed ε / ω values reflect what the actual GUI pipeline would extract,
+    not the chosen input tensor.  Round-trip should match the input modulo
+    F2strain's gauge convention (ε_33 ≡ 0)."""
+    F_back            = conversions.h2F(np.asarray(h, dtype=float), xo)
+    eps_out, omega_rad = conversions.F2strain(F_back, small_strain=False)
+    return eps_out, np.degrees(omega_rad)
+
+
 # ── Figure 1: per-homography-component outlines ──────────────────────────────
 # `homographies` are in the IC-GN / h2F convention: positive h11 = tensile in
 # x (target stretched), positive h13 = target shifted +50 px right of the
@@ -79,12 +90,15 @@ for i in range(9):
 # ── Figure 2: per-strain-component outlines ──────────────────────────────────
 # Each panel (i, j) builds ε with only ε_ij (and ε_ji) active, forms F = I+ε,
 # converts to homography via F2h with the chosen pattern centre xo, then warps
-# the square corners.  Off-diagonal panels appear in symmetric pairs (ε12 ↔
-# ε21, etc.) — those will look identical, which is the symmetry of ε made
-# visible.  ε33 is gauge-invariant in this F2strain formulation (always 0
-# because epsilon is normalised by v_stretch[2,2]) — the (2,2) panel shows
-# only the original outline.
-xo = (0.0, 0.0, 1000.0)
+# the square corners.  The displayed ε / ω labels are NOT the chosen inputs —
+# they are extracted from the resulting h via the GUI pipeline (h2F →
+# F2strain).  For a clean round-trip ε_extracted[i,j] ≈ ε_input[i,j] and the
+# extracted ω is ≈ 0 (so we display only when above a small threshold).
+# Off-diagonal panels appear in symmetric pairs (ε12 ↔ ε21, etc.) — identical
+# because ε is symmetric.  ε33 is gauge-invariant in this F2strain formulation
+# (always 0 because epsilon is normalised by v_stretch[2,2]) — the (2,2) panel
+# shows only the original outline.
+xo = (-100.0, 150.0, 1000.0)
 eps_magnitude = 0.1
 
 fig2, ax2 = plt.subplots(3, 3, figsize=(8, 8 * ratio), facecolor="white")
@@ -105,8 +119,14 @@ for panel_idx in range(9):
         h = conversions.F2h(F, xo)
         wx, wy = warped_corners(h)
         ax2[panel_idx].plot(wx, wy, color="red", linewidth=1.5)
-        label = (r"$\varepsilon_{" + f"{i+1}{j+1}" + r"}$"
-                 + f" = {eps_magnitude}")
+
+        # Extract ε and ω via the GUI pipeline (h2F → F2strain)
+        eps_out, omega_deg_out = extract_via_pipeline(h, xo)
+        eps_label = (r"$\varepsilon_{" + f"{i+1}{j+1}" + r"}$"
+                     + f" = {eps_out[i, j]:+.3f}")
+        omega_label = (r"$\omega_{" + f"{i+1}{j+1}" + r"}$"
+                       + f" = {omega_deg_out[i, j]:+.2f}°")
+        label = f"{eps_label}\n{omega_label}"
 
     ax2[panel_idx].text(size[1] // 2, size[0] // 2, label,
                         va="center", ha="center", color="black")
@@ -153,8 +173,14 @@ for panel_idx in range(9):
         h = conversions.F2h(F, xo_rot)
         wx, wy = warped_corners(h)
         ax3[panel_idx].plot(wx, wy, color="red", linewidth=1.5)
-        label = (r"$\omega_{" + f"{i+1}{j+1}" + r"}$"
-                 + f" = +{omega_deg:g}°")
+
+        # Extract ε and ω via the GUI pipeline (h2F → F2strain)
+        eps_out, omega_deg_out = extract_via_pipeline(h, xo_rot)
+        omega_label = (r"$\omega_{" + f"{i+1}{j+1}" + r"}$"
+                       + f" = {omega_deg_out[i, j]:+.2f}°")
+        eps_label = (r"$\varepsilon_{" + f"{i+1}{j+1}" + r"}$"
+                     + f" = {eps_out[i, j]:+.3f}")
+        label = f"{omega_label}\n{eps_label}"
 
     ax3[panel_idx].text(size[1] // 2, size[0] // 2, label,
                         va="center", ha="center", color="black")
