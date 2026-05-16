@@ -166,7 +166,7 @@ def scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
         pc_grid[r, c] = (xstar, ystar, zstar) at scan position (r, c)
     """
     pat_h, pat_w = patshape
-    θ = np.radians((90 - sample_tilt_deg) - detector_tilt_deg)
+    θ = np.deg2rad((90 - sample_tilt_deg) + detector_tilt_deg)
 
     ΔX = scan_grid.data[..., 0]
     ΔY = scan_grid.data[..., 1]

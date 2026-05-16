@@ -172,7 +172,7 @@ if samp_frame:
     # ROTATION MATRIX
     # ============================================================
 
-    R = utilities.rotation_matrix_passive(DetectorTilt, SampleTilt)
+    R = utilities.rotation_matrix_passive_version2(DetectorTilt, SampleTilt)
 
     # ============================================================
     # ROTATE TO SAMPLE FRAME

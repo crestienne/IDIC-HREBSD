@@ -31,3 +31,6 @@ utility/
 Mar1-PC/
 runner_scripts/deprecatedRunners/
 PatternSimulation/
+debug_two_patterns.py
+debug_simulated_reference.py
+fmt_initial_shifts_scan.py

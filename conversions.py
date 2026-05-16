@@ -94,7 +94,6 @@ def xyt2h(shifts: np.ndarray, PC: tuple | list | np.ndarray) -> np.ndarray:
     homographies = xyt2h_partial(shifts)
     homographies[..., 6] = h31
     homographies[..., 7] = h32
-    # homographies = np.squeeze(np.array([h11, h12, h13, h21, h22, h23, h31, h32]))  # shape is (8) for a 2D input, (8, N) for a 3D input, (8, H, W) for a 4D input
     return np.squeeze(homographies)
 
 
@@ -215,6 +214,7 @@ def F2strain(
     Fe = np.asarray(Fe)
     if Fe.shape[-2:] != (3, 3):
         raise ValueError("Fe must have shape (..., 3, 3)")
+    
 
     I = np.eye(3)
 
@@ -272,9 +272,9 @@ def F2strain(
     omega[..., 0, 1] = -w3
     omega[..., 0, 2] =  w2 
     omega[..., 1, 0] =  w3
-    omega[..., 1, 2] = w1
+    omega[..., 1, 2] = -w1
     omega[..., 2, 0] = -w2
-    omega[..., 2, 1] =  -w1
+    omega[..., 2, 1] =  w1
 
 
     #just making sure that we don't end up with negative 0 (added Feb25, 2026)
@@ -283,6 +283,181 @@ def F2strain(
     omega = np.where(np.abs(omega) < eps, 0.0, omega)
 
     return epsilon, omega
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rotation matrix ↔ Bunge Euler angle utilities
+#
+# Bunge convention (ZXZ, passive / crystal-frame):
+#     g(phi1, Phi, phi2) = Rz(phi2) · Rx(Phi) · Rz(phi1)
+#
+# omega here is a skew-symmetric small-rotation tensor (the antisymmetric
+# part of the displacement gradient that F2strain returns).  R = exp(omega)
+# via Rodrigues, then Bunge angles are extracted.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def bunge_to_rotation_matrix(phi1, Phi, phi2, degrees=False):
+    """Inverse: build the Bunge rotation matrix from (phi1, Phi, phi2).
+
+    Vectorised: phi1/Phi/phi2 can be scalars or matching-shape arrays.
+    Returns an array of shape (..., 3, 3).
+    """
+    phi1 = np.asarray(phi1, dtype=float)
+    Phi  = np.asarray(Phi,  dtype=float)
+    phi2 = np.asarray(phi2, dtype=float)
+    if degrees:
+        phi1 = np.radians(phi1)
+        Phi  = np.radians(Phi)
+        phi2 = np.radians(phi2)
+    c1, s1 = np.cos(phi1), np.sin(phi1)
+    cP, sP = np.cos(Phi),  np.sin(Phi)
+    c2, s2 = np.cos(phi2), np.sin(phi2)
+
+    R = np.empty(phi1.shape + (3, 3), dtype=float)
+    R[..., 0, 0] =  c1*c2 - s1*s2*cP
+    R[..., 0, 1] =  s1*c2 + c1*s2*cP
+    R[..., 0, 2] =  s2*sP
+    R[..., 1, 0] = -c1*s2 - s1*c2*cP
+    R[..., 1, 1] = -s1*s2 + c1*c2*cP
+    R[..., 1, 2] =  c2*sP
+    R[..., 2, 0] =  s1*sP
+    R[..., 2, 1] = -c1*sP
+    R[..., 2, 2] =  cP
+    return R
+
+
+def rotation_matrix_to_bunge(R, degrees=False, tol=1e-7, check=True):
+    """Convert a single 3x3 rotation matrix to Bunge Euler angles."""
+    R = np.asarray(R, dtype=float)
+    if R.shape != (3, 3):
+        raise ValueError(f"R must be 3x3, got shape {R.shape}")
+
+    if check:
+        if not np.allclose(R.T @ R, np.eye(3), atol=1e-5):
+            raise ValueError("R is not orthogonal (R.T @ R != I).")
+        if not np.isclose(np.linalg.det(R), 1.0, atol=1e-5):
+            raise ValueError("R is not a proper rotation (det(R) != +1).")
+
+    cosPhi = np.clip(R[2, 2], -1.0, 1.0)
+    Phi = np.arccos(cosPhi)
+    sinPhi = np.sin(Phi)
+
+    if abs(sinPhi) < tol:
+        phi2 = 0.0
+        if cosPhi > 0:
+            phi1 = np.arctan2(R[0, 1], R[0, 0])
+        else:
+            phi1 = np.arctan2(-R[0, 1], R[0, 0])
+    else:
+        phi1 = np.arctan2(R[2, 0], -R[2, 1])
+        phi2 = np.arctan2(R[0, 2],  R[1, 2])
+
+    twopi = 2.0 * np.pi
+    phi1 = phi1 % twopi
+    phi2 = phi2 % twopi
+
+    if degrees:
+        return np.degrees(phi1), np.degrees(Phi), np.degrees(phi2)
+    return phi1, Phi, phi2
+
+
+def rotation_matrix_array_to_bunge(R, degrees=False, lock_tol=1e-7):
+    """Vectorised Bunge extraction from a stack of rotation matrices.
+
+    Parameters
+    ----------
+    R : array_like, shape (..., 3, 3)
+        Proper rotation matrices in Bunge form.
+    degrees : bool
+        If True, return angles in degrees.
+    lock_tol : float
+        Threshold for sin(Phi) below which the gimbal-lock branch is taken.
+
+    Returns
+    -------
+    angles : ndarray, shape (..., 3)
+        Stack of (phi1, Phi, phi2).
+    """
+    R = np.asarray(R, dtype=float)
+    if R.ndim < 2 or R.shape[-2:] != (3, 3):
+        raise ValueError(f"R must have shape (..., 3, 3), got {R.shape}")
+
+    cosPhi = np.clip(R[..., 2, 2], -1.0, 1.0)
+    Phi    = np.arccos(cosPhi)
+    sinPhi = np.sin(Phi)
+
+    phi1 = np.arctan2(R[..., 2, 0], -R[..., 2, 1])
+    phi2 = np.arctan2(R[..., 0, 2],  R[..., 1, 2])
+
+    locked      = np.abs(sinPhi) < lock_tol
+    phi1_at_0   = np.arctan2( R[..., 0, 1], R[..., 0, 0])
+    phi1_at_pi  = np.arctan2(-R[..., 0, 1], R[..., 0, 0])
+    phi1_locked = np.where(cosPhi > 0, phi1_at_0, phi1_at_pi)
+    phi1 = np.where(locked, phi1_locked, phi1)
+    phi2 = np.where(locked, 0.0,         phi2)
+
+    twopi = 2.0 * np.pi
+    phi1 = phi1 % twopi
+    phi2 = phi2 % twopi
+
+    angles = np.stack([phi1, Phi, phi2], axis=-1)
+    if degrees:
+        angles = np.degrees(angles)
+    return angles
+
+
+def skew_to_rotation_matrix_array(W, small_tol=1e-12):
+    """Vectorised Rodrigues: exponentiate a stack of skew tensors to rotations.
+
+    Parameters
+    ----------
+    W : array_like, shape (..., 3, 3)
+        Skew-symmetric matrices.  Symmetrised internally (W -> (W - W^T)/2)
+        so numerical drift does not corrupt the result.
+    """
+    W = np.asarray(W, dtype=float)
+    if W.ndim < 2 or W.shape[-2:] != (3, 3):
+        raise ValueError(f"W must have shape (..., 3, 3), got {W.shape}")
+    W = 0.5 * (W - np.swapaxes(W, -1, -2))
+
+    w1 = W[..., 2, 1]
+    w2 = W[..., 0, 2]
+    w3 = W[..., 1, 0]
+    theta2 = w1*w1 + w2*w2 + w3*w3
+    theta  = np.sqrt(theta2)
+
+    small  = theta < small_tol
+    safe_t = np.where(small, 1.0, theta)
+    a = np.where(small, 1.0 - theta2/6.0,  np.sin(theta) / safe_t)
+    b = np.where(small, 0.5 - theta2/24.0, (1.0 - np.cos(theta)) / (safe_t * safe_t))
+
+    WW = W @ W
+    R  = np.eye(3) + a[..., None, None] * W + b[..., None, None] * WW
+    return R
+
+
+def omega_array_to_bunge(omegas, degrees=False, small_tol=1e-12, lock_tol=1e-7):
+    """Convert an array of skew-symmetric lattice-rotation tensors to Bunge angles.
+
+    Each omega exponentiates (Rodrigues) to a proper rotation R; Bunge Euler
+    angles (phi1, Phi, phi2) are extracted from R.
+
+    Parameters
+    ----------
+    omegas : array_like, shape (..., 3, 3)
+        Skew-symmetric matrices.
+    degrees : bool
+        If True, return angles in degrees.
+
+    Returns
+    -------
+    angles : ndarray, shape (..., 3)
+        phi1, Phi, phi2 — phi1 & phi2 in [0, 2π); Phi in [0, π].
+    """
+    R = skew_to_rotation_matrix_array(omegas, small_tol=small_tol)
+    return rotation_matrix_array_to_bunge(R, degrees=degrees, lock_tol=lock_tol)
+
 
 def Edax_to_Bruker_PC(edax_pc):
     """
@@ -378,8 +553,6 @@ def Bruker_to_fractional_PC(bruker_pc, patshape, pixel_size=None, homography_cen
     # xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
 
     xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
-
-
 
     print('    xo (from PC to homography center, in pixels):', xo, flush=True, file=sys.stderr)
 

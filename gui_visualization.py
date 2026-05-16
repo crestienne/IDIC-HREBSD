@@ -55,6 +55,20 @@ class VisualizationDialog(QDialog):
         data_group  = QGroupBox("Data")
         data_layout = QFormLayout()
 
+        # Convenience: pick a single results folder and auto-populate the
+        # results / homographies / params / save / .ang fields below.
+        self._folder_edit = QLineEdit(run_params.get("results_folder", ""))
+        self._folder_edit.setPlaceholderText(
+            "Pick a run folder to auto-fill the fields below…"
+        )
+        # textChanged fires for both manual edits and Browse-button setText,
+        # so picking a folder via the dialog also triggers auto-population.
+        self._folder_edit.textChanged.connect(self._on_folder_text_changed)
+        data_layout.addRow(
+            "Results folder:",
+            _make_browse_dir(self, self._folder_edit),
+        )
+
         self._npz_edit = QLineEdit(run_params.get("npz_path", ""))
         self._npz_edit.setPlaceholderText("Pre-computed results .npy (preferred)…")
         data_layout.addRow(
@@ -276,6 +290,105 @@ class VisualizationDialog(QDialog):
         self.setLayout(outer)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _on_folder_text_changed(self, text: str):
+        """Trigger auto-population only when the path is an existing dir."""
+        text = (text or "").strip()
+        if text and os.path.isdir(text):
+            self._autopopulate_from_folder(text)
+
+    def _autopopulate_from_folder(self, folder: str):
+        """Fill the data-path fields + scan/physical fields from a run folder.
+
+        Files written by PipelineWorker follow `{comp}_{kind}_{date}.{ext}`:
+            *_results_*.npy        → npz_path     (preferred fast path)
+            *_homographies_*.npy   → npy_path     (legacy fallback)
+            *_params_*.txt         → parsed and folded into form fields
+            *.ang (anywhere)       → ang_path     (only if currently empty)
+        The folder itself becomes `save_folder`.  Most-recent file wins when
+        multiple candidates match.
+        """
+        import glob
+        from gui_workers import _parse_params_txt
+
+        def _latest(pattern: str):
+            matches = glob.glob(os.path.join(folder, pattern))
+            if not matches:
+                return None
+            return max(matches, key=os.path.getmtime)
+
+        results_npy  = _latest("*_results_*.npy")
+        homog_npy    = _latest("*_homographies_*.npy")
+        params_txt   = _latest("*_params_*.txt")
+        ang_file     = _latest("*.ang")
+
+        # ── file paths ────────────────────────────────────────────────────────
+        if results_npy:
+            self._npz_edit.setText(results_npy)
+        if homog_npy:
+            self._npy_edit.setText(homog_npy)
+        if ang_file and not self._ang_edit.text().strip():
+            self._ang_edit.setText(ang_file)
+        self._save_edit.setText(folder)
+
+        # ── parse params .txt and apply to form fields ───────────────────────
+        if not params_txt:
+            self._status.setText(
+                f"Auto-filled file paths from folder.  "
+                f"(no *_params_*.txt found — geometry fields left as-is)"
+            )
+            self._status.setStyleSheet("color: gray; font-style: italic;")
+            return
+
+        params = _parse_params_txt(params_txt)
+        self._apply_parsed_params(params)
+        self._status.setText(
+            f"Auto-filled file paths + parsed {os.path.basename(params_txt)} "
+            f"({sum(1 for _ in params)} keys)."
+        )
+        self._status.setStyleSheet("color: gray; font-style: italic;")
+
+    def _apply_parsed_params(self, p: dict):
+        """Fold parsed run-time params into the visible form fields.
+
+        Silently skips keys that aren't present.  Numeric setters defer to the
+        underlying QSpinBox / QDoubleSpinBox to clamp out-of-range values.
+        """
+        if "rows"     in p: self._rows.setValue(int(p["rows"]))
+        if "cols"     in p: self._cols.setValue(int(p["cols"]))
+        if "pat_h"    in p: self._pat_h.setValue(int(p["pat_h"]))
+        if "pat_w"    in p: self._pat_w.setValue(int(p["pat_w"]))
+        if "tilt"     in p: self._tilt.setValue(float(p["tilt"]))
+        if "det_tilt" in p: self._det_tilt.setValue(float(p["det_tilt"]))
+
+        # pc_edax may have been stored as the tuple itself or as the per-element
+        # keys pc_x/pc_y/pc_z — handle both.
+        pc = p.get("pc_edax")
+        if isinstance(pc, (tuple, list)) and len(pc) >= 3:
+            self._pc_x.setValue(float(pc[0]))
+            self._pc_y.setValue(float(pc[1]))
+            self._pc_z.setValue(float(pc[2]))
+
+        if "step_size"     in p: self._step_size.setValue(float(p["step_size"]))
+        if "pixel_size"    in p: self._pixel_size.setValue(float(p["pixel_size"]))
+        if "scan_strategy" in p:
+            idx = self._scan_strategy.findText(str(p["scan_strategy"]))
+            if idx >= 0:
+                self._scan_strategy.setCurrentIndex(idx)
+        if "apply_pc_correction" in p:
+            self._apply_pc_correction.setChecked(bool(p["apply_pc_correction"]))
+
+        if "crystal_C11" in p: self._C11.setValue(float(p["crystal_C11"]))
+        if "crystal_C12" in p: self._C12.setValue(float(p["crystal_C12"]))
+        if "crystal_C44" in p: self._C44.setValue(float(p["crystal_C44"]))
+        if "crystal_structure" in p:
+            self._struct_lbl.setText(str(p["crystal_structure"]))
+
+        # Stash params we don't have widgets for so _gather can pass them through.
+        for key in ("roi_slice", "full_rows", "full_cols",
+                    "tfbc_use_single_euler", "tfbc_euler_deg", "small_strain"):
+            if key in p:
+                self._run_params[key] = p[key]
 
     def _apply_preset(self, index: int):
         """Auto-fill elastic constant fields when a crystal preset is selected."""

@@ -733,7 +733,8 @@ def rotation_matrix_passive_version2(det_tilt_deg: float, sample_tilt_deg: float
 
     Returns a 3x3 orthogonal rotation matrix.
     """
-    delta = np.deg2rad(90 - sample_tilt_deg + det_tilt_deg)
+    delta = -1* np.deg2rad(90 - sample_tilt_deg + det_tilt_deg)
+    print (f" -- rotation_matrix_passive_version2: computed delta = {np.rad2deg(delta):.2f} deg from det_tilt_deg={det_tilt_deg} and sample_tilt_deg={sample_tilt_deg}")
     #beta = np.deg2rad((90.0 - sample_tilt_deg))  # = 90 + sample_tilt
 
     # Step 1: passive +delta about x  -> active Rx(-delta)
@@ -745,8 +746,8 @@ def rotation_matrix_passive_version2(det_tilt_deg: float, sample_tilt_deg: float
 
     #180 rotation
     Q2 = np.array([
-    [-1.0,  0.0, 0.0],
-    [ 0.0, -1.0, 0.0],
+    [0.0,  -1.0, 0.0],
+    [ -1.0, 0.0, 0.0],
     [ 0.0,  0.0, 1.0],
     ])
 
@@ -763,7 +764,11 @@ def rotation_matrix_passive_version2(det_tilt_deg: float, sample_tilt_deg: float
     #     [0.0, -np.sin(beta), np.cos(beta)],
     # ])
 
-    R = Q3 @ Q1
+    #R = Q3 @ Q1
+    R = Q2 @Q1
+
+    #find the inverse of the rotation (transpose) and check that it matches the expected angles
+
     return R
 
 

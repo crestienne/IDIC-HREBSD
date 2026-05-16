@@ -38,6 +38,20 @@ def style_outline_axis(ax):
                    labelbottom=False, labeltop=False, labelleft=False, labelright=False)
 
 
+def plot_pc(ax, xo):
+    """Mark the pattern centre on `ax`.  `xo` is the (x, y, DD) vector that
+    points FROM the PC TO the image / homography centre, so the PC sits at
+    image_centre - xo[:2]."""
+    pc_px = (PC[0] - xo[0], PC[1] - xo[1])
+    ax.plot(pc_px[0], pc_px[1], marker="*", markersize=10,
+            markerfacecolor="gold", markeredgecolor="black",
+            markeredgewidth=0.8, linestyle="none")
+    ax.annotate("PC", xy=pc_px, xytext=(6, -6), textcoords="offset points",
+                fontsize=7, color="black",
+                bbox=dict(boxstyle="round,pad=0.15", facecolor="white",
+                          edgecolor="none", alpha=0.7))
+
+
 def extract_via_pipeline(h, xo):
     """Run h through h2F → F2strain (the GUI's pipeline) and return
     (eps, omega_deg) — both 3x3 arrays.  Use this in every panel below so the
@@ -98,7 +112,7 @@ for i in range(9):
 # because ε is symmetric.  ε33 is gauge-invariant in this F2strain formulation
 # (always 0 because epsilon is normalised by v_stretch[2,2]) — the (2,2) panel
 # shows only the original outline.
-xo = (-100.0, 150.0, 1000.0)
+xo = (0.0, 0.0, 1000.0)
 eps_magnitude = 0.1
 
 fig2, ax2 = plt.subplots(3, 3, figsize=(8, 8 * ratio), facecolor="white")
@@ -108,6 +122,7 @@ for panel_idx in range(9):
     i, j = divmod(panel_idx, 3)
     style_outline_axis(ax2[panel_idx])
     ax2[panel_idx].plot(orig_x_px, orig_y_px, color="black", linewidth=1.5)
+    plot_pc(ax2[panel_idx], xo)
 
     if (i, j) == (2, 2):
         label = r"$\varepsilon_{33}$ = 0" + "\n(gauge-invariant)"
@@ -161,6 +176,7 @@ for panel_idx in range(9):
     i, j = divmod(panel_idx, 3)
     style_outline_axis(ax3[panel_idx])
     ax3[panel_idx].plot(orig_x_px, orig_y_px, color="black", linewidth=1.5)
+    plot_pc(ax3[panel_idx], xo_rot)
 
     if i == j:
         label = (r"$\omega_{" + f"{i+1}{j+1}" + r"}$ = 0"

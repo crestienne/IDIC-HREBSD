@@ -100,6 +100,7 @@ def optimize_reversed(
     ref_pat_override: np.ndarray = None,
     spectral_match_ref: bool = False,
     perspective_regularization: float = 0.0,
+    rotate_patterns_90: bool = False,
     progress_callback: Callable = None,
     debug_gradients: bool = False,
 ) -> np.ndarray:
@@ -160,6 +161,25 @@ def optimize_reversed(
     else:
         raise TypeError("pats must be a Data.UP2 object or a numpy array.")
 
+    # Diagnostic: rotate every pattern (constant target + per-pixel refs +
+    # mask + override) by 90° CCW before the optimization runs.  The .up2
+    # is untouched.  PC vectors are NOT rotated, so the geometry feeding
+    # h2F stays in the original frame; this lets you compare strain output
+    # with and without the 90° rotation to assess PC-sensitivity.
+    _orig_patshape = patshape
+    if rotate_patterns_90:
+        print("[reversed][rotate_patterns_90] applying np.rot90(k=1) to all "
+              "patterns (constant target, per-pixel refs, mask, override).  "
+              ".up2 untouched.")
+        _base_get_pat = get_pat
+        get_pat = lambda idx: np.rot90(_base_get_pat(idx), k=1)
+        # Rotation by 90° transposes the shape.
+        patshape = (patshape[1], patshape[0])
+        if mask is not None:
+            mask = np.rot90(mask, k=1)
+        if ref_pat_override is not None:
+            ref_pat_override = np.rot90(ref_pat_override, k=1)
+
     h0 = (patshape[1] // 2, patshape[0] // 2)
     crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
     crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
@@ -176,12 +196,14 @@ def optimize_reversed(
             master_pattern_path=master_pattern_path,
             euler_angles=euler_angles_ref,
             PC=pc_ref,
-            patshape=patshape,
+            patshape=_orig_patshape,
             tilt_deg=tilt_deg,
             detector_tilt_deg=detector_tilt_deg,
             pat_obj=pats if isinstance(pats, Data.UP2) else None,
             high_pass_sigma_override=sim_high_pass_sigma,
         )
+        if rotate_patterns_90:
+            T_const = np.rot90(T_const, k=1)
         print(f"[reversed] Using simulated pattern as constant TARGET (shape {T_const.shape})")
         if debug_gradients:
             real_T = get_pat(x0)
