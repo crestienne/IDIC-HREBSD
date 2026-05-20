@@ -1167,26 +1167,35 @@ class PcEulerRefineWorker(QThread):
                  master_pattern_path: str, euler_angles_init: np.ndarray,
                  pc_init: tuple, sample_tilt_deg: float, detector_tilt_deg: float,
                  max_iter: int = 300, euler_step_deg: float = 0.5,
-                 pc_step: float = 0.005, save_dir: str = "debug",
+                 pc_step: float = 0.005,
+                 n_restarts: int = 4,
+                 restart_rotvec_std_deg: float = 3.0,
+                 restart_pc_std: float = 0.01,
+                 restart_seed: int = 0,
+                 save_dir: str = "debug",
                  sim_high_pass_sigma: float = None,
                  sim_low_pass_sigma: float = None,
                  sim_gamma: float = None):
         super().__init__()
-        self.up2_path            = up2_path
-        self.pat_idx             = pat_idx
-        self.processing_params   = processing_params
-        self.master_pattern_path = master_pattern_path
-        self.euler_angles_init   = euler_angles_init
-        self.pc_init             = pc_init
-        self.sample_tilt_deg     = sample_tilt_deg
-        self.detector_tilt_deg   = detector_tilt_deg
-        self.max_iter            = max_iter
-        self.euler_step_deg      = euler_step_deg
-        self.pc_step             = pc_step
-        self.save_dir            = save_dir
-        self.sim_high_pass_sigma = sim_high_pass_sigma
-        self.sim_low_pass_sigma  = sim_low_pass_sigma
-        self.sim_gamma           = sim_gamma
+        self.up2_path                = up2_path
+        self.pat_idx                 = pat_idx
+        self.processing_params       = processing_params
+        self.master_pattern_path     = master_pattern_path
+        self.euler_angles_init       = euler_angles_init
+        self.pc_init                 = pc_init
+        self.sample_tilt_deg         = sample_tilt_deg
+        self.detector_tilt_deg       = detector_tilt_deg
+        self.max_iter                = max_iter
+        self.euler_step_deg          = euler_step_deg
+        self.pc_step                 = pc_step
+        self.n_restarts              = n_restarts
+        self.restart_rotvec_std_deg  = restart_rotvec_std_deg
+        self.restart_pc_std          = restart_pc_std
+        self.restart_seed            = restart_seed
+        self.save_dir                = save_dir
+        self.sim_high_pass_sigma     = sim_high_pass_sigma
+        self.sim_low_pass_sigma      = sim_low_pass_sigma
+        self.sim_gamma               = sim_gamma
 
     def run(self):
         old_stdout = sys.stdout
@@ -1208,20 +1217,24 @@ class PcEulerRefineWorker(QThread):
                 gamma                   = p.get("gamma", 0.8),
             )
             euler_opt, pc_opt = optimize_pc_and_euler(
-                pat_obj             = pat_obj,
-                x0                  = self.pat_idx,
-                master_pattern_path = self.master_pattern_path,
-                euler_angles_init   = self.euler_angles_init,
-                pc_init             = self.pc_init,
-                sample_tilt_deg     = self.sample_tilt_deg,
-                detector_tilt_deg   = self.detector_tilt_deg,
-                max_iter            = self.max_iter,
-                euler_step_deg      = self.euler_step_deg,
-                pc_step             = self.pc_step,
-                save_dir            = self.save_dir,
-                sim_high_pass_sigma = self.sim_high_pass_sigma,
-                sim_low_pass_sigma  = self.sim_low_pass_sigma,
-                sim_gamma           = self.sim_gamma,
+                pat_obj                = pat_obj,
+                x0                     = self.pat_idx,
+                master_pattern_path    = self.master_pattern_path,
+                euler_angles_init      = self.euler_angles_init,
+                pc_init                = self.pc_init,
+                sample_tilt_deg        = self.sample_tilt_deg,
+                detector_tilt_deg      = self.detector_tilt_deg,
+                max_iter               = self.max_iter,
+                euler_step_deg         = self.euler_step_deg,
+                pc_step                = self.pc_step,
+                n_restarts             = self.n_restarts,
+                restart_rotvec_std_deg = self.restart_rotvec_std_deg,
+                restart_pc_std         = self.restart_pc_std,
+                restart_seed           = self.restart_seed,
+                save_dir               = self.save_dir,
+                sim_high_pass_sigma    = self.sim_high_pass_sigma,
+                sim_low_pass_sigma     = self.sim_low_pass_sigma,
+                sim_gamma              = self.sim_gamma,
             )
             self.done_signal.emit(euler_opt, pc_opt)
         except Exception:

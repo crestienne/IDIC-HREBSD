@@ -793,6 +793,10 @@ def optimize_pc_and_euler(
     max_iter: int = 300,
     euler_step_deg: float = 0.5,
     pc_step: float = 0.005,
+    n_restarts: int = 4,
+    restart_rotvec_std_deg: float = 3.0,
+    restart_pc_std: float = 0.01,
+    restart_seed: int = 0,
     sim_high_pass_sigma: float = None,
     sim_low_pass_sigma: float = None,
     sim_gamma: float = None,
@@ -832,11 +836,28 @@ def optimize_pc_and_euler(
     detector_tilt_deg : float, optional
         Detector tilt in degrees — Step 2 in GUI.
     max_iter : int
-        Maximum number of Nelder-Mead function evaluations (default 300).
+        Maximum number of Nelder-Mead function evaluations **per restart**
+        (default 300).  Total cost = n_restarts × max_iter.
     euler_step_deg : float
-        Initial simplex step for Euler angles in degrees (default 0.5).
+        Initial simplex step for the rotation-vector components in degrees
+        (default 0.5).  Used to perturb the local simplex once each restart
+        has placed its starting point.
     pc_step : float
         Initial simplex step for each PC component (default 0.005).
+    n_restarts : int
+        Number of Nelder-Mead runs (default 4).  Restart 0 is always the
+        single-start case (delta = 0).  Restarts 1..N-1 use Gaussian random
+        perturbations of zero as starting points.  Set to 1 to disable
+        multi-start and recover the previous single-start behaviour.
+    restart_rotvec_std_deg : float
+        Standard deviation (degrees) of the random rotation-vector seed used
+        for restarts 1..N-1.  Default 3.0 — a few degrees, comparable to
+        typical .ang orientation accuracy.
+    restart_pc_std : float
+        Standard deviation of the random PC seed used for restarts 1..N-1.
+        Default 0.01 — about 1% of the detector size in Bruker units.
+    restart_seed : int
+        RNG seed for reproducible restart sequences (default 0).
     sim_high_pass_sigma : float, optional
         Override high_pass_sigma for the simulated pattern only.
         Set higher than the experimental value (e.g. 25–30) to remove the
@@ -973,24 +994,48 @@ def optimize_pc_and_euler(
         return znssd_val   # ZNSSD is a loss — minimise directly
 
     # ------------------------------------------------------------------
-    # Nelder-Mead with physically tuned initial simplex
+    # Multi-start Nelder-Mead.  Restart 0 begins at delta = 0 (the user's
+    # initial guess, identical to single-start behaviour); restarts
+    # 1..n_restarts-1 begin at random Gaussian perturbations of zero in
+    # both rotation-vector and PC space.  best_state / best_znssd are
+    # already populated by `objective` and persist across restarts, so
+    # the best result over ALL runs is what we return.
     # ------------------------------------------------------------------
-    x0_delta = np.zeros(6)
-    minimize(
-        objective,
-        x0_delta,
-        method="Nelder-Mead",
-        options={
-            "maxiter":         max_iter,
-            "maxfev":          max_iter,
-            "xatol":           1e-5,
-            "fatol":           1e-6,
-            "adaptive":        True,
-            "initial_simplex": _build_initial_simplex(
-                x0_delta, euler_step_deg, pc_step
-            ),
-        },
-    )
+    rng = np.random.default_rng(restart_seed)
+    rotvec_std_rad = float(np.deg2rad(restart_rotvec_std_deg))
+
+    n_restarts = max(1, int(n_restarts))
+    for r in range(n_restarts):
+        if r == 0:
+            x0_delta = np.zeros(6)
+            print(f"\n[restart {r+1}/{n_restarts}] starting at delta = 0  "
+                  f"(deterministic seed)")
+        else:
+            x0_delta = np.concatenate([
+                rng.normal(0.0, rotvec_std_rad, size=3),
+                rng.normal(0.0, restart_pc_std,  size=3),
+            ])
+            print(f"\n[restart {r+1}/{n_restarts}] starting at "
+                  f"rotvec={np.degrees(x0_delta[:3]).round(3)}°  "
+                  f"pc_delta={x0_delta[3:].round(5)}")
+
+        minimize(
+            objective,
+            x0_delta,
+            method="Nelder-Mead",
+            options={
+                "maxiter":         max_iter,
+                "maxfev":          max_iter,
+                "xatol":           1e-5,
+                "fatol":           1e-6,
+                "adaptive":        True,
+                "initial_simplex": _build_initial_simplex(
+                    x0_delta, euler_step_deg, pc_step
+                ),
+            },
+        )
+        print(f"[restart {r+1}/{n_restarts}] done — "
+              f"best ZNSSD so far = {best_znssd[0]:.6f}  (after {nfev[0]} total evals)")
 
     # ------------------------------------------------------------------
     # Report
