@@ -171,12 +171,8 @@ class PipelineWorker(QThread):
             truncate_std_scale=3.0,
             mask_type=p["mask_type"],
             center_cross_half_width=6,
-            use_clahe=p.get("use_clahe", False),
-            clahe_kernel=(p["clahe_kernel"], p["clahe_kernel"]),
-            clahe_clip=p["clahe_clip"],
-            clahe_nbins=256,
             flip_x=p["flip_x"],
-            gamma=p.get("gamma", 0.66),
+            gamma=p.get("gamma", 0.8),
         )
         print(pat_obj)
 
@@ -476,24 +472,23 @@ class PipelineWorker(QThread):
         if ref_pp and ref_pp.get("enabled"):
             saved = (
                 pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
-                pat_obj.mask_type,       pat_obj.use_clahe,
+                pat_obj.mask_type,
             )
             pat_obj.high_pass_sigma = float(ref_pp["high_pass_sigma"])
             pat_obj.low_pass_sigma  = float(ref_pp["low_pass_sigma"])
             pat_obj.gamma           = float(ref_pp["gamma"])
             pat_obj.mask_type       = (None if ref_pp["mask_type"] == "None"
                                         else ref_pp["mask_type"])
-            pat_obj.use_clahe       = bool(ref_pp["use_clahe"])
             try:
                 ref_pat_override = pat_obj.read_pattern(int(x0), process=True)
                 self.log_signal.emit(
                     f"Reference preprocessing override: hp={ref_pp['high_pass_sigma']}  "
                     f"lp={ref_pp['low_pass_sigma']}  γ={ref_pp['gamma']}  "
-                    f"mask={ref_pp['mask_type']}  CLAHE={ref_pp['use_clahe']}"
+                    f"mask={ref_pp['mask_type']}"
                 )
             finally:
                 (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
-                 pat_obj.mask_type,       pat_obj.use_clahe) = saved
+                 pat_obj.mask_type) = saved
 
         # Build optimize_params; xcorr accepts extra kwargs via **_ignored,
         # so we always pack the xcorr-specific ones too.
@@ -1234,12 +1229,8 @@ class PcEulerRefineWorker(QThread):
                 truncate_std_scale      = 3.0,
                 mask_type               = mask_type,
                 center_cross_half_width = 6,
-                use_clahe               = p.get("use_clahe", False),
-                clahe_kernel            = (p["clahe_kernel"], p["clahe_kernel"]),
-                clahe_clip              = p["clahe_clip"],
-                clahe_nbins             = 256,
                 flip_x                  = p["flip_x"],
-                gamma                   = p.get("gamma", 0.66),
+                gamma                   = p.get("gamma", 0.8),
             )
             euler_opt, pc_opt = optimize_pc_and_euler(
                 pat_obj             = pat_obj,
@@ -1289,12 +1280,8 @@ class PatternPreviewWorker(QThread):
                 truncate_std_scale     = 3.0,
                 mask_type              = mask_type,
                 center_cross_half_width= 6,
-                use_clahe              = p.get("use_clahe", False),
-                clahe_kernel           = (p["clahe_kernel"], p["clahe_kernel"]),
-                clahe_clip             = p["clahe_clip"],
-                clahe_nbins            = 256,
                 flip_x                 = p["flip_x"],
-                gamma                  = p.get("gamma", 0.66),
+                gamma                  = p.get("gamma", 0.8),
             )
             raw       = pat_obj.read_pattern(self.pat_idx, process=False)
             processed = pat_obj.read_pattern(self.pat_idx, process=True)

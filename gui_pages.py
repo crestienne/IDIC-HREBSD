@@ -3,7 +3,7 @@ gui_pages.py — all QWizardPage subclasses for the DIC-HREBSD wizard.
 
   LoadFilesPage         — Step 1: select UP2, ANG, output folder
   ScanGeometryPage      — Step 2: tilts, PC, detector / scan geometry
-  PatternProcessingPage — Step 3: frequency filters, mask, CLAHE, flip
+  PatternProcessingPage — Step 3: frequency filters, mask, flip
   ReferencePatternPage  — Step 4: pick and preview the reference pattern
   ROISelectionPage      — Step 5: grain segmentation + region of interest
   OptimizationRunPage   — Step 6: run the pipeline, launch vis dialog
@@ -32,7 +32,6 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
 from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker, SimRefWorker, PcEulerRefineWorker
 from gui_visualization import VisualizationDialog
-from gui_sweep import ParameterSweepDialog
 
 
 from gui_materials import _load_material_presets, NewMaterialDialog
@@ -1236,7 +1235,7 @@ class SimTunerDialog(QDialog):
         self._exp_pat_proc    = exp_pat_proc  # processed   (may be None)
         # Default to the processed experimental pattern when available so the
         # checkerboard reflects the same preprocessing pipeline the optimizer
-        # will see at run time (Step 3 hp / lp / γ / CLAHE / mask / flip).
+        # will see at run time (Step 3 hp / lp / γ / mask / flip).
         self._exp_pat         = exp_pat_proc if exp_pat_proc is not None else exp_pat
         self._worker          = None
 
@@ -1338,7 +1337,7 @@ class SimTunerDialog(QDialog):
         self._proc_chk.setChecked(exp_pat_proc is not None)
         self._proc_chk.setEnabled(exp_pat_proc is not None)
         self._proc_chk.setToolTip(
-            "Use the processed (filtered/CLAHE) experimental pattern in the checkerboard."
+            "Use the processed (filtered) experimental pattern in the checkerboard."
             if exp_pat_proc is not None
             else "Not available — generate the pattern first so processing params are applied."
         )
@@ -2281,12 +2280,8 @@ class ReferencePatternPage(QWizardPage):
                         truncate_std_scale      = 3.0,
                         mask_type               = mask_type,
                         center_cross_half_width = 6,
-                        use_clahe               = p.get("use_clahe", False),
-                        clahe_kernel            = (p["clahe_kernel"], p["clahe_kernel"]),
-                        clahe_clip              = p["clahe_clip"],
-                        clahe_nbins             = 256,
                         flip_x                  = p["flip_x"],
-                        gamma                   = p.get("gamma", 0.66),
+                        gamma                   = p.get("gamma", 0.8),
                     )
                     proc = pat_obj.read_pattern(idx, process=True).astype(np.float32)
                     lo, hi = proc.min(), proc.max()
@@ -2543,13 +2538,13 @@ class PatternProcessingPage(QWizardPage):
 
         self.low_pass = QDoubleSpinBox()
         self.low_pass.setRange(0, 100)
-        self.low_pass.setValue(0.0)
+        self.low_pass.setValue(1.0)
 
         self.gamma = QDoubleSpinBox()
         self.gamma.setRange(0.1, 3.0)
-        self.gamma.setValue(0.66)
+        self.gamma.setValue(0.8)
         self.gamma.setSingleStep(0.05)
-        self.gamma.setToolTip("Gamma < 1 brightens dark regions (similar to CLAHE). Set to 1.0 to disable.")
+        self.gamma.setToolTip("Gamma < 1 brightens dark regions. Set to 1.0 to disable.")
 
         filt_layout.addRow("High-pass sigma:",      self.high_pass)
         filt_layout.addRow("High-pass kernel (px):", self.high_pass_kernel_px)
@@ -2568,36 +2563,6 @@ class PatternProcessingPage(QWizardPage):
         mask_layout.addRow("Mask type:", self.mask_type)
         mask_group.setLayout(mask_layout)
         ctrl.addWidget(mask_group)
-
-        # CLAHE
-        clahe_group  = QGroupBox("CLAHE")
-        clahe_layout = QFormLayout()
-
-        self.use_clahe = QCheckBox("Enable CLAHE")
-        self.use_clahe.setChecked(False)
-
-        self.clahe_kernel = QSpinBox()
-        self.clahe_kernel.setRange(1, 32)
-        self.clahe_kernel.setValue(6)
-
-        self.clahe_clip = QDoubleSpinBox()
-        self.clahe_clip.setRange(0.001, 1.0)
-        self.clahe_clip.setValue(0.01)
-        self.clahe_clip.setSingleStep(0.005)
-
-        def _toggle_clahe(enabled):
-            self.clahe_kernel.setEnabled(enabled)
-            self.clahe_clip.setEnabled(enabled)
-            self._schedule_preview()
-
-        self.use_clahe.toggled.connect(_toggle_clahe)
-        _toggle_clahe(self.use_clahe.isChecked())  # set initial enabled state
-
-        clahe_layout.addRow("",             self.use_clahe)
-        clahe_layout.addRow("Kernel size:", self.clahe_kernel)
-        clahe_layout.addRow("Clip limit:",  self.clahe_clip)
-        clahe_group.setLayout(clahe_layout)
-        ctrl.addWidget(clahe_group)
 
         # Orientation
         orient_group  = QGroupBox("Orientation")
@@ -2645,8 +2610,6 @@ class PatternProcessingPage(QWizardPage):
         self._ref_gamma = QDoubleSpinBox()
         self._ref_gamma.setRange(0.1, 3.0);    self._ref_gamma.setValue(1.0)
         self._ref_gamma.setSingleStep(0.05)
-        self._ref_use_clahe = QCheckBox("Enable CLAHE on reference")
-        self._ref_use_clahe.setChecked(False)
         self._ref_mask_type = QComboBox()
         self._ref_mask_type.addItems(["None", "circular", "center_cross"])
 
@@ -2654,7 +2617,6 @@ class PatternProcessingPage(QWizardPage):
         ref_layout.addRow("Reference low-pass σ:",  self._ref_low_pass)
         ref_layout.addRow("Reference gamma:",       self._ref_gamma)
         ref_layout.addRow("Reference mask type:",   self._ref_mask_type)
-        ref_layout.addRow(self._ref_use_clahe)
 
         self._preview_use_ref = QCheckBox("Live-preview the reference with these settings")
         self._preview_use_ref.setChecked(False)
@@ -2740,7 +2702,7 @@ class PatternProcessingPage(QWizardPage):
         # Enable / disable the override controls based on the master checkbox.
         def _toggle_ref_preproc(enabled: bool):
             for w in (self._ref_high_pass, self._ref_low_pass, self._ref_gamma,
-                      self._ref_mask_type, self._ref_use_clahe, self._preview_use_ref):
+                      self._ref_mask_type, self._preview_use_ref):
                 w.setEnabled(enabled)
             self._schedule_preview()
         self._ref_preproc_enabled.toggled.connect(_toggle_ref_preproc)
@@ -2750,7 +2712,6 @@ class PatternProcessingPage(QWizardPage):
         # when the preview is in reference-mode, but cheap either way).
         for w in (self._ref_high_pass, self._ref_low_pass, self._ref_gamma):
             w.valueChanged.connect(self._schedule_preview)
-        self._ref_use_clahe.toggled.connect(self._schedule_preview)
         self._ref_mask_type.currentIndexChanged.connect(self._schedule_preview)
         self._preview_use_ref.toggled.connect(self._schedule_preview)
 
@@ -2764,15 +2725,6 @@ class PatternProcessingPage(QWizardPage):
         self._show_gradients = QCheckBox("Show gradients")
         self._show_gradients.setChecked(False)
         adv_layout.addWidget(self._show_gradients)
-
-        self._sweep_btn = QPushButton("Parameter Sweep…")
-        self._sweep_btn.setStyleSheet(
-            f"background-color: {THEME['surface_bg']}; "
-            f"color: {THEME['accent']}; "
-            f"border: 1px solid {THEME['accent']}; border-radius: 4px; padding: 4px;"
-        )
-        self._sweep_btn.clicked.connect(self._open_sweep_dialog)
-        adv_layout.addWidget(self._sweep_btn)
 
         adv_group.setLayout(adv_layout)
         ctrl.addWidget(adv_group)
@@ -2861,10 +2813,8 @@ class PatternProcessingPage(QWizardPage):
         self.setLayout(outer)
 
         # Connect all controls → debounced preview
-        for w in (self.high_pass, self.low_pass, self.clahe_clip, self.gamma):
+        for w in (self.high_pass, self.low_pass, self.gamma):
             w.valueChanged.connect(self._schedule_preview)
-        self.clahe_kernel.valueChanged.connect(self._schedule_preview)
-        self.use_clahe.toggled.connect(self._schedule_preview)
         self.mask_type.currentIndexChanged.connect(self._schedule_preview)
         self.flip_x.toggled.connect(self._schedule_preview)
 
@@ -2905,12 +2855,8 @@ class PatternProcessingPage(QWizardPage):
                         truncate_std_scale      = 3.0,
                         mask_type               = mask_type,
                         center_cross_half_width = 6,
-                        use_clahe               = p.get("use_clahe", False),
-                        clahe_kernel            = (p["clahe_kernel"], p["clahe_kernel"]),
-                        clahe_clip              = p["clahe_clip"],
-                        clahe_nbins             = 256,
                         flip_x                  = p["flip_x"],
-                        gamma                   = p.get("gamma", 0.66),
+                        gamma                   = p.get("gamma", 0.8),
                     )
                     processed = pat_obj.process_pattern(sim_pat.copy())
                 else:
@@ -2955,7 +2901,6 @@ class PatternProcessingPage(QWizardPage):
                 "low_pass_sigma":  ref["low_pass_sigma"],
                 "gamma":           ref["gamma"],
                 "mask_type":       ref["mask_type"],
-                "use_clahe":       ref["use_clahe"],
             }
             self._prev_status.setText("Processing reference pattern (override settings)…")
         else:
@@ -3036,58 +2981,6 @@ class PatternProcessingPage(QWizardPage):
         self._ax_proc.add_patch(self._crop_rect)
         self._canvas_proc.draw_idle()
 
-    # ── Parameter sweep ───────────────────────────────────────────────────────
-
-    def _open_sweep_dialog(self):
-        wiz      = self.wizard()
-        up2_path = wiz.field("up2_path") if wiz else ""
-        if not up2_path or not os.path.exists(up2_path):
-            self._prev_status.setText("No UP2 file loaded — go back to Step 1.")
-            return
-
-        try:
-            ref_params = wiz.reference_page.get_params()
-            geom       = wiz.geometry_page.get_params()
-            if ref_params.get("ref_mode", "single") == "per_grain":
-                rps = ref_params.get("ref_pattern_set")
-                pat_idx = rps[0].ref_pat_idx if rps and len(rps) > 0 else 0
-            else:
-                ref_pos = ref_params["ref_position"]
-                pat_idx = int(np.ravel_multi_index(ref_pos, (geom["rows"], geom["cols"])))
-        except Exception:
-            pat_idx = 0
-
-        dlg = ParameterSweepDialog(up2_path, pat_idx, self.get_params(), parent=self)
-        dlg.params_selected.connect(self._apply_sweep_params)
-        dlg.exec()
-
-    def _apply_sweep_params(self, params: dict):
-        """Apply the selected sweep result back to the page spinboxes."""
-        self.high_pass.blockSignals(True)
-        self.high_pass_kernel_px.blockSignals(True)
-        self.low_pass.blockSignals(True)
-        self.clahe_kernel.blockSignals(True)
-        self.clahe_clip.blockSignals(True)
-        self.gamma.blockSignals(True)
-
-        new_hp = params.get("high_pass_sigma", self.high_pass.value())
-        self.high_pass.setValue(new_hp)
-        self.high_pass_kernel_px.setValue(new_hp * 6.0)
-        self.low_pass.setValue(params.get("low_pass_sigma",   self.low_pass.value()))
-        self.clahe_kernel.setValue(params.get("clahe_kernel", self.clahe_kernel.value()))
-        self.clahe_clip.setValue(params.get("clahe_clip",     self.clahe_clip.value()))
-        self.gamma.setValue(params.get("gamma",               self.gamma.value()))
-
-        self.high_pass.blockSignals(False)
-        self.high_pass_kernel_px.blockSignals(False)
-        self.low_pass.blockSignals(False)
-        self.clahe_kernel.blockSignals(False)
-        self.clahe_clip.blockSignals(False)
-        self.gamma.blockSignals(False)
-
-        # Trigger a single live preview with the new values
-        self._schedule_preview()
-
     # ── Params ────────────────────────────────────────────────────────────────
 
     def get_params(self) -> dict:
@@ -3097,9 +2990,6 @@ class PatternProcessingPage(QWizardPage):
             "gamma":           self.gamma.value(),
             "flip_x":          self.flip_x.isChecked(),
             "mask_type":       self.mask_type.currentText(),
-            "use_clahe":       self.use_clahe.isChecked(),
-            "clahe_kernel":    self.clahe_kernel.value(),
-            "clahe_clip":      self.clahe_clip.value(),
             "crop_fraction":   self.crop_fraction.value(),
         }
         if self._ref_preproc_enabled.isChecked():
@@ -3109,7 +2999,6 @@ class PatternProcessingPage(QWizardPage):
                 "low_pass_sigma":  self._ref_low_pass.value(),
                 "gamma":           self._ref_gamma.value(),
                 "mask_type":       self._ref_mask_type.currentText(),
-                "use_clahe":       self._ref_use_clahe.isChecked(),
             }
         # Spectral-match toggle is independent of the override block above.
         params["spectral_match_ref"] = self._spectral_match_ref.isChecked()
@@ -3291,7 +3180,6 @@ class OptimizationRunPage(QWizardPage):
             f"High-pass σ      : {proc['high_pass_sigma']}",
             f"Flip patterns    : {proc['flip_x']}",
             f"Mask type        : {proc['mask_type']}",
-            f"CLAHE            : {'on (kernel=' + str(proc['clahe_kernel']) + ')' if proc['use_clahe'] else 'off'}",
             f"",
             f"Scan strategy    : {geom['scan_strategy']}",
             f"PC correction    : {'yes' if geom['apply_pc_correction'] else 'no'}",

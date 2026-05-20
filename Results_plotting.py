@@ -616,7 +616,7 @@ def plot_all_results(results: dict, params: dict):
         if sp_long_csv:
             n_rows_, n_cols_ = e11_abs.shape
             rr, cc = np.meshgrid(np.arange(n_rows_), np.arange(n_cols_), indexing="ij")
-            cols = [
+            csv_cols = [
                 ("row",            rr.ravel()),
                 ("col",            cc.ravel()),
                 ("e11",            e11_abs.ravel()),
@@ -631,10 +631,10 @@ def plot_all_results(results: dict, params: dict):
                 ("eps_T",          tetragonal_strain.ravel()),
                 ("c_over_a",       tetragonality_ca.ravel()),
             ]
-            header = ",".join(name for name, _ in cols)
-            data = np.column_stack([arr for _, arr in cols])
+            header = ",".join(name for name, _ in csv_cols)
+            data = np.column_stack([arr for _, arr in csv_cols])
             # Integer formats for row/col; high precision for the rest.
-            fmts = ["%d", "%d"] + ["%.8e"] * (len(cols) - 2)
+            fmts = ["%d", "%d"] + ["%.8e"] * (len(csv_cols) - 2)
             np.savetxt(
                 sp_long_csv,
                 data,

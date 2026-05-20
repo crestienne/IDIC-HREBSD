@@ -649,7 +649,7 @@ def spectral_match_pattern(
     ref_pat: np.ndarray,
     target_amp: np.ndarray,
     eps: float = 1e-3,
-    cap: float = 5.0,
+    cap: float = 10.0,
 ) -> np.ndarray:
     """Reshape `ref_pat`'s amplitude spectrum to match `target_amp`, preserving
     the reference's phase.  Auto-tuning fix for sim/exp gradient anisotropy
