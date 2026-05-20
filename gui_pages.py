@@ -1555,44 +1555,6 @@ class ReferencePatternPage(QWizardPage):
         self._pos_group.setLayout(pos_layout)
         left_layout.addWidget(self._pos_group)
 
-        # ── Crystal orientation override (TFBC) ──────────────────────────────
-        # Used in the traction-free BC stiffness rotation.  When enabled, every
-        # pattern in the scan is treated as if it had this fixed Bunge Euler
-        # orientation.  Initial values populated from the .ang file at (0,0).
-        self._tfbc_orient_group = QGroupBox("Crystal Orientation Override (TFBC)")
-        tfbc_orient_layout = QFormLayout()
-
-        tfbc_orient_layout.addRow(_note(
-            "Enable to use a single Bunge orientation (degrees) for the\n"
-            "traction-free strain calculation instead of the per-pattern\n"
-            ".ang quats.  Auto-filled from the (0,0) pattern of the .ang."
-        ))
-
-        self._tfbc_use_single_euler = QCheckBox("Use single Euler angle for TFBC")
-        self._tfbc_use_single_euler.setChecked(False)
-        tfbc_orient_layout.addRow(self._tfbc_use_single_euler)
-
-        self._tfbc_eu_phi1 = QDoubleSpinBox()
-        self._tfbc_eu_phi1.setRange(-720.0, 720.0); self._tfbc_eu_phi1.setDecimals(3)
-        self._tfbc_eu_phi1.setSuffix(" °"); self._tfbc_eu_phi1.setSingleStep(0.1)
-        self._tfbc_eu_Phi  = QDoubleSpinBox()
-        self._tfbc_eu_Phi.setRange(0.0, 180.0);  self._tfbc_eu_Phi.setDecimals(3)
-        self._tfbc_eu_Phi.setSuffix(" °");  self._tfbc_eu_Phi.setSingleStep(0.1)
-        self._tfbc_eu_phi2 = QDoubleSpinBox()
-        self._tfbc_eu_phi2.setRange(-720.0, 720.0); self._tfbc_eu_phi2.setDecimals(3)
-        self._tfbc_eu_phi2.setSuffix(" °"); self._tfbc_eu_phi2.setSingleStep(0.1)
-
-        tfbc_orient_layout.addRow("φ₁ (Bunge):", self._tfbc_eu_phi1)
-        tfbc_orient_layout.addRow("Φ  (Bunge):", self._tfbc_eu_Phi)
-        tfbc_orient_layout.addRow("φ₂ (Bunge):", self._tfbc_eu_phi2)
-
-        self._tfbc_eu_load_btn = QPushButton("Reload (0,0) Euler from .ang")
-        self._tfbc_eu_load_btn.clicked.connect(self._populate_tfbc_euler_from_ang)
-        tfbc_orient_layout.addRow(self._tfbc_eu_load_btn)
-
-        self._tfbc_orient_group.setLayout(tfbc_orient_layout)
-        left_layout.addWidget(self._tfbc_orient_group)
-
         # ── Strain formulation ───────────────────────────────────────────────
         self._strain_form_group = QGroupBox("Strain Formulation")
         strain_form_layout = QFormLayout()
@@ -1780,7 +1742,35 @@ class ReferencePatternPage(QWizardPage):
         _sim_ph_layout.addWidget(self._sim_open_btn)
         self._sim_placeholder.setLayout(_sim_ph_layout)
         left_layout.addWidget(self._sim_placeholder)
-        left_layout.addStretch()
+
+        # ── Reference Pattern Preview (lower-left) ────────────────────────────
+        ref_pat_group  = QGroupBox("Reference Pattern")
+        ref_pat_layout = QVBoxLayout(ref_pat_group)
+        _bg = THEME["surface_bg"]
+        self._ref_pat_fig = Figure(facecolor=_bg)
+        self._ref_pat_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        self._ref_pat_ax  = self._ref_pat_fig.add_subplot(111)
+        self._ref_pat_ax.set_facecolor(_bg)
+        self._ref_pat_ax.set_visible(False)
+        self._ref_pat_canvas = FigureCanvas(self._ref_pat_fig)
+        self._ref_pat_canvas.setStyleSheet(f"background-color: {_bg};")
+        self._ref_pat_canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._ref_pat_canvas.setMinimumSize(220, 220)
+        self._ref_pat_status = QLabel("")
+        self._ref_pat_status.setStyleSheet("color: gray; font-size: 11px;")
+        self._ref_pat_status.setWordWrap(True)
+        ref_pat_layout.addWidget(self._ref_pat_canvas, stretch=1)
+        ref_pat_layout.addWidget(self._ref_pat_status)
+        left_layout.addWidget(ref_pat_group, stretch=1)
+
+        self._ref_pat_timer = QTimer(self)
+        self._ref_pat_timer.setSingleShot(True)
+        self._ref_pat_timer.setInterval(200)
+        self._ref_pat_timer.timeout.connect(self._load_ref_pattern_preview)
+        self.ref_row.valueChanged.connect(self._ref_pat_timer.start)
+        self.ref_col.valueChanged.connect(self._ref_pat_timer.start)
 
         # ── Right panel (2/3): clickable IPF map ──────────────────────────────
         right        = QWidget()
@@ -1856,9 +1846,6 @@ class ReferencePatternPage(QWizardPage):
 
         self.ref_row.setMaximum(geom["rows"] - 1)
         self.ref_col.setMaximum(geom["cols"] - 1)
-
-        # Auto-populate the TFBC override Euler from (0,0) of the .ang.
-        self._populate_tfbc_euler_from_ang()
 
         if not ang_path or not os.path.exists(ang_path):
             self._ipf_status.setText("No ANG file — cannot draw IPF map.")
@@ -2105,6 +2092,35 @@ class ReferencePatternPage(QWizardPage):
             markersize=14, markeredgewidth=2.5, zorder=10, linestyle="none"
         )
         self._ipf_canvas.draw_idle()
+        self._ref_pat_timer.start()
+
+    def _load_ref_pattern_preview(self):
+        """Load and display the raw pattern at (ref_row, ref_col)."""
+        wiz = self.wizard()
+        if wiz is None:
+            return
+        up2_path = wiz.field("up2_path")
+        if not up2_path or not os.path.exists(up2_path):
+            self._ref_pat_status.setText("No UP2 file loaded.")
+            return
+        try:
+            geom = wiz.geometry_page.get_params()
+            row = self.ref_row.value()
+            col = self.ref_col.value()
+            if row >= geom["rows"] or col >= geom["cols"]:
+                return
+            pat_idx = int(np.ravel_multi_index((row, col), (geom["rows"], geom["cols"])))
+            import Data
+            pat_obj = Data.UP2(up2_path)
+            pat = pat_obj.read_pattern(pat_idx, process=False)
+            self._ref_pat_ax.clear()
+            self._ref_pat_ax.imshow(pat, cmap="gray", origin="upper")
+            self._ref_pat_ax.axis("off")
+            self._ref_pat_ax.set_visible(True)
+            self._ref_pat_canvas.draw_idle()
+            self._ref_pat_status.setText(f"Pattern at row {row}, col {col}.")
+        except Exception as exc:
+            self._ref_pat_status.setText(f"Could not load pattern: {exc}")
 
     # ── Pattern preview ───────────────────────────────────────────────────────
 
@@ -2418,37 +2434,13 @@ class ReferencePatternPage(QWizardPage):
         self._refine_btn.setEnabled(False)
         dlg.exec()
 
-    def _populate_tfbc_euler_from_ang(self) -> None:
-        """Read the .ang file and fill the TFBC override spinboxes with the
-        (0,0) Euler angles (Bunge, in degrees).  Silent no-op if .ang is not
-        available yet."""
-        try:
-            wiz = self.wizard()
-            ang_data = getattr(wiz, "ang_data", None) if wiz else None
-            if ang_data is None:
-                return
-            phi1, Phi, phi2 = np.degrees(ang_data.eulers[0, 0])
-            self._tfbc_eu_phi1.setValue(float(phi1))
-            self._tfbc_eu_Phi.setValue(float(Phi))
-            self._tfbc_eu_phi2.setValue(float(phi2))
-        except Exception:
-            pass
-
     def get_params(self) -> dict:
-        tfbc_override = {
-            "tfbc_use_single_euler": self._tfbc_use_single_euler.isChecked(),
-            "tfbc_euler_deg":        (
-                self._tfbc_eu_phi1.value(),
-                self._tfbc_eu_Phi.value(),
-                self._tfbc_eu_phi2.value(),
-            ),
-            "small_strain":          self._small_strain.isChecked(),
-        }
+        common = {"small_strain": self._small_strain.isChecked()}
         if self._single_radio.isChecked():
             return {
                 "ref_mode":     "single",
                 "ref_position": (self.ref_row.value(), self.ref_col.value()),
-                **tfbc_override,
+                **common,
             }
         if self._sim_radio.isChecked():
             return {
@@ -2456,12 +2448,12 @@ class ReferencePatternPage(QWizardPage):
                 "master_pattern_path": self._sim_mp_edit.text().strip(),
                 "euler_deg":           (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value()),
                 "sim_pat_array":       self._sim_pat_array,
-                **tfbc_override,
+                **common,
             }
         return {
             "ref_mode":         "per_grain",
             "ref_pattern_set":  self._ref_pattern_set,
-            **tfbc_override,
+            **common,
         }
 
 
