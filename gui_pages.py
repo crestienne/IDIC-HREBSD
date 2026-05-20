@@ -2502,6 +2502,17 @@ class PatternProcessingPage(QWizardPage):
         ctrl   = QVBoxLayout(inner)
         ctrl.setSpacing(12)
 
+        # Mask
+        mask_group  = QGroupBox("Mask")
+        mask_layout = QFormLayout()
+
+        self.mask_type = QComboBox()
+        self.mask_type.addItems(["None", "circular", "center_cross"])
+
+        mask_layout.addRow("Mask type:", self.mask_type)
+        mask_group.setLayout(mask_layout)
+        ctrl.addWidget(mask_group)
+
         # Frequency filtering
         filt_group  = QGroupBox("Frequency Filtering")
         filt_layout = QFormLayout()
@@ -2510,31 +2521,8 @@ class PatternProcessingPage(QWizardPage):
         self.high_pass.setRange(0, 200)
         self.high_pass.setValue(10.0)
         self.high_pass.setToolTip(
-            "Sigma of the log-domain Gaussian high-pass background removal. "
-            "Linked to the kernel-size field via the 3σ rule (kernel = 6·σ)."
+            "Sigma of the log-domain Gaussian high-pass background removal."
         )
-
-        self.high_pass_kernel_px = QDoubleSpinBox()
-        self.high_pass_kernel_px.setRange(0, 1200)
-        self.high_pass_kernel_px.setValue(60.0)   # = 6 × default sigma 10.0
-        self.high_pass_kernel_px.setSingleStep(6.0)
-        self.high_pass_kernel_px.setToolTip(
-            "Full kernel size in pixels (3σ rule: σ = kernel / 6). "
-            "Use this to match programs like CrossCourt / OpenXY that "
-            "specify a kernel-size in pixels rather than a Gaussian σ."
-        )
-
-        # Bidirectional sync between sigma and kernel-px (3σ rule).
-        def _hp_sigma_to_kernel(val):
-            self.high_pass_kernel_px.blockSignals(True)
-            self.high_pass_kernel_px.setValue(val * 6.0)
-            self.high_pass_kernel_px.blockSignals(False)
-        def _hp_kernel_to_sigma(val):
-            self.high_pass.blockSignals(True)
-            self.high_pass.setValue(val / 6.0)
-            self.high_pass.blockSignals(False)
-        self.high_pass.valueChanged.connect(_hp_sigma_to_kernel)
-        self.high_pass_kernel_px.valueChanged.connect(_hp_kernel_to_sigma)
 
         self.low_pass = QDoubleSpinBox()
         self.low_pass.setRange(0, 100)
@@ -2547,32 +2535,12 @@ class PatternProcessingPage(QWizardPage):
         self.gamma.setToolTip("Gamma < 1 brightens dark regions. Set to 1.0 to disable.")
 
         filt_layout.addRow("High-pass sigma:",      self.high_pass)
-        filt_layout.addRow("High-pass kernel (px):", self.high_pass_kernel_px)
         filt_layout.addRow("Low-pass sigma:",       self.low_pass)
         filt_layout.addRow("Gamma:",                self.gamma)
         filt_group.setLayout(filt_layout)
         ctrl.addWidget(filt_group)
 
-        # Mask
-        mask_group  = QGroupBox("Mask")
-        mask_layout = QFormLayout()
-
-        self.mask_type = QComboBox()
-        self.mask_type.addItems(["None", "circular", "center_cross"])
-
-        mask_layout.addRow("Mask type:", self.mask_type)
-        mask_group.setLayout(mask_layout)
-        ctrl.addWidget(mask_group)
-
-        # Orientation
-        orient_group  = QGroupBox("Orientation")
-        orient_layout = QFormLayout()
-
         self.flip_x = QCheckBox("Flip patterns vertically")
-
-        orient_layout.addRow("", self.flip_x)
-        orient_group.setLayout(orient_layout)
-        ctrl.addWidget(orient_group)
 
         # IC-GN region
         crop_group  = QGroupBox("IC-GN Region")
@@ -2725,6 +2693,8 @@ class PatternProcessingPage(QWizardPage):
         self._show_gradients = QCheckBox("Show gradients")
         self._show_gradients.setChecked(False)
         adv_layout.addWidget(self._show_gradients)
+
+        adv_layout.addWidget(self.flip_x)
 
         adv_group.setLayout(adv_layout)
         ctrl.addWidget(adv_group)
