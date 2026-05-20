@@ -995,8 +995,8 @@ def optimize_pc_and_euler(
     # ------------------------------------------------------------------
     # Report
     # ------------------------------------------------------------------
-    euler_opt = best_state[0]["euler"]
-    q_opt     = best_state[0]["q"]
+    euler_opt    = best_state[0]["euler"]
+    q_opt        = best_state[0]["q"]
     pc_opt    = tuple(best_state[0]["pc"])
     sim_opt   = best_state[0]["sim"]
     znssd_opt = best_znssd[0]

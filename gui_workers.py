@@ -1157,7 +1157,8 @@ class SimRefWorker(QThread):
 
 
 class PcEulerRefineWorker(QThread):
-    """Refine pattern-centre and Euler angles by maximising NCC (Nelder-Mead)."""
+    """Refine pattern-centre and Euler angles by minimising ZNSSD (Nelder-Mead
+    in so(3) ⊕ ℝ³)."""
     log_signal   = pyqtSignal(str)
     done_signal  = pyqtSignal(object, object)  # euler_opt (rad ndarray), pc_opt (tuple)
     error_signal = pyqtSignal(str)
