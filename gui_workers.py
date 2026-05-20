@@ -141,18 +141,11 @@ class PipelineWorker(QThread):
 
         p = self.params
 
-        # Pick the optimizer module — IC-GN by default, reversed-role IC-GN or
-        # xcorr-HREBSD when selected on the run page.  All three expose
-        # `optimize(...)` with a compatible signature for InitType.NONE.
+        # Pick the optimizer module — IC-GN by default, reversed-role IC-GN
+        # when selected on the run page.  Both expose `optimize(...)` with a
+        # compatible signature for InitType.NONE.
         _opt = p.get("optimizer", "icgn")
-        if _opt == "xcorr":
-            import xcorr_hrebsd as core
-            self.log_signal.emit(
-                f"Optimizer: cross-correlation HR-EBSD  "
-                f"(grid={p.get('xcorr_grid', 7)}×{p.get('xcorr_grid', 7)}, "
-                f"ROI={p.get('xcorr_roi_size', 64)} px)"
-            )
-        elif _opt == "icgn_reversed":
+        if _opt == "icgn_reversed":
             import get_homography_cpu_reversed as core
             self.log_signal.emit(
                 "Optimizer: IC-GN reversed roles (get_homography_cpu_reversed) — "
@@ -217,14 +210,6 @@ class PipelineWorker(QThread):
         self.log_signal.emit(f"Parameters saved → {os.path.basename(params_txt_path)}")
 
         ref_mode = p.get("ref_mode", "single")
-
-        # xcorr-HREBSD currently only supports a single real reference pattern
-        if p.get("optimizer", "icgn") == "xcorr" and ref_mode != "single":
-            raise NotImplementedError(
-                "Cross-correlation HR-EBSD (xcorr_hrebsd) only supports the "
-                "'single reference' mode in this build.  Switch the optimizer "
-                "back to IC-GN, or change the reference mode to 'single'."
-            )
 
         if ref_mode == "per_grain":
             h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols = \
@@ -490,8 +475,6 @@ class PipelineWorker(QThread):
                 (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
                  pat_obj.mask_type) = saved
 
-        # Build optimize_params; xcorr accepts extra kwargs via **_ignored,
-        # so we always pack the xcorr-specific ones too.
         optimize_params = dict(
             init_type=p["init_type"],
             crop_fraction=p["crop_fraction"],
@@ -508,8 +491,6 @@ class PipelineWorker(QThread):
             pc_ref=pc_ref,
             pc_xo=pc_xo,
             tilt_deg=p["tilt"],
-            roi_grid=(p.get("xcorr_grid", 7), p.get("xcorr_grid", 7)),
-            roi_size=p.get("xcorr_roi_size", 64),
             ref_pat_override=ref_pat_override,
             spectral_match_ref=p.get("spectral_match_ref", False),
             perspective_regularization=p.get("perspective_regularization", 0.0),
@@ -517,10 +498,6 @@ class PipelineWorker(QThread):
             debug_gradients=False,
         )
 
-        # IC-GN doesn't accept xcorr-specific kwargs; strip them when not in xcorr mode.
-        if p.get("optimizer", "icgn") != "xcorr":
-            for _k in ("roi_grid", "roi_size"):
-                optimize_params.pop(_k, None)
         # Drop ref_pat_override if it's None to avoid passing it to optimizers
         # that don't accept the keyword.
         if optimize_params.get("ref_pat_override") is None:

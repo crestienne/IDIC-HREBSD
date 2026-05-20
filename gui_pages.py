@@ -3046,13 +3046,11 @@ class OptimizationRunPage(QWizardPage):
         self.init_type = QComboBox()
         self.init_type.addItems(["none", "partial", "full"])
 
-        # Optimizer selection: IC-GN homography (default), reversed-role IC-GN,
-        # or Wilkinson xcorr-HREBSD
+        # Optimizer selection: IC-GN homography (default) or reversed-role IC-GN
         self.optimizer_method = QComboBox()
         self.optimizer_method.addItems([
             "IC-GN (homography, default)",
             "IC-GN reversed roles (experimental)",
-            "Cross-correlation HR-EBSD (Wilkinson)",
         ])
         self.optimizer_method.setToolTip(
             "IC-GN runs the iterative inverse-compositional Gauss-Newton solver "
@@ -3064,36 +3062,13 @@ class OptimizationRunPage(QWizardPage):
             "(get_homography_cpu_reversed).  The returned homographies are "
             "auto-inverted before downstream strain so the convention matches "
             "standard IC-GN.  Slower than standard IC-GN because the per-"
-            "pattern Cholesky factor is no longer amortised.\n"
-            "Cross-correlation HR-EBSD instead measures sub-pixel shifts at a "
-            "grid of ROIs and least-squares fits the 8-parameter homography "
-            "(xcorr_hrebsd, Wilkinson-style)."
-        )
-
-        # xcorr-only parameters (visible always; ignored by IC-GN)
-        self.xcorr_grid = QSpinBox()
-        self.xcorr_grid.setRange(2, 30)
-        self.xcorr_grid.setValue(7)
-        self.xcorr_grid.setToolTip(
-            "Number of ROIs along each axis (so total = N×N).  "
-            "Only used by xcorr-HREBSD."
-        )
-
-        self.xcorr_roi_size = QSpinBox()
-        self.xcorr_roi_size.setRange(16, 256)
-        self.xcorr_roi_size.setSingleStep(8)
-        self.xcorr_roi_size.setValue(64)
-        self.xcorr_roi_size.setToolTip(
-            "Side length of each ROI in pixels (use a power-of-2 for fast FFT).  "
-            "Only used by xcorr-HREBSD."
+            "pattern Cholesky factor is no longer amortised."
         )
 
         opt_layout.addRow("Max iterations:", self.max_iter)
         opt_layout.addRow("n_jobs:", self.n_jobs)
         opt_layout.addRow("Init type:", self.init_type)
         opt_layout.addRow("Optimizer:", self.optimizer_method)
-        opt_layout.addRow("xcorr ROI grid (N×N):", self.xcorr_grid)
-        opt_layout.addRow("xcorr ROI size (px):", self.xcorr_roi_size)
         opt_group.setLayout(opt_layout)
         layout.addWidget(opt_group)
 
@@ -3198,11 +3173,9 @@ class OptimizationRunPage(QWizardPage):
         params.update(wiz.geometry_page.get_params())
         params.update(wiz.reference_page.get_params())
         params.update(wiz.processing_page.get_params())
-        # Optimizer selection: "icgn" (default), "icgn_reversed", or "xcorr"
+        # Optimizer selection: "icgn" (default) or "icgn_reversed"
         _opt_text = self.optimizer_method.currentText()
-        if "Cross-correlation" in _opt_text:
-            opt_choice = "xcorr"
-        elif "reversed" in _opt_text:
+        if "reversed" in _opt_text:
             opt_choice = "icgn_reversed"
         else:
             opt_choice = "icgn"
@@ -3212,8 +3185,6 @@ class OptimizationRunPage(QWizardPage):
             "n_jobs":        self.n_jobs.value(),
             "init_type":     self.init_type.currentText(),
             "optimizer":     opt_choice,
-            "xcorr_grid":    self.xcorr_grid.value(),
-            "xcorr_roi_size": self.xcorr_roi_size.value(),
             "up2":           wiz.field("up2_path"),
             "ang":           wiz.field("ang_path"),
             "component":     wiz.field("run_name"),
