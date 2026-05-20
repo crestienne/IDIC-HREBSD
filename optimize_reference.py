@@ -98,6 +98,23 @@ def _qu_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     ], dtype=np.float64)
 
 
+def _wrap_euler_to_branch(euler: np.ndarray, euler_ref: np.ndarray) -> np.ndarray:
+    """Pick the Euler representative in the same 2π branch as `euler_ref`.
+
+    bu2qu_emsoft canonicalises the quaternion to w ≥ 0 by sign-flipping it
+    when needed.  After the flip, _qu2bu_emsoft returns φ₁ (or φ₂) shifted
+    by 2π — same rotation, different representative.  The optimization
+    sees this as a 360° "overshoot" even though the underlying orientation
+    barely moved.  Wrapping φ₁ and φ₂ each to within π of `euler_ref`
+    restores a sensible Δ Euler for display and downstream code.  Φ is
+    already in [0, π] (no wrapping needed).
+    """
+    out = euler.copy()
+    out[0] = euler_ref[0] + ((euler[0] - euler_ref[0] + np.pi) % (2.0 * np.pi)) - np.pi
+    out[2] = euler_ref[2] + ((euler[2] - euler_ref[2] + np.pi) % (2.0 * np.pi)) - np.pi
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -942,7 +959,10 @@ def optimize_pc_and_euler(
 
         if znssd_val < best_znssd[0]:
             best_znssd[0] = znssd_val
-            best_state[0] = {"euler": euler.copy(),
+            # Wrap φ₁/φ₂ to the same 2π branch as euler_init so the stored
+            # representation can't accidentally look like a 360° "overshoot".
+            euler_branched = _wrap_euler_to_branch(euler, euler_init)
+            best_state[0] = {"euler": euler_branched,
                              "q":     q_current.copy(),
                              "pc":    pc.copy(),
                              "sim":   sim_pat.copy()}
