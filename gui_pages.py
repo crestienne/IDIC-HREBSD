@@ -2209,7 +2209,11 @@ class ReferencePatternPage(QWizardPage):
         )
         self._sim_pat_ax_sim.axis("off")
 
-        # Right: absolute difference + similarity metrics
+        # Right: ZNSSD residual + similarity metrics
+        # Both patterns are zero-mean / unit-norm normalized before subtraction,
+        # so a global brightness or contrast offset between sim and exp does
+        # not contaminate the residual map.  This is the same criterion IC-GN
+        # is minimising — what you see here is what the optimiser sees.
         self._sim_pat_ax_diff.clear()
         metrics_str = None
         if self._sim_exp_pat is not None:
@@ -2222,25 +2226,40 @@ class ReferencePatternPage(QWizardPage):
                     _PIL.fromarray(sim_r).resize((exp_r.shape[1], exp_r.shape[0]),
                                                  resample=_PIL.BILINEAR)
                 )
-            diff = np.abs(sim_r - exp_r)
 
-            # SSIM — robust to brightness / contrast differences between
-            # simulation and experiment; range [−1, 1], higher = more similar.
+            def _zn(x):
+                x = x.astype(np.float64)
+                x = x - x.mean()
+                n = np.linalg.norm(x)
+                return x / (n + 1e-12)
+            exp_zn = _zn(exp_r)
+            sim_zn = _zn(sim_r)
+            residual = sim_zn - exp_zn
+
+            # SSIM — locally brightness/contrast invariant; range [−1, 1].
             try:
                 from skimage.metrics import structural_similarity as _ssim
                 ssim_val = float(_ssim(exp_r, sim_r, data_range=1.0))
             except ImportError:
                 ssim_val = None
 
-            # MAE — average absolute pixel difference; 0 = perfect match.
-            mae_val = float(diff.mean())
+            # ZNCC — global cosine similarity of the normalized patterns.
+            zncc_val = float(np.dot(exp_zn.ravel(), sim_zn.ravel()))
+            # ZNSSD scalar — Σ residual² ∈ [0, 4]; matches IC-GN's loss.
+            znssd_val = float(np.dot(residual.ravel(), residual.ravel()))
 
             ssim_str = f"SSIM = {ssim_val:.4f}" if ssim_val is not None else "SSIM unavailable"
-            metrics_str = f"{ssim_str}   MAE = {mae_val:.4f}"
+            metrics_str = f"{ssim_str}   ZNCC = {zncc_val:.4f}   ZNSSD = {znssd_val:.4f}"
 
-            im = self._sim_pat_ax_diff.imshow(diff, cmap="hot", origin="upper", vmin=0, vmax=1)
+            # Symmetric diverging colormap, robust 98th-percentile clipping.
+            vabs = max(float(np.percentile(np.abs(residual), 98)), 1e-9)
+            im = self._sim_pat_ax_diff.imshow(
+                residual, cmap="RdBu_r", origin="upper", vmin=-vabs, vmax=+vabs,
+            )
             self._sim_pat_fig.colorbar(im, ax=self._sim_pat_ax_diff, fraction=0.046, pad=0.04)
-            self._sim_pat_ax_diff.set_title(f"|Sim − Exp|\n{metrics_str}", fontsize=9)
+            self._sim_pat_ax_diff.set_title(
+                f"ZNSSD residual  (Sim − Exp, z-normalized)\n{metrics_str}", fontsize=9
+            )
         else:
             self._sim_pat_ax_diff.text(0.5, 0.5, "No experimental\npattern available",
                                        ha="center", va="center",

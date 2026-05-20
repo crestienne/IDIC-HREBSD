@@ -56,7 +56,7 @@ def _simulate(sim: patternSimulation, euler: np.ndarray, pc: np.ndarray,
         pats = sim.GenPattern()
 
     pat = pats[0].reshape(patshape).cpu().numpy().astype(np.float32)
-    pat = np.fliplr(pat)
+    # PC sign convention fixed in HREBSD.detector_coords_to_ksphere_via_pc — no fliplr needed.
     lo, hi = pat.min(), pat.max()
     if hi > lo:
         pat = (pat - lo) / (hi - lo)
@@ -159,7 +159,7 @@ def optimize_preprocessing_params(
     real_pat_raw : ndarray
         Raw unprocessed real pattern, any numeric dtype.
     sim_pat_raw : ndarray
-        Raw simulated pattern normalised to [0, 1]; np.fliplr already applied.
+        Raw simulated pattern normalised to [0, 1].
     pat_obj : Data.UP2
         Source of the process_pattern pipeline.  Attributes are temporarily
         overridden for each evaluation and fully restored afterwards.

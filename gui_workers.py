@@ -1096,7 +1096,7 @@ class SweepWorker(QThread):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SimRefWorker(QThread):
-    """Generate a simulated reference pattern via SimPatGen / ebsdtorch."""
+    """Generate a simulated reference pattern via SimPatGen / HREBSD.py."""
     done_signal  = pyqtSignal(object)   # numpy float32 array, normalised 0-1
     error_signal = pyqtSignal(str)
 
@@ -1120,11 +1120,11 @@ class SimRefWorker(QThread):
             sim.det_shape        = self.det_shape
             sim.detector_tilt_deg  = self.det_tilt_deg    # e.g. 10 °
             sim.sample_tilt_deg    = self.sample_tilt_deg  # e.g. 70 °
-            # bruker_geometry_to_SE3 uses -(detector_tilt - sample_tilt)
+            # HREBSD.py uses alpha = π/2 + (detector_tilt - sample_tilt)·π/180
             print(f"Detector shape:   {sim.det_shape}")
             print(f"Sample tilt:      {sim.sample_tilt_deg} °")
             print(f"Detector tilt:    {sim.detector_tilt_deg} °")
-            print(f"Primary tilt arg: {-(sim.detector_tilt_deg - sim.sample_tilt_deg):.1f} °")
+            print(f"alpha (deg):      {90.0 + (sim.detector_tilt_deg - sim.sample_tilt_deg):.1f} °")
             # ─────────────────────────────────────────────────────────────────
             sim.mastersetup(self.master_path)
             import conversions
@@ -1147,11 +1147,8 @@ class SimRefWorker(QThread):
             # project_hrebsd returns (B, H*W) — reshape to (H, W)
             H, W = self.det_shape
             pat_np = pat_np.reshape(H, W)
-            # ebsdtorch maps the detector column axis to sample-y with an
-            # implicit left-right orientation opposite to the stored image.
-            # Flip horizontally so the simulated pattern matches the
-            # experimental detector image convention.
-            pat_np = np.fliplr(pat_np)
+            # PC sign convention fixed in HREBSD.detector_coords_to_ksphere_via_pc
+            # (pcx_ems uses pcx - 0.5, matching EMsoft) — no fliplr needed.
             lo, hi = pat_np.min(), pat_np.max()
             pat_np = (pat_np - lo) / (hi - lo + 1e-9)
             self.done_signal.emit(pat_np)

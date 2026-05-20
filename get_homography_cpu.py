@@ -160,7 +160,7 @@ def simulate_reference_pattern(
     pat_obj: "Data.UP2" = None,
     high_pass_sigma_override: float = None,
 ) -> np.ndarray:
-    """Simulate a single EBSD reference pattern using EBSDtorch / SimPatGen.
+    """Simulate a single EBSD reference pattern using HREBSD.py / SimPatGen.
 
     Args:
         master_pattern_path (str): Path to the .h5 master pattern file.
@@ -169,7 +169,8 @@ def simulate_reference_pattern(
         patshape (tuple): Detector shape in pixels (rows, cols).
         tilt_deg (float): Sample tilt in degrees (default 70).
         detector_tilt_deg (float): Detector tilt in degrees (default 0).
-            bruker_geometry_to_SE3 uses primary_tilt = -(sample_tilt - detector_tilt).
+            HREBSD.detector_coords_to_ksphere_via_pc uses
+            alpha = π/2 + (detector_tilt - sample_tilt)·π/180.
         pat_obj (Data.UP2, optional): If provided, applies the same preprocessing
             pipeline (filters, CLAHE) as real patterns.  The mask is NOT applied
             to the simulated pattern — masked pixels in the real pattern correspond
@@ -195,7 +196,7 @@ def simulate_reference_pattern(
           f"primary_tilt_arg={-(tilt_deg - detector_tilt_deg):.1f}°")
 
     sim.mastersetup(master_pattern_path)
-    # EBSDtorch uses Bruker convention: pcy = 1 - ystar (EDAX/TSL flips y)
+    # HREBSD.py uses Bruker convention: pcy = 1 - ystar (EDAX/TSL flips y)
     pc_bruker = (PC[0], 1.0 - PC[1], PC[2])
     print(f'PC (EDAX):   {PC}')
     print(f'PC (Bruker): {pc_bruker}')
@@ -205,9 +206,8 @@ def simulate_reference_pattern(
         pats = sim.GenPattern()
 
     pat = pats[0].reshape(patshape).cpu().numpy().astype(np.float32)
-    # ebsdtorch maps the detector column axis opposite to the stored image convention;
-    # flip horizontally to match the experimental detector orientation.
-    pat = np.fliplr(pat)
+    # PC sign convention fixed inside HREBSD.detector_coords_to_ksphere_via_pc
+    # (pcx_ems = Nx*(pcx - 0.5), matching EMsoft) — no post-hoc fliplr needed.
     pat_min, pat_max = pat.min(), pat.max()
     if pat_max > pat_min:
         pat = (pat - pat_min) / (pat_max - pat_min)
