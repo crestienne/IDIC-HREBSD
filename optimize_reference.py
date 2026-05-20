@@ -32,6 +32,73 @@ from PatternSimulation.SimPatGen import patternSimulation
 
 
 # ---------------------------------------------------------------------------
+# Quaternion helpers for gimbal-lock-free PC/Euler refinement
+# ---------------------------------------------------------------------------
+# These are exact pure-numpy mirrors of HREBSD.bu2qu_emsoft (and its inverse)
+# plus the so(3) exponential and Hamilton product, so the Nelder-Mead loop
+# can parameterise rotation perturbations in a singularity-free tangent
+# space (rotation vector) and still hand a Bunge Euler triple to the
+# existing _simulate(sim, euler, pc, ...) call.
+
+def _bu2qu_emsoft(eu: np.ndarray) -> np.ndarray:
+    """Bunge ZXZ Euler (radians, shape (3,)) → quaternion (w, x, y, z),
+    matching HREBSD.bu2qu_emsoft term-by-term."""
+    phi1, Phi, phi2 = float(eu[0]), float(eu[1]), float(eu[2])
+    sigma = 0.5 * (phi1 + phi2)
+    delta = 0.5 * (phi1 - phi2)
+    c = np.cos(0.5 * Phi)
+    s = np.sin(0.5 * Phi)
+    qu = np.array([
+         c * np.cos(sigma),
+        -s * np.cos(delta),
+        -s * np.sin(delta),
+        -c * np.sin(sigma),
+    ], dtype=np.float64)
+    if qu[0] < 0.0:
+        qu = -qu
+    return qu
+
+
+def _qu2bu_emsoft(qu: np.ndarray) -> np.ndarray:
+    """Inverse of _bu2qu_emsoft: quaternion → Bunge ZXZ Euler (radians)."""
+    w, x, y, z = float(qu[0]), float(qu[1]), float(qu[2]), float(qu[3])
+    c = np.sqrt(w * w + z * z)
+    s = np.sqrt(x * x + y * y)
+    Phi = 2.0 * np.arctan2(s, c)
+    if s < 1e-12:
+        # Φ ≈ 0: only σ = (φ₁ + φ₂)/2 is determined.  Set φ₂ = 0 and absorb
+        # the full rotation into φ₁.  This is the standard convention.
+        sigma = np.arctan2(-z, w)
+        return np.array([2.0 * sigma, 0.0, 0.0], dtype=np.float64)
+    sigma = np.arctan2(-z, w)
+    delta = np.arctan2(-y, -x)
+    return np.array([sigma + delta, Phi, sigma - delta], dtype=np.float64)
+
+
+def _rotvec_to_qu(rv: np.ndarray) -> np.ndarray:
+    """so(3) exponential: axis·angle vector (radians, shape (3,)) → quaternion."""
+    rv = np.asarray(rv, dtype=np.float64)
+    angle = np.linalg.norm(rv)
+    if angle < 1e-12:
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+    half = 0.5 * angle
+    s = np.sin(half) / angle
+    return np.array([np.cos(half), rv[0] * s, rv[1] * s, rv[2] * s], dtype=np.float64)
+
+
+def _qu_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Hamilton product (w, x, y, z) — same convention as HREBSD."""
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array([
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ], dtype=np.float64)
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -112,7 +179,11 @@ def _build_initial_simplex(x0: np.ndarray,
                             pc_step: float = 0.005) -> np.ndarray:
     """
     Build an (n+1 x n) initial simplex with physically meaningful step sizes.
-    First 3 params are Euler angle deltas (radians), last 3 are PC deltas.
+    First 3 params are *rotation-vector* deltas in radians (so(3) tangent
+    space — one axis-component each); last 3 are PC deltas.  The
+    rotation-vector step equals the per-axis step that would have been
+    applied to Euler angles, so the simplex's perturbation magnitude
+    stays consistent with the previous Euler-parameterised version.
     """
     n = len(x0)
     simplex = np.tile(x0, (n + 1, 1)).astype(np.float64)
@@ -833,17 +904,37 @@ def optimize_pc_and_euler(
     print(f"\n[PC/Euler refinement] Initial ZNSSD: {znssd_init:.6f}")
 
     # ------------------------------------------------------------------
-    # Objective
+    # Objective — rotation perturbed in so(3) (rotation-vector / tangent
+    # space) to avoid Bunge gimbal lock near Φ = 0 or Φ = π.
     # ------------------------------------------------------------------
+    # Anchor quaternion: composing onto this gives the current orientation.
+    q_init = _bu2qu_emsoft(euler_init)
+
     nfev       = [0]
-    best_znssd   = [znssd_init]
+    best_znssd = [znssd_init]
     best_state = [{"euler": euler_init.copy(),
+                   "q":     q_init.copy(),
                    "pc":    pc_arr.copy(),
                    "sim":   sim_init.copy()}]
 
     def objective(delta: np.ndarray) -> float:
-        euler   = euler_init + delta[:3]
-        pc      = pc_arr     + delta[3:]
+        # delta[:3] is a rotation vector in so(3); delta[3:] is the PC offset.
+        # exp(δ_rotvec) gives a quaternion that's near-identity for small δ,
+        # so the simplex steps in a smooth, singularity-free space.
+        q_delta   = _rotvec_to_qu(delta[:3])
+        q_current = _qu_mul(q_init, q_delta)
+        # Normalise + canonical sign (w ≥ 0)
+        q_current = q_current / (np.linalg.norm(q_current) + 1e-30)
+        if q_current[0] < 0.0:
+            q_current = -q_current
+
+        # Convert back to Euler only as a transient step so _simulate's
+        # existing API works; bu2qu_emsoft inside EandPCSet will round-trip
+        # this back to q_current exactly (even at Φ = 0 — the (φ₁, φ₂)
+        # split is arbitrary there, but the underlying quaternion is unique).
+        euler = _qu2bu_emsoft(q_current)
+        pc    = pc_arr + delta[3:]
+
         sim_pat = _simulate(sim, euler, pc, pat_obj, patshape,
                             sim_high_pass_sigma, sim_low_pass_sigma, sim_gamma)
         znssd_val = _znssd(exp_pat, sim_pat)
@@ -852,6 +943,7 @@ def optimize_pc_and_euler(
         if znssd_val < best_znssd[0]:
             best_znssd[0] = znssd_val
             best_state[0] = {"euler": euler.copy(),
+                             "q":     q_current.copy(),
                              "pc":    pc.copy(),
                              "sim":   sim_pat.copy()}
 
@@ -884,14 +976,22 @@ def optimize_pc_and_euler(
     # Report
     # ------------------------------------------------------------------
     euler_opt = best_state[0]["euler"]
+    q_opt     = best_state[0]["q"]
     pc_opt    = tuple(best_state[0]["pc"])
     sim_opt   = best_state[0]["sim"]
-    znssd_opt   = best_znssd[0]
+    znssd_opt = best_znssd[0]
+
+    # Misorientation angle between q_init and q_opt — gimbal-lock-free
+    # equivalent of "how big was the rotational change?".
+    q_rel       = _qu_mul(np.array([q_init[0], -q_init[1], -q_init[2], -q_init[3]]), q_opt)
+    w_clamped   = float(np.clip(abs(q_rel[0]), -1.0, 1.0))
+    misori_deg  = float(np.degrees(2.0 * np.arccos(w_clamped)))
 
     print(f"\n--- PC / Euler refinement summary ---")
     print(f"  Function evals:     {nfev[0]}")
     print(f"  ZNSSD (before):       {znssd_init:.6f}")
     print(f"  ZNSSD (after):        {znssd_opt:.6f}")
+    print(f"  Misorientation:     {misori_deg:.4f}°   (gimbal-lock-free, q_init → q_opt)")
     print(f"  Δ Euler (deg):      {np.degrees(euler_opt - euler_init)}")
     print(f"  Euler opt (rad):    {euler_opt}")
     print(f"  ΔPC:                {np.array(pc_opt) - pc_arr}")

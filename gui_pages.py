@@ -2126,6 +2126,46 @@ class ReferencePatternPage(QWizardPage):
 
     # ── Simulated reference ───────────────────────────────────────────────────
 
+    def _apply_step3_processing(self, img, up2_path: str):
+        """Run a numpy pattern through the Step 3 high-pass/low-pass/gamma
+        pipeline so its intensity characteristics match what the optimizer
+        will see at runtime.  The Step 3 mask is intentionally disabled
+        because simulated patterns have no detector artefacts to mask —
+        applying the mask would zero-fill them and create a spurious
+        intensity mismatch (matches the convention in
+        get_homography_cpu.simulate_reference_pattern and
+        optimize_reference._simulate).
+
+        Returns the processed pattern normalised to [0, 1].  If up2_path
+        is missing/invalid (no Data.UP2 can be created), returns img
+        normalised to [0, 1] with no filtering applied.
+        """
+        import numpy as np
+        arr = np.asarray(img, dtype=np.float32)
+        if not up2_path or not os.path.exists(up2_path):
+            lo, hi = arr.min(), arr.max()
+            return (arr - lo) / (hi - lo + 1e-9)
+        try:
+            import Data
+            wiz = self.wizard()
+            p = wiz.processing_page.get_params() if wiz else {}
+            pat_obj = Data.UP2(up2_path)
+            pat_obj.set_processing(
+                low_pass_sigma          = p.get("low_pass_sigma", 1.0),
+                high_pass_sigma         = p.get("high_pass_sigma", 10.0),
+                truncate_std_scale      = 3.0,
+                mask_type               = None,   # disabled for sim/exp comparison
+                center_cross_half_width = 6,
+                flip_x                  = p.get("flip_x", False),
+                gamma                   = p.get("gamma", 0.8),
+            )
+            proc = pat_obj.process_pattern(arr.copy()).astype(np.float32)
+            lo, hi = proc.min(), proc.max()
+            return (proc - lo) / (hi - lo + 1e-9)
+        except Exception:
+            lo, hi = arr.min(), arr.max()
+            return (arr - lo) / (hi - lo + 1e-9)
+
     def _open_sim_settings(self):
         """Show the simulated-reference settings dialog (non-modal)."""
         self._sim_settings_dialog.show()
@@ -2154,8 +2194,12 @@ class ReferencePatternPage(QWizardPage):
         det_shape = (geom["pat_h"], geom["pat_w"])
         euler_deg = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
 
-        # Load the experimental pattern at the clicked position for comparison
-        self._sim_exp_pat = None
+        # Load the experimental pattern at the clicked position for comparison.
+        # self._sim_exp_pat is kept as the RAW normalized pattern (SimTuner
+        # depends on this contract); _sim_exp_pat_proc holds the Step-3-processed
+        # version used for display and the ZNSSD residual.
+        self._sim_exp_pat      = None
+        self._sim_exp_pat_proc = None
         up2_path = wiz.field("up2_path")
         if up2_path and os.path.exists(up2_path):
             try:
@@ -2165,7 +2209,11 @@ class ReferencePatternPage(QWizardPage):
                 if idx < pat_obj.nPatterns:
                     raw = pat_obj.read_pattern(idx, process=False).astype(np.float32)
                     lo, hi = raw.min(), raw.max()
-                    self._sim_exp_pat = (raw - lo) / (hi - lo + 1e-9)
+                    self._sim_exp_pat      = (raw - lo) / (hi - lo + 1e-9)
+                    # Step-3-processed version for display / ZNSSD comparison
+                    self._sim_exp_pat_proc = self._apply_step3_processing(
+                        raw, up2_path
+                    )
             except Exception:
                 pass
 
@@ -2182,17 +2230,28 @@ class ReferencePatternPage(QWizardPage):
         self._sim_worker.start()
 
     def _on_sim_done(self, pat_np):
+        # Keep the RAW sim around — downstream pipeline / Step 3 preview
+        # apply their own processing.
         self._sim_pat_array = pat_np
         self._sim_gen_btn.setEnabled(True)
         eu = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
         self._sim_status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
 
+        # Run the sim through the Step 3 pipeline (high-pass / low-pass / gamma,
+        # mask disabled) so display & ZNSSD compare like-for-like against the
+        # processed experimental pattern.
+        wiz      = self.wizard()
+        up2_path = wiz.field("up2_path") if wiz else ""
+        sim_proc = self._apply_step3_processing(pat_np, up2_path)
+        exp_proc = self._sim_exp_pat_proc if self._sim_exp_pat_proc is not None else self._sim_exp_pat
+
         # Left: experimental (or placeholder if no UP2 loaded)
         self._sim_pat_ax_exp.clear()
-        if self._sim_exp_pat is not None:
-            self._sim_pat_ax_exp.imshow(self._sim_exp_pat, cmap="gray", origin="upper")
+        if exp_proc is not None:
+            self._sim_pat_ax_exp.imshow(exp_proc, cmap="gray", origin="upper")
             self._sim_pat_ax_exp.set_title(
-                f"Experimental\nrow={self._sim_ref_row}, col={self._sim_ref_col}", fontsize=9
+                f"Experimental (Step 3 processed)\n"
+                f"row={self._sim_ref_row}, col={self._sim_ref_col}", fontsize=9
             )
         else:
             self._sim_pat_ax_exp.text(0.5, 0.5, "No UP2 file\navailable",
@@ -2201,24 +2260,25 @@ class ReferencePatternPage(QWizardPage):
             self._sim_pat_ax_exp.set_title("Experimental", fontsize=9)
         self._sim_pat_ax_exp.axis("off")
 
-        # Centre: simulated
+        # Centre: simulated (Step 3 processed)
         self._sim_pat_ax_sim.clear()
-        self._sim_pat_ax_sim.imshow(pat_np, cmap="gray", origin="upper")
+        self._sim_pat_ax_sim.imshow(sim_proc, cmap="gray", origin="upper")
         self._sim_pat_ax_sim.set_title(
-            f"Simulated\nφ₁={eu[0]:.2f}°  Φ={eu[1]:.2f}°  φ₂={eu[2]:.2f}°", fontsize=9
+            f"Simulated (Step 3 processed)\n"
+            f"φ₁={eu[0]:.2f}°  Φ={eu[1]:.2f}°  φ₂={eu[2]:.2f}°", fontsize=9
         )
         self._sim_pat_ax_sim.axis("off")
 
         # Right: ZNSSD residual + similarity metrics
-        # Both patterns are zero-mean / unit-norm normalized before subtraction,
-        # so a global brightness or contrast offset between sim and exp does
-        # not contaminate the residual map.  This is the same criterion IC-GN
-        # is minimising — what you see here is what the optimiser sees.
+        # Both patterns went through Step 3 first, so global brightness/contrast
+        # offsets are already removed by the filter pipeline.  The z-normalisation
+        # below removes any residual scale/offset, so the residual map shows
+        # only structural mismatches.  This matches the IC-GN criterion exactly.
         self._sim_pat_ax_diff.clear()
         metrics_str = None
-        if self._sim_exp_pat is not None:
-            exp_r = self._sim_exp_pat
-            sim_r = pat_np
+        if exp_proc is not None:
+            exp_r = exp_proc
+            sim_r = sim_proc
             # Resize sim to match exp if shapes differ
             if exp_r.shape != sim_r.shape:
                 from PIL import Image as _PIL
