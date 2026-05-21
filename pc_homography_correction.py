@@ -244,7 +244,8 @@ def warp_to_h(W):
 
 def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
                          pixel_size_um, sample_tilt_deg, detector_tilt_deg,
-                         convention="standard", ref_position=(0, 0)):
+                         convention="standard", ref_position=(0, 0),
+                         pc_grid_override=None):
     """
     Correct an array of homographies for pattern-centre drift across the scan.
 
@@ -323,9 +324,23 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
     #    pc_grid[ref_row, ref_col] = pc_ref (no drift at the reference point).
     scan_grid.data = scan_grid.data - scan_grid.data[ref_row, ref_col]
 
-    # 4-5. per-position PC and Δpc relative to the reference
-    pc_grid = scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
-                                   sample_tilt_deg, detector_tilt_deg)
+    # 4-5. per-position PC and Δpc relative to the reference.
+    # If a pc_grid_override has been supplied (e.g. from a PC plane fit), use
+    # it verbatim instead of computing the geometric grid.  The override
+    # MUST be shape (n_rows, n_cols, 3) and must already be anchored such
+    # that the ref_position equals pc_ref (so Δpc at ref_position is 0).
+    if pc_grid_override is not None:
+        pc_grid = np.asarray(pc_grid_override, dtype=np.float64)
+        if pc_grid.shape != (n_rows, n_cols, 3):
+            raise ValueError(
+                f"pc_grid_override has shape {pc_grid.shape}; "
+                f"expected ({n_rows}, {n_cols}, 3)."
+            )
+        print(f"PC correction using pc_grid_override (plane fit) — "
+              f"skipping geometric scan_grid_to_pc_grid.")
+    else:
+        pc_grid = scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
+                                       sample_tilt_deg, detector_tilt_deg)
     Δpc = pc_grid - np.array(pc_ref)
 
     # 6. TS_inv per position

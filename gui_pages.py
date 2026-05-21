@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
     QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox,
-    QRadioButton, QButtonGroup,
+    QRadioButton, QButtonGroup, QSlider,
     QTextEdit, QWidget, QScrollArea,
     QSizePolicy, QSplitter, QDialog, QFileDialog, QMessageBox,
 )
@@ -1927,7 +1927,7 @@ class ReferencePatternPage(QWizardPage):
         _bg = THEME["surface_bg"]
         self._sim_dialog = QDialog(self)
         self._sim_dialog.setWindowTitle("Simulated vs Experimental Reference Pattern")
-        self._sim_dialog.resize(1300, 520)
+        self._sim_dialog.resize(1300, 950)
         _sdlg_layout = QVBoxLayout(self._sim_dialog)
         self._sim_pat_fig = Figure(tight_layout=True, facecolor=_bg)
         self._sim_pat_ax_exp  = self._sim_pat_fig.add_subplot(131)   # left:   experimental
@@ -1938,10 +1938,67 @@ class ReferencePatternPage(QWizardPage):
         self._sim_pat_canvas = FigureCanvas(self._sim_pat_fig)
         self._sim_pat_canvas.setStyleSheet(f"background-color: {_bg};")
         self._sim_pat_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        _sdlg_layout.addWidget(self._sim_pat_canvas, stretch=2)
+
+        # ── Flicker (alternating sim/exp) panel ──────────────────────────────
+        # Classic EBSD pattern-matching trick — when the two patterns alternate
+        # at ~5-10 Hz, the eye picks up structural mismatches as "motion"
+        # (band edges shifting, intensity changes) far more sensitively than
+        # by comparing them side-by-side.
+        flicker_row = QHBoxLayout()
+
+        self._sim_flicker_play_btn = QPushButton("▶ Play flicker")
+        self._sim_flicker_play_btn.setCheckable(True)
+        self._sim_flicker_play_btn.setStyleSheet(
+            f"background-color: {THEME['accent']}; color: {THEME['accent_text']}; "
+            f"font-weight: bold; padding: 4px 12px; border-radius: 4px;"
+        )
+        self._sim_flicker_play_btn.toggled.connect(self._on_flicker_toggle)
+        flicker_row.addWidget(self._sim_flicker_play_btn)
+
+        flicker_row.addWidget(QLabel("Speed:"))
+        self._sim_flicker_speed = QSlider(Qt.Orientation.Horizontal)
+        self._sim_flicker_speed.setMinimum(50)
+        self._sim_flicker_speed.setMaximum(1000)
+        self._sim_flicker_speed.setValue(250)      # ~4 Hz default
+        self._sim_flicker_speed.setSingleStep(25)
+        self._sim_flicker_speed.setFixedWidth(220)
+        self._sim_flicker_speed.valueChanged.connect(self._on_flicker_speed_changed)
+        flicker_row.addWidget(self._sim_flicker_speed)
+
+        self._sim_flicker_speed_lbl = QLabel("250 ms / frame")
+        self._sim_flicker_speed_lbl.setStyleSheet("color: white; font-size: 11px;")
+        flicker_row.addWidget(self._sim_flicker_speed_lbl)
+
+        flicker_row.addStretch()
+
+        self._sim_flicker_frame_lbl = QLabel("(flicker stopped)")
+        self._sim_flicker_frame_lbl.setStyleSheet("color: gray; font-style: italic; font-size: 11px;")
+        flicker_row.addWidget(self._sim_flicker_frame_lbl)
+
+        _sdlg_layout.addLayout(flicker_row)
+
+        # Big single-pattern canvas for the flicker view.
+        self._sim_flicker_fig = Figure(tight_layout=True, facecolor=_bg)
+        self._sim_flicker_ax  = self._sim_flicker_fig.add_subplot(111)
+        self._sim_flicker_ax.set_facecolor(_bg)
+        self._sim_flicker_ax.axis("off")
+        self._sim_flicker_canvas = FigureCanvas(self._sim_flicker_fig)
+        self._sim_flicker_canvas.setStyleSheet(f"background-color: {_bg};")
+        self._sim_flicker_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        _sdlg_layout.addWidget(self._sim_flicker_canvas, stretch=3)
+
+        # Per-frame state for the flicker.
+        self._sim_flicker_exp = None        # latest processed exp pattern
+        self._sim_flicker_sim = None        # latest processed sim pattern
+        self._sim_flicker_im  = None        # AxesImage handle, reused for speed
+        self._sim_flicker_show_sim = True   # which one is on screen RIGHT NOW
+        self._sim_flicker_timer = QTimer(self)
+        self._sim_flicker_timer.timeout.connect(self._on_flicker_tick)
+
         self._sim_dlg_status = QLabel("")
         self._sim_dlg_status.setStyleSheet("color: white; font-size: 13px;")
         self._sim_dlg_status.setWordWrap(True)
-        _sdlg_layout.addWidget(self._sim_pat_canvas, stretch=1)
         _sdlg_layout.addWidget(self._sim_dlg_status)
 
         # Initial visibility
@@ -2466,7 +2523,93 @@ class ReferencePatternPage(QWizardPage):
             f"Experimental: row={self._sim_ref_row}, col={self._sim_ref_col}  |  "
             f"Simulated: {pat_np.shape[0]}×{pat_np.shape[1]} px{status_metrics}"
         )
+
+        # ── Update the flicker view with the latest pair ───────────────────
+        # _sim_flicker_exp/sim store the up-to-date processed patterns; the
+        # timer pulls from these on each tick.  We also force one frame
+        # immediately so the user sees something even before they press Play.
+        if exp_proc is not None:
+            self._sim_flicker_exp = exp_proc
+            self._sim_flicker_sim = sim_proc
+            self._render_flicker_frame(force_resize=True)
+        else:
+            self._sim_flicker_exp = None
+            self._sim_flicker_sim = None
+            self._sim_flicker_ax.clear()
+            self._sim_flicker_ax.text(
+                0.5, 0.5, "No experimental pattern\navailable",
+                ha="center", va="center",
+                transform=self._sim_flicker_ax.transAxes,
+                fontsize=12, color="white",
+            )
+            self._sim_flicker_ax.axis("off")
+            self._sim_flicker_canvas.draw_idle()
+
         self._sim_dialog.show()
+
+    # ── Flicker animation ─────────────────────────────────────────────────────
+
+    def _render_flicker_frame(self, force_resize: bool = False):
+        """Draw whichever pattern (sim or exp) is currently selected by
+        self._sim_flicker_show_sim onto the flicker canvas.
+
+        We avoid clearing the axis on every tick — instead we reuse a single
+        AxesImage handle and just swap its data, which is dramatically
+        cheaper than a full clear+imshow per frame and lets the flicker
+        run smoothly even at 50 ms / frame.
+        """
+        if self._sim_flicker_exp is None or self._sim_flicker_sim is None:
+            return
+        img = self._sim_flicker_sim if self._sim_flicker_show_sim else self._sim_flicker_exp
+        label = "SIMULATED" if self._sim_flicker_show_sim else "EXPERIMENTAL"
+        color = "#4caf50" if self._sim_flicker_show_sim else "#ff9800"
+
+        if self._sim_flicker_im is None or force_resize:
+            self._sim_flicker_ax.clear()
+            self._sim_flicker_im = self._sim_flicker_ax.imshow(
+                img, cmap="gray", origin="upper",
+            )
+            self._sim_flicker_ax.axis("off")
+            self._sim_flicker_title = self._sim_flicker_ax.set_title(
+                label, fontsize=16, color=color, fontweight="bold",
+            )
+        else:
+            self._sim_flicker_im.set_data(img)
+            self._sim_flicker_title.set_text(label)
+            self._sim_flicker_title.set_color(color)
+
+        self._sim_flicker_canvas.draw_idle()
+
+    def _on_flicker_toggle(self, checked: bool):
+        """Play/Pause button callback."""
+        if checked and self._sim_flicker_exp is not None:
+            self._sim_flicker_timer.start(self._sim_flicker_speed.value())
+            self._sim_flicker_play_btn.setText("⏸ Pause flicker")
+            self._sim_flicker_frame_lbl.setStyleSheet(
+                "color: #4caf50; font-weight: bold; font-size: 11px;"
+            )
+        else:
+            self._sim_flicker_timer.stop()
+            self._sim_flicker_play_btn.setText("▶ Play flicker")
+            self._sim_flicker_frame_lbl.setText("(flicker stopped)")
+            self._sim_flicker_frame_lbl.setStyleSheet(
+                "color: gray; font-style: italic; font-size: 11px;"
+            )
+
+    def _on_flicker_speed_changed(self, value: int):
+        """Speed slider callback — also re-arms the QTimer if currently running."""
+        self._sim_flicker_speed_lbl.setText(f"{value} ms / frame")
+        if self._sim_flicker_timer.isActive():
+            self._sim_flicker_timer.start(int(value))
+
+    def _on_flicker_tick(self):
+        """One frame of the flicker — flip which pattern is shown, redraw."""
+        self._sim_flicker_show_sim = not self._sim_flicker_show_sim
+        self._render_flicker_frame(force_resize=False)
+        self._sim_flicker_frame_lbl.setText(
+            "showing: SIMULATED" if self._sim_flicker_show_sim
+            else "showing: EXPERIMENTAL"
+        )
 
     def _on_sim_error(self, msg: str):
         self._sim_gen_btn.setEnabled(True)
@@ -2654,6 +2797,11 @@ class ReferencePatternPage(QWizardPage):
         self._refine_worker.start()
         self._refine_btn.setEnabled(False)
         dlg.exec()
+
+    # NOTE: The PC plane fit UI (button, modal, status label) used to live
+    # here.  It was removed from the GUI per user request — the standalone
+    # tool is still available in pc_plane_fit.py and gui_workers.PcPlaneFitWorker
+    # if you want to re-wire it later.
 
     def get_params(self) -> dict:
         common = {"small_strain": self._small_strain.isChecked()}

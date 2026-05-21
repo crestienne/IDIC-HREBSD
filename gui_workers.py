@@ -281,6 +281,30 @@ class PipelineWorker(QThread):
                 f"PC correction ref_position (ROI-relative): {pc_ref_position}"
             )
 
+            # If a PC plane fit is available, build the per-position PC
+            # grid from the plane (in ROI-relative coordinates) and pass it
+            # as a pc_grid_override.  Otherwise correct_homographies falls
+            # back to the geometric scan_grid_to_pc_grid model.
+            pc_grid_override = None
+            pc_plane = p.get("pc_plane", None)
+            if pc_plane is not None:
+                from pc_plane_fit import evaluate_plane_grid
+                # The plane was fitted in FULL-scan (row, col) coordinates.
+                # If we're optimising an ROI, evaluate the plane on the
+                # full grid and slice down to the ROI region used by IC-GN.
+                _roi = p.get("roi_slice", None)
+                full_rows = ang_data.shape[0]
+                full_cols = ang_data.shape[1]
+                pc_grid_full = evaluate_plane_grid(pc_plane, (full_rows, full_cols))
+                if _roi is not None:
+                    pc_grid_override = pc_grid_full[_roi[0], _roi[1]]
+                else:
+                    pc_grid_override = pc_grid_full
+                self.log_signal.emit(
+                    f"PC plane fit detected — overriding geometric PC grid "
+                    f"(plane order: {pc_plane.get('order', 'linear')})."
+                )
+
             h, _ = correct_homographies(
                 h=h,
                 scan_shape=(eff_rows, eff_cols),
@@ -292,6 +316,7 @@ class PipelineWorker(QThread):
                 detector_tilt_deg=p["det_tilt"],
                 convention=p.get("scan_strategy", "standard"),
                 ref_position=pc_ref_position,
+                pc_grid_override=pc_grid_override,
             )
             if nan_mask is not None:
                 h[nan_mask] = np.nan
@@ -891,6 +916,15 @@ class VisWorker(QThread):
                 _rr, _rc = int(_ref_full[0]), int(_ref_full[1])
             if not (0 <= _rr < rows and 0 <= _rc < cols):
                 _rr, _rc = 0, 0
+
+            # If a PC plane fit is carried in the re-vis params, evaluate
+            # it on the ROI grid and pass as pc_grid_override.
+            pc_grid_override = None
+            pc_plane = p.get("pc_plane", None)
+            if pc_plane is not None:
+                from pc_plane_fit import evaluate_plane_grid
+                pc_grid_override = evaluate_plane_grid(pc_plane, (rows, cols))
+
             h_calc = correct_homographies(
                 h=h_calc,
                 scan_shape=(rows, cols),
@@ -902,6 +936,7 @@ class VisWorker(QThread):
                 detector_tilt_deg=p["det_tilt"],
                 convention=p.get("scan_strategy", "standard"),
                 ref_position=(_rr, _rc),
+                pc_grid_override=pc_grid_override,
             )
 
         pc_bruker = conversions.Edax_to_Bruker_PC(pc_edax)
@@ -1243,6 +1278,112 @@ class PcEulerRefineWorker(QThread):
                 sim_gamma              = self.sim_gamma,
             )
             self.done_signal.emit(euler_opt, pc_opt)
+        except Exception:
+            self.error_signal.emit(traceback.format_exc())
+        finally:
+            sys.stdout = old_stdout
+
+
+class PcPlaneFitWorker(QThread):
+    """Run the PC-plane-fit workflow (sparse-grid refinement + plane fit).
+
+    See pc_plane_fit.pc_plane_fit for the underlying algorithm.  This worker
+    just streams the heavy compute off the GUI thread, emitting progress
+    after each test point.
+    """
+    log_signal      = pyqtSignal(str)
+    progress_signal = pyqtSignal(int, int, dict)   # (i, n_total, point_info)
+    done_signal     = pyqtSignal(dict)             # full result dict from pc_plane_fit
+    error_signal    = pyqtSignal(str)
+
+    def __init__(self, up2_path: str, ang_data, master_pattern_path: str,
+                 pc_ref, ref_position, sample_tilt_deg: float,
+                 detector_tilt_deg: float, step_size_um: float,
+                 pixel_size_um: float, scan_shape: tuple,
+                 processing_params: dict,
+                 n_grid: tuple = (5, 5),
+                 edge_padding: int = 2,
+                 scan_strategy: str = "standard",
+                 plane_order: str = "linear",
+                 weight_by_znssd: bool = True,
+                 refine_max_iter: int = 200,
+                 refine_euler_step_deg: float = 0.5,
+                 refine_pc_step: float = 0.005,
+                 sim_high_pass_sigma=None,
+                 sim_low_pass_sigma=None,
+                 sim_gamma=None,
+                 save_dir: str = "debug"):
+        super().__init__()
+        self.up2_path              = up2_path
+        self.ang_data              = ang_data
+        self.master_pattern_path   = master_pattern_path
+        self.pc_ref                = pc_ref
+        self.ref_position          = ref_position
+        self.sample_tilt_deg       = sample_tilt_deg
+        self.detector_tilt_deg     = detector_tilt_deg
+        self.step_size_um          = step_size_um
+        self.pixel_size_um         = pixel_size_um
+        self.scan_shape            = scan_shape
+        self.processing_params     = processing_params
+        self.n_grid                = n_grid
+        self.edge_padding          = edge_padding
+        self.scan_strategy         = scan_strategy
+        self.plane_order           = plane_order
+        self.weight_by_znssd       = weight_by_znssd
+        self.refine_max_iter       = refine_max_iter
+        self.refine_euler_step_deg = refine_euler_step_deg
+        self.refine_pc_step        = refine_pc_step
+        self.sim_high_pass_sigma   = sim_high_pass_sigma
+        self.sim_low_pass_sigma    = sim_low_pass_sigma
+        self.sim_gamma             = sim_gamma
+        self.save_dir              = save_dir
+
+    def run(self):
+        old_stdout = sys.stdout
+        sys.stdout = _StdoutCapture(self.log_signal)
+        try:
+            import Data
+            from pc_plane_fit import pc_plane_fit
+
+            p = self.processing_params
+            mask_type = p["mask_type"] if p["mask_type"] != "None" else None
+            pat_obj = Data.UP2(self.up2_path)
+            pat_obj.set_processing(
+                low_pass_sigma          = p["low_pass_sigma"],
+                high_pass_sigma         = p["high_pass_sigma"],
+                truncate_std_scale      = 3.0,
+                mask_type               = mask_type,
+                center_cross_half_width = 6,
+                flip_x                  = p["flip_x"],
+                gamma                   = p.get("gamma", 0.8),
+            )
+
+            result = pc_plane_fit(
+                pat_obj                = pat_obj,
+                ang_data               = self.ang_data,
+                master_pattern_path    = self.master_pattern_path,
+                pc_ref                 = self.pc_ref,
+                ref_position           = self.ref_position,
+                sample_tilt_deg        = self.sample_tilt_deg,
+                detector_tilt_deg      = self.detector_tilt_deg,
+                step_size_um           = self.step_size_um,
+                pixel_size_um          = self.pixel_size_um,
+                scan_shape             = self.scan_shape,
+                n_grid                 = self.n_grid,
+                edge_padding           = self.edge_padding,
+                scan_strategy          = self.scan_strategy,
+                plane_order            = self.plane_order,
+                weight_by_znssd        = self.weight_by_znssd,
+                refine_max_iter        = self.refine_max_iter,
+                refine_euler_step_deg  = self.refine_euler_step_deg,
+                refine_pc_step         = self.refine_pc_step,
+                sim_high_pass_sigma    = self.sim_high_pass_sigma,
+                sim_low_pass_sigma     = self.sim_low_pass_sigma,
+                sim_gamma              = self.sim_gamma,
+                progress_cb            = lambda i, n, info: self.progress_signal.emit(i, n, info),
+                save_dir               = self.save_dir,
+            )
+            self.done_signal.emit(result)
         except Exception:
             self.error_signal.emit(traceback.format_exc())
         finally:
