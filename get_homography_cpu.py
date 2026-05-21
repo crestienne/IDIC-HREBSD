@@ -968,7 +968,6 @@ def _select_peak_2d(
     shift : (2,) ndarray
         Sub-pixel `(Δrow, Δcol)` offset of the chosen peak from the centre.
     """
-    print(f"Selecting peak from cross-correlation surface with shape {cc.shape}...")
     cc_smooth = ndimage.gaussian_filter(cc, sigma=smooth_sigma)
     cy, cx    = cc.shape[0] // 2, cc.shape[1] // 2
 
