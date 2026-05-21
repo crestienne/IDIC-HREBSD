@@ -172,10 +172,8 @@ def simulate_reference_pattern(
             HREBSD.detector_coords_to_ksphere_via_pc uses
             alpha = π/2 + (detector_tilt - sample_tilt)·π/180.
         pat_obj (Data.UP2, optional): If provided, applies the same preprocessing
-            pipeline (filters, CLAHE) as real patterns.  The mask is NOT applied
-            to the simulated pattern — masked pixels in the real pattern correspond
-            to detector artefacts that have no equivalent in the simulation, so
-            zero-filling them creates a spurious centre-region intensity mismatch.
+            pipeline (filters, gamma, AND mask) as real patterns, so the IC-GN
+            ZNSSD comparison sees identical masking on both sides.
         high_pass_sigma_override (float, optional): If set, temporarily overrides
             pat_obj.high_pass_sigma when processing the simulated pattern.  Use a
             higher value (e.g. 25-30) to remove excess low-frequency content that
@@ -213,19 +211,19 @@ def simulate_reference_pattern(
         pat = (pat - pat_min) / (pat_max - pat_min)
 
     if pat_obj is not None:
-        # Process without mask: masked pixels in the real pattern are detector
-        # artefacts with no physical equivalent in the simulation.  Zero-filling
-        # them via masked_gaussian creates a boundary halo near the mask edge
-        # that produces a spurious centre-region intensity mismatch.
-        orig_mask_type = pat_obj.mask_type
+        # The mask is now applied to the simulated reference too — same
+        # mask_type the user chose in Step 3, mirrored across exp and sim
+        # so the IC-GN ZNSSD comparison sees identical masking on both
+        # sides.  (Previously this path forced mask_type=None to avoid a
+        # boundary halo from zero-filled sim pixels at the mask edge.
+        # The user has decided the symmetry of the masked comparison is
+        # more important than that artefact.)
         orig_hp_sigma  = pat_obj.high_pass_sigma
-        pat_obj.mask_type = None
         if high_pass_sigma_override is not None:
             pat_obj.high_pass_sigma = high_pass_sigma_override
         try:
             pat = pat_obj.process_pattern(pat)
         finally:
-            pat_obj.mask_type      = orig_mask_type
             pat_obj.high_pass_sigma = orig_hp_sigma
 
     return pat

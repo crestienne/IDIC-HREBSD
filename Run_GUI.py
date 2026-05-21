@@ -54,6 +54,25 @@ class HREBSDWizard(QWizard):
         self.setOption(QWizard.WizardOption.HaveHelpButton, True)
         self.helpRequested.connect(self._show_help)
 
+        # ── Always-visible "Open Results Viewer" button ───────────────────
+        # Placed alongside Help in the wizard's bottom button row so it's
+        # reachable from every page (used to live as a QGroupBox on Step 1).
+        self.setOption(QWizard.WizardOption.HaveCustomButton1, True)
+        self.setButtonText(QWizard.WizardButton.CustomButton1, "Open Results Viewer")
+        self.customButtonClicked.connect(self._on_custom_button_clicked)
+        # Reorder the bottom row: [Help] [Open Results Viewer] [Stretch]
+        # [Back] [Next] [Finish] [Cancel].  The default layout already has
+        # Help on the left, so we slot CustomButton1 right after it.
+        self.setButtonLayout([
+            QWizard.WizardButton.HelpButton,
+            QWizard.WizardButton.CustomButton1,
+            QWizard.WizardButton.Stretch,
+            QWizard.WizardButton.BackButton,
+            QWizard.WizardButton.NextButton,
+            QWizard.WizardButton.FinishButton,
+            QWizard.WizardButton.CancelButton,
+        ])
+
         self.files_page      = LoadFilesPage()
         self.geometry_page   = ScanGeometryPage()
         self.roi_page        = ROISelectionPage()
@@ -71,6 +90,21 @@ class HREBSDWizard(QWizard):
     def _show_help(self):
         dlg = HelpDialog(current_page_index=self.currentId(), parent=self)
         dlg.exec()
+
+    def _on_custom_button_clicked(self, which):
+        """Dispatch for the custom buttons in the wizard's bottom row."""
+        if which == QWizard.WizardButton.CustomButton1:
+            self._launch_vis_dialog()
+
+    def _launch_vis_dialog(self):
+        """Open the results viewer with an empty run-params dict — the
+        VisualizationDialog will prompt the user for a homographies .npy
+        from a previous pipeline run."""
+        # Lazy import so we don't pay the matplotlib-dialog cost just
+        # because the wizard opened.
+        from gui_visualization import VisualizationDialog
+        dlg = VisualizationDialog({}, parent=self)
+        dlg.show()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

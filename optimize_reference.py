@@ -267,11 +267,12 @@ def _simulate(sim: patternSimulation, euler: np.ndarray, pc: np.ndarray,
               high_pass_sigma_override: float = None,
               low_pass_sigma_override: float = None,
               gamma_override: float = None) -> np.ndarray:
-    """Generate one simulated pattern, processed without mask.
+    """Generate one simulated pattern, processed through the same Step 3
+    pipeline (including mask, if any) as the real pattern.
 
-    The mask is skipped because masked pixels in the real pattern are detector
-    artefacts (direct beam, shadow) with no physical equivalent in the
-    simulation.  Zero-filling them creates a boundary halo that biases the ZNSSD.
+    The mask is now KEPT ON for the sim too, so ZNSSD(processed_exp,
+    processed_sim) ignores the masked region on both sides — matching what
+    the IC-GN main loop sees and keeping the comparison symmetric.
     """
     import torch
 
@@ -289,11 +290,16 @@ def _simulate(sim: patternSimulation, euler: np.ndarray, pc: np.ndarray,
         pat = (pat - lo) / (hi - lo)
 
     if pat_obj is not None:
-        orig_mask = pat_obj.mask_type
-        orig_hp   = pat_obj.high_pass_sigma
-        orig_lp   = pat_obj.low_pass_sigma
-        orig_g    = pat_obj.gamma
-        pat_obj.mask_type = None
+        # NOTE: the mask is now KEPT ON for sim patterns too — whatever
+        # mask_type the user picked in Step 3 is applied to both real and
+        # simulated patterns, matching what the IC-GN main loop sees so
+        # the ZNSSD comparison is symmetric.  (Previously we forced
+        # mask_type=None to avoid a boundary halo at the mask edge from
+        # zero-filled sim pixels; the user has decided the symmetry of
+        # the comparison is more important than that artefact.)
+        orig_hp = pat_obj.high_pass_sigma
+        orig_lp = pat_obj.low_pass_sigma
+        orig_g  = pat_obj.gamma
         if high_pass_sigma_override is not None:
             pat_obj.high_pass_sigma = high_pass_sigma_override
         if low_pass_sigma_override is not None:
@@ -303,7 +309,6 @@ def _simulate(sim: patternSimulation, euler: np.ndarray, pc: np.ndarray,
         try:
             pat = pat_obj.process_pattern(pat)
         finally:
-            pat_obj.mask_type      = orig_mask
             pat_obj.high_pass_sigma = orig_hp
             pat_obj.low_pass_sigma  = orig_lp
             pat_obj.gamma           = orig_g

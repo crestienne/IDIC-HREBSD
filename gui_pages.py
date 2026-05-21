@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QWidget, QScrollArea,
     QSizePolicy, QSplitter, QDialog, QFileDialog, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPropertyAnimation, QEasingCurve, pyqtProperty
 
 from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
 from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker, SimRefWorker, PcEulerRefineWorker
@@ -163,23 +163,25 @@ class LoadFilesPage(QWizardPage):
         self._preset_combo.currentIndexChanged.connect(self._apply_material_preset)
         mat_layout.addRow("Crystal preset:", self._preset_combo)
 
-        self._struct_lbl = QLabel("cubic")
+        # Structure / elastic constants display "—" when no material preset
+        # is selected, so the user can see at a glance that the traction-free
+        # boundary condition is not yet populated.
+        self._struct_lbl = QLabel("—")
         mat_layout.addRow("Structure:", self._struct_lbl)
 
-        self._C11 = QDoubleSpinBox()
-        self._C11.setRange(0, 9999); self._C11.setDecimals(1)
-        self._C11.setSuffix(" GPa"); self._C11.setValue(165.7)
-        self._C11.setReadOnly(True); self._C11.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        def _make_C_spin():
+            sb = QDoubleSpinBox()
+            sb.setRange(0, 9999); sb.setDecimals(1); sb.setSuffix(" GPa")
+            # specialValueText shows when the value == minimum (0 here).
+            sb.setSpecialValueText("—")
+            sb.setValue(0)
+            sb.setReadOnly(True)
+            sb.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            return sb
 
-        self._C12 = QDoubleSpinBox()
-        self._C12.setRange(0, 9999); self._C12.setDecimals(1)
-        self._C12.setSuffix(" GPa"); self._C12.setValue(63.9)
-        self._C12.setReadOnly(True); self._C12.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-
-        self._C44 = QDoubleSpinBox()
-        self._C44.setRange(0, 9999); self._C44.setDecimals(1)
-        self._C44.setSuffix(" GPa"); self._C44.setValue(79.6)
-        self._C44.setReadOnly(True); self._C44.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self._C11 = _make_C_spin()
+        self._C12 = _make_C_spin()
+        self._C44 = _make_C_spin()
 
         self._new_material_btn = QPushButton("New material…")
         self._new_material_btn.clicked.connect(self._open_new_material_dialog)
@@ -194,26 +196,9 @@ class LoadFilesPage(QWizardPage):
 
         layout.addLayout(bottom_row)
 
-        # ── Visualize existing results ─────────────────────────────────────────
-        vis_group  = QGroupBox("Visualize Existing Results")
-        vis_layout = QHBoxLayout()
-        vis_label  = QLabel(
-            "Already have a homographies .npy file from a previous run? "
-            "Open the results viewer directly without running the full pipeline. NOTE: Currently only supports files for the full field of view (no ROI)."
-        )
-        vis_label.setWordWrap(True)
-        vis_label.setStyleSheet("color: gray; font-size: 11px;")
-        self._open_vis_btn = QPushButton("Open Results Viewer")
-        self._open_vis_btn.setFixedHeight(34)
-        self._open_vis_btn.setStyleSheet(
-            f"font-size: 12px; font-weight: bold; "
-            f"background-color: {THEME['accent']}; color: #000; border-radius: 5px;"
-        )
-        self._open_vis_btn.clicked.connect(self._launch_vis_dialog)
-        vis_layout.addWidget(vis_label, stretch=1)
-        vis_layout.addWidget(self._open_vis_btn)
-        vis_group.setLayout(vis_layout)
-        layout.addWidget(vis_group)
+        # NOTE: the "Open Results Viewer" button has been moved out of Step 1
+        # and into the wizard's bottom button row (next to Help) so it's
+        # reachable from every page.  See HREBSDWizard in Run_GUI.py.
 
         self.setLayout(layout)
 
@@ -300,12 +285,19 @@ class LoadFilesPage(QWizardPage):
     def _apply_material_preset(self, index: int):
         preset = self._preset_combo.itemData(index)
         if preset is None:
+            # Placeholder selected — wipe the elastic constants back to the
+            # "not yet populated" state so the user can't accidentally run
+            # the pipeline with stale numbers from a previous selection.
+            self._C11.setValue(0)
+            self._C12.setValue(0)
+            self._C44.setValue(0)
+            self._struct_lbl.setText("—")
             return
         ec = preset.get("elastic_constants_GPa", {})
-        self._C11.setValue(ec.get("C11", self._C11.value()))
-        self._C12.setValue(ec.get("C12", self._C12.value()))
-        self._C44.setValue(ec.get("C44", self._C44.value()))
-        self._struct_lbl.setText(preset.get("structure", self._struct_lbl.text()))
+        self._C11.setValue(ec.get("C11", 0))
+        self._C12.setValue(ec.get("C12", 0))
+        self._C44.setValue(ec.get("C44", 0))
+        self._struct_lbl.setText(preset.get("structure", "—"))
 
     def _open_new_material_dialog(self):
         dlg = NewMaterialDialog(parent=self)
@@ -384,9 +376,9 @@ class LoadFilesPage(QWizardPage):
             self._info_label.setText(f"Could not read UP2: {exc}")
             self._canvas.draw()
 
-    def _launch_vis_dialog(self):
-        dlg = VisualizationDialog({}, parent=self)
-        dlg.show()
+    # NOTE: _launch_vis_dialog used to live here.  It's been moved to
+    # HREBSDWizard in Run_GUI.py so the button can sit next to Help on
+    # every page of the wizard, not just on Step 1.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -528,21 +520,17 @@ class ScanGeometryPage(QWizardPage):
         # ── Scan Strategy ─────────────────────────────────────────────────────
         strategy_group  = QGroupBox("Scan Strategy")
         strategy_layout = QVBoxLayout()
-        
-        self._strategy_standard  = QRadioButton("Standard (origin: upper-left, x →, y ↓)")
-        self._strategy_ll = QRadioButton("Lower Left  (origin: lower-left, x →, y ↑)")
-        self._strategy_lr = QRadioButton("Lower Right (origin: lower-right, x ←, y ↑)")
-        self._strategy_de  = QRadioButton("Direct Electron  (origin: upper-right, x ←, y ↓)")
 
-        # Lower-left is the GUI default per the most common scan-acquisition
-        # convention; the other corners are available as toggles.
-        self._strategy_ll.setChecked(True)
-
-        strategy_layout.addWidget(self._strategy_standard)
-        strategy_layout.addWidget(self._strategy_ll)
-        strategy_layout.addWidget(self._strategy_lr)
-        strategy_layout.addWidget(self._strategy_de)
-
+        # Dropdown — itemData carries the canonical key the pipeline uses
+        # (matches the keys consumed by pc_homography_correction.make_scan_grid).
+        self._strategy_combo = QComboBox()
+        self._strategy_combo.addItem("Standard (origin: upper-left, x →, y ↓)",      userData="standard")
+        self._strategy_combo.addItem("Lower Left  (origin: lower-left, x →, y ↑)",    userData="lower_left")
+        self._strategy_combo.addItem("Lower Right (origin: lower-right, x ←, y ↑)",   userData="lower_right")
+        self._strategy_combo.addItem("Direct Electron  (origin: upper-right, x ←, y ↓)", userData="direct_electron")
+        # Lower-left is the GUI default (most common scan-acquisition convention).
+        self._strategy_combo.setCurrentIndex(1)
+        strategy_layout.addWidget(self._strategy_combo)
 
         self._apply_pc_correction = QCheckBox("Apply pattern centre drift correction")
         self._apply_pc_correction.setChecked(True)
@@ -563,6 +551,15 @@ class ScanGeometryPage(QWizardPage):
 
         strategy_group.setLayout(strategy_layout)
         right_col.addWidget(strategy_group)
+
+        # ── Strain formulation ────────────────────────────────────────────────
+        strain_group  = QGroupBox("Strain Formulation")
+        strain_layout = QVBoxLayout()
+        self._small_strain = QCheckBox("Use small-strain formulation")
+        self._small_strain.setChecked(False)
+        strain_layout.addWidget(self._small_strain)
+        strain_group.setLayout(strain_layout)
+        right_col.addWidget(strain_group)
 
         # ── Auto-populate status ──────────────────────────────────────────────
         self._status_label = QLabel("")
@@ -665,11 +662,9 @@ class ScanGeometryPage(QWizardPage):
             "rows":                self.rows.value(),
             "cols":                self.cols.value(),
             "step_size":           self.step_size.value(),
-            "scan_strategy":       ("direct_electron" if self._strategy_de.isChecked()
-                                   else "lower_right" if self._strategy_lr.isChecked()
-                                   else "lower_left"  if self._strategy_ll.isChecked()
-                                   else "standard"),
+            "scan_strategy":       (self._strategy_combo.currentData() or "standard"),
             "apply_pc_correction": self._apply_pc_correction.isChecked(),
+            "small_strain":        self._small_strain.isChecked(),
         }
 
 
@@ -1242,10 +1237,11 @@ class SimTunerDialog(QDialog):
                  exp_pat: np.ndarray = None, exp_pat_proc: np.ndarray = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Simulated Pattern Live Tuner")
-        self.setMinimumSize(1400, 760)
+        self.setMinimumSize(960, 620)
         self._master_path     = master_path
         self._det_shape       = det_shape
-        self._det_tilt_deg    = det_tilt_deg   # held fixed at the Step 2 value
+        self._det_tilt_deg    = det_tilt_deg     # held fixed at the Step 2 value
+        self._sample_tilt_deg = sample_tilt_deg  # held fixed at the Step 2 value
         self._exp_pat_raw     = exp_pat       # unprocessed (may be None)
         self._exp_pat_proc    = exp_pat_proc  # processed   (may be None)
         # Default to the processed experimental pattern when available so the
@@ -1315,69 +1311,93 @@ class SimTunerDialog(QDialog):
             lambda t: [w.setSingleStep(float(t)) for w in (self._pcx, self._pcy, self._pcz)]
         )
 
-        # Detector geometry — detector size and detector tilt are fixed; the
-        # sample tilt is tunable as a single "Tilt" knob.
-        geo_group  = QGroupBox("Detector Geometry")
-        geo_layout = QFormLayout()
-        geo_layout.addRow("Detector size:", QLabel(f"{det_shape[0]} × {det_shape[1]} px"))
-        geo_layout.addRow("Detector tilt:", QLabel(f"{det_tilt_deg:.2f} °"))
-
-        self._tilt_spin = QDoubleSpinBox()
-        self._tilt_spin.setRange(0.0, 90.0)
-        self._tilt_spin.setDecimals(2); self._tilt_spin.setSingleStep(0.5)
-        self._tilt_spin.setSuffix(" °"); self._tilt_spin.setValue(sample_tilt_deg)
-        self._tilt_spin.setStyleSheet(_BIG_SPIN_QSS)
-        geo_layout.addRow("Tilt:", self._tilt_spin)
-        geo_group.setLayout(geo_layout)
+        # Detector geometry (detector size, detector tilt, sample tilt) is
+        # set on Step 2 and is not tunable here.
 
         # Wire all spinboxes to debounce
         for w in (self._phi1, self._Phi, self._phi2,
-                  self._pcx, self._pcy, self._pcz,
-                  self._tilt_spin):
+                  self._pcx, self._pcy, self._pcz):
             w.valueChanged.connect(self._on_value_changed)
 
-        # Checkerboard tile size + experimental processing toggle
-        cb_group  = QGroupBox("Checkerboard / Experimental")
-        cb_layout = QFormLayout()
+        # ── View mode: Checkerboard vs Flicker ────────────────────────────────
+        view_group  = QGroupBox("View Mode")
+        view_layout = QVBoxLayout()
+
+        mode_row = QHBoxLayout()
+        self._view_cb_radio   = QRadioButton("Checkerboard")
+        self._view_flick_radio = QRadioButton("Flicker")
+        self._view_cb_radio.setChecked(True)
+        mode_row.addWidget(self._view_cb_radio)
+        mode_row.addWidget(self._view_flick_radio)
+        mode_row.addStretch()
+        view_layout.addLayout(mode_row)
+        self._view_mode_grp = QButtonGroup(self)
+        self._view_mode_grp.addButton(self._view_cb_radio, 0)
+        self._view_mode_grp.addButton(self._view_flick_radio, 1)
+        self._view_mode_grp.idToggled.connect(self._on_view_mode_changed)
+
+        # Checkerboard sub-controls (shown only in checkerboard mode)
+        self._cb_sub = QWidget()
+        cb_sub_layout = QFormLayout(self._cb_sub)
+        cb_sub_layout.setContentsMargins(0, 0, 0, 0)
         self._tile_spin = QSpinBox()
         self._tile_spin.setRange(4, 128)
         self._tile_spin.setValue(40)
         self._tile_spin.setSuffix(" px")
         self._tile_spin.setToolTip("Size of each checkerboard tile in pixels.")
         self._tile_spin.valueChanged.connect(self._on_value_changed)
-        cb_layout.addRow("Tile size:", self._tile_spin)
+        cb_sub_layout.addRow("Tile size:", self._tile_spin)
+        view_layout.addWidget(self._cb_sub)
+
+        # Flicker sub-controls (shown only in flicker mode)
+        self._flick_sub = QWidget()
+        flick_sub_layout = QHBoxLayout(self._flick_sub)
+        flick_sub_layout.setContentsMargins(0, 0, 0, 0)
+        self._flick_play_btn = QPushButton("▶ Play")
+        self._flick_play_btn.setCheckable(True)
+        self._flick_play_btn.toggled.connect(self._on_flick_toggle)
+        flick_sub_layout.addWidget(self._flick_play_btn)
+        flick_sub_layout.addWidget(QLabel("Speed:"))
+        self._flick_speed = QSlider(Qt.Orientation.Horizontal)
+        self._flick_speed.setMinimum(50)
+        self._flick_speed.setMaximum(1000)
+        self._flick_speed.setValue(250)
+        self._flick_speed.setSingleStep(25)
+        self._flick_speed.valueChanged.connect(self._on_flick_speed_changed)
+        flick_sub_layout.addWidget(self._flick_speed, stretch=1)
+        self._flick_speed_lbl = QLabel("250 ms")
+        flick_sub_layout.addWidget(self._flick_speed_lbl)
+        view_layout.addWidget(self._flick_sub)
+        self._flick_sub.setVisible(False)
+
+        # Experimental-processing toggle (applies to both view modes)
         self._proc_chk = QCheckBox("Apply processing to experimental")
-        # On by default whenever a processed version is available, so the
-        # checkerboard mirrors the optimizer's preprocessing pipeline.
         self._proc_chk.setChecked(exp_pat_proc is not None)
         self._proc_chk.setEnabled(exp_pat_proc is not None)
         self._proc_chk.setToolTip(
-            "Use the processed (filtered) experimental pattern in the checkerboard."
+            "Use the processed (filtered) experimental pattern in the view."
             if exp_pat_proc is not None
             else "Not available — generate the pattern first so processing params are applied."
         )
         self._proc_chk.toggled.connect(self._on_proc_toggled)
-        cb_layout.addRow("", self._proc_chk)
-        cb_group.setLayout(cb_layout)
+        view_layout.addWidget(self._proc_chk)
 
-        # ── Two-column control layout ─────────────────────────────────────────
-        # Left column: Euler angles + detector geometry (read-only).
-        # Right column: pattern center + checkerboard / experimental.
-        # Each tuning group sits alone in its column so the larger spinboxes
-        # don't have to share horizontal space.
-        cols = QHBoxLayout()
-        cols.setSpacing(12)
-        col_left  = QVBoxLayout(); col_left.setSpacing(8)
-        col_right = QVBoxLayout(); col_right.setSpacing(8)
-        col_left.addWidget(eu_group)
-        col_left.addWidget(geo_group)
-        col_left.addStretch()
-        col_right.addWidget(pc_group)
-        col_right.addWidget(cb_group)
-        col_right.addStretch()
-        cols.addLayout(col_left,  stretch=1)
-        cols.addLayout(col_right, stretch=1)
-        ctrl.addLayout(cols)
+        view_group.setLayout(view_layout)
+
+        # Flicker timer + state — needed before _on_done can render flicker.
+        self._flick_show_sim = True
+        self._flick_im       = None
+        self._flick_title    = None
+        self._flick_timer    = QTimer(self)
+        self._flick_timer.timeout.connect(self._on_flick_tick)
+        self._last_sim_pat   = None  # cache so the view-mode toggle can redraw
+
+        # ── Stacked control layout ────────────────────────────────────────────
+        # All controls in a single column: Euler, PC, view-mode.  Detector
+        # geometry was removed — those values are fixed by Step 2.
+        ctrl.addWidget(eu_group)
+        ctrl.addWidget(pc_group)
+        ctrl.addWidget(view_group)
 
         # Status + buttons
         self._status = QLabel("Generating initial pattern…")
@@ -1385,10 +1405,16 @@ class SimTunerDialog(QDialog):
         self._status.setStyleSheet(f"color: {THEME['warning']}; font-size: 11px;")
         ctrl.addWidget(self._status)
 
-        apply_btn = QPushButton("Apply to Reference Page")
-        apply_btn.setToolTip("Push current Euler angles and PC back to the reference page spinboxes.")
+        btn_row = QHBoxLayout()
+        apply_btn = QPushButton("Finish && Apply")
+        apply_btn.setToolTip("Push current Euler angles and PC back to the reference page and close the tuner.")
         apply_btn.clicked.connect(self._apply)
-        ctrl.addWidget(apply_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setToolTip("Discard any changes made in the tuner and close the window.")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(apply_btn)
+        btn_row.addWidget(cancel_btn)
+        ctrl.addLayout(btn_row)
         ctrl.addStretch()
 
         # ── Canvas (right): checkerboard only ─────────────────────────────────
@@ -1399,14 +1425,14 @@ class SimTunerDialog(QDialog):
         self._ax_overlay = self._fig.add_subplot(111)
         self._ax_overlay.axis("off")
         self._canvas = FigureCanvas(self._fig)
-        self._canvas.setMinimumSize(640, 640)
+        self._canvas.setMinimumSize(480, 480)
 
         # ── Assemble ──────────────────────────────────────────────────────────
         outer = QHBoxLayout()
         outer.setSpacing(12)
         ctrl_w = QWidget()
         ctrl_w.setLayout(ctrl)
-        ctrl_w.setFixedWidth(680)
+        ctrl_w.setFixedWidth(460)
         outer.addWidget(ctrl_w)
         outer.addWidget(self._canvas, stretch=1)
         self.setLayout(outer)
@@ -1443,19 +1469,38 @@ class SimTunerDialog(QDialog):
             self._master_path, euler_deg, pc_edax,
             self._det_shape,
             det_tilt_deg    = self._det_tilt_deg,
-            sample_tilt_deg = self._tilt_spin.value(),
+            sample_tilt_deg = self._sample_tilt_deg,
         )
         self._worker.done_signal.connect(self._on_done)
         self._worker.error_signal.connect(self._on_error)
         self._worker.start()
 
     def _on_done(self, pat_np: np.ndarray):
+        # Cache the latest sim so view-mode toggling and flicker ticks can
+        # redraw without re-running the worker.
+        self._last_sim_pat = pat_np
+        self._redraw_view()
+        self._status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
+        self._status.setStyleSheet(f"color: {THEME['success']}; font-size: 11px;")
+
+    def _redraw_view(self):
+        """Dispatch to whichever view mode is selected (checkerboard /
+        flicker), using the latest cached sim pattern."""
+        if self._view_flick_radio.isChecked():
+            self._draw_flicker_frame(force_resize=True)
+        else:
+            self._draw_checkerboard()
+
+    def _draw_checkerboard(self):
         eu = (self._phi1.value(), self._Phi.value(), self._phi2.value())
         pc = (self._pcx.value(), self._pcy.value(), self._pcz.value())
+        pat_np = self._last_sim_pat
+        # Reset cached flicker handles so the next flicker pass starts fresh.
+        self._flick_im = None
+        self._flick_title = None
 
-        # Checkerboard — alternating tiles from experimental and simulated.
         self._ax_overlay.cla()
-        if self._exp_pat is not None:
+        if pat_np is not None and self._exp_pat is not None:
             exp_r = self._exp_pat
             sim_r = pat_np
             if exp_r.shape != sim_r.shape:
@@ -1484,10 +1529,73 @@ class SimTunerDialog(QDialog):
                                   fontsize=10, color="gray")
             self._ax_overlay.set_title("Checkerboard", fontsize=10)
         self._ax_overlay.axis("off")
-
         self._canvas.draw()
-        self._status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
-        self._status.setStyleSheet(f"color: {THEME['success']}; font-size: 11px;")
+
+    def _draw_flicker_frame(self, force_resize: bool = False):
+        """Render one frame of the flicker view onto the shared canvas.
+        Mirrors the comparison-dialog flicker, but on the tuner's single
+        axis — reuses one AxesImage handle for cheap per-tick updates."""
+        if self._last_sim_pat is None or self._exp_pat is None:
+            self._ax_overlay.cla()
+            self._ax_overlay.text(0.5, 0.5, "No experimental\npattern", ha="center",
+                                  va="center", transform=self._ax_overlay.transAxes,
+                                  fontsize=10, color="gray")
+            self._ax_overlay.axis("off")
+            self._canvas.draw()
+            return
+
+        sim_r = self._last_sim_pat
+        exp_r = self._exp_pat
+        if exp_r.shape != sim_r.shape:
+            from PIL import Image as _PIL
+            sim_r = np.array(
+                _PIL.fromarray((sim_r * 255).astype(np.uint8)).resize(
+                    (exp_r.shape[1], exp_r.shape[0]), resample=_PIL.BILINEAR
+                )
+            ).astype(np.float32) / 255.0
+
+        img   = sim_r if self._flick_show_sim else exp_r
+        label = "SIMULATED" if self._flick_show_sim else "EXPERIMENTAL"
+        color = "#4caf50" if self._flick_show_sim else "#ff9800"
+
+        if self._flick_im is None or force_resize:
+            self._ax_overlay.cla()
+            self._flick_im = self._ax_overlay.imshow(img, cmap="gray", vmin=0, vmax=1, origin="upper")
+            self._ax_overlay.axis("off")
+            self._flick_title = self._ax_overlay.set_title(label, fontsize=14, color=color, fontweight="bold")
+        else:
+            self._flick_im.set_data(img)
+            self._flick_title.set_text(label)
+            self._flick_title.set_color(color)
+        self._canvas.draw_idle()
+
+    def _on_view_mode_changed(self, btn_id: int, checked: bool):
+        if not checked:
+            return
+        flicker = (btn_id == 1)
+        self._cb_sub.setVisible(not flicker)
+        self._flick_sub.setVisible(flicker)
+        if not flicker and self._flick_timer.isActive():
+            self._flick_timer.stop()
+            self._flick_play_btn.setChecked(False)
+        self._redraw_view()
+
+    def _on_flick_toggle(self, checked: bool):
+        if checked and self._last_sim_pat is not None and self._exp_pat is not None:
+            self._flick_timer.start(self._flick_speed.value())
+            self._flick_play_btn.setText("⏸ Pause")
+        else:
+            self._flick_timer.stop()
+            self._flick_play_btn.setText("▶ Play")
+
+    def _on_flick_speed_changed(self, value: int):
+        self._flick_speed_lbl.setText(f"{value} ms")
+        if self._flick_timer.isActive():
+            self._flick_timer.start(int(value))
+
+    def _on_flick_tick(self):
+        self._flick_show_sim = not self._flick_show_sim
+        self._draw_flicker_frame(force_resize=False)
 
     def _on_error(self, msg: str):
         self._status.setText(f"Error: {msg.splitlines()[-1]}")
@@ -1496,9 +1604,137 @@ class SimTunerDialog(QDialog):
     def _apply(self):
         euler_deg = (self._phi1.value(), self._Phi.value(), self._phi2.value())
         pc_edax   = (self._pcx.value(), self._pcy.value(), self._pcz.value())
-        tilt_deg  = float(self._tilt_spin.value())
-        self.applied_signal.emit(euler_deg, pc_edax, tilt_deg)
+        self.applied_signal.emit(euler_deg, pc_edax, float(self._sample_tilt_deg))
         self.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable iOS-style toggle switch.
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _ToggleSwitch(QWidget):
+    """Two-position sliding toggle with optional labels on either side.
+
+    Emits ``toggled(bool)`` when the user clicks (or clicks one of the
+    labels).  The left position is ``False``; right is ``True``.  Clicking
+    either label, the track, or the thumb flips the state.
+    """
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, left_label: str = "Off", right_label: str = "On",
+                 parent=None):
+        super().__init__(parent)
+        self._left_label  = left_label
+        self._right_label = right_label
+        self._checked     = False
+        self._thumb_pos   = 0.0   # 0.0 = full left, 1.0 = full right
+        self._anim = QPropertyAnimation(self, b"thumb_pos", self)
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(36)
+
+    # ── Qt property used by the animation ──────────────────────────────────
+    def get_thumb_pos(self) -> float:
+        return self._thumb_pos
+    def set_thumb_pos(self, v: float):
+        self._thumb_pos = float(v)
+        self.update()
+    thumb_pos = pyqtProperty(float, fget=get_thumb_pos, fset=set_thumb_pos)
+
+    # ── Public API ─────────────────────────────────────────────────────────
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, on: bool, emit_signal: bool = True):
+        on = bool(on)
+        if on == self._checked:
+            return
+        self._checked = on
+        self._anim.stop()
+        self._anim.setStartValue(self._thumb_pos)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+        if emit_signal:
+            self.toggled.emit(on)
+
+    def toggle(self):
+        self.setChecked(not self._checked)
+
+    def sizeHint(self):
+        from PyQt6.QtCore import QSize
+        fm = self.fontMetrics()
+        return QSize(
+            fm.horizontalAdvance(self._left_label)
+            + fm.horizontalAdvance(self._right_label)
+            + 60,   # track + side gaps; tuned for the short "Real / Simulated" labels
+            32,
+        )
+
+    # ── Interaction ────────────────────────────────────────────────────────
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.MouseButton.LeftButton:
+            self.toggle()
+        super().mousePressEvent(ev)
+
+    # ── Drawing ────────────────────────────────────────────────────────────
+    def paintEvent(self, _ev):
+        from PyQt6.QtGui import QPainter, QColor, QPen, QBrush
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w, h = self.width(), self.height()
+        fm = self.fontMetrics()
+        left_w  = fm.horizontalAdvance(self._left_label)
+        right_w = fm.horizontalAdvance(self._right_label)
+        gap     = 10
+        track_h = 26
+        track_w = max(48, w - left_w - right_w - 2 * gap)
+        track_x = left_w + gap
+        track_y = (h - track_h) // 2
+
+        # Track — accent colour on the right side state, neutral grey on left.
+        accent_on  = QColor(THEME.get("accent",  "#4caf50"))
+        accent_off = QColor("#555555")
+        # Interpolate so the colour transitions during the animation.
+        t = self._thumb_pos
+        track_color = QColor(
+            int(accent_off.red()   + t * (accent_on.red()   - accent_off.red())),
+            int(accent_off.green() + t * (accent_on.green() - accent_off.green())),
+            int(accent_off.blue()  + t * (accent_on.blue()  - accent_off.blue())),
+        )
+        p.setBrush(QBrush(track_color))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(track_x, track_y, track_w, track_h, track_h // 2, track_h // 2)
+
+        # Thumb — circular knob, slides between the two ends.
+        thumb_d  = track_h - 6
+        thumb_x  = track_x + 3 + self._thumb_pos * (track_w - thumb_d - 6)
+        thumb_y  = track_y + 3
+        p.setBrush(QBrush(QColor("#fafafa")))
+        p.setPen(QPen(QColor(0, 0, 0, 60), 1))
+        p.drawEllipse(int(thumb_x), int(thumb_y), thumb_d, thumb_d)
+
+        # Labels — bright when their side is selected, dimmed otherwise.
+        dim    = QColor("#888888")
+        bright = QColor("#ffffff")
+        left_color  = bright if not self._checked else dim
+        right_color = bright if self._checked     else dim
+        p.setPen(QPen(left_color))
+        p.drawText(
+            0, 0, left_w, h,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            self._left_label,
+        )
+        p.setPen(QPen(right_color))
+        p.drawText(
+            w - right_w, 0, right_w, h,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            self._right_label,
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class ReferencePatternPage(QWizardPage):
@@ -1518,41 +1754,79 @@ class ReferencePatternPage(QWizardPage):
         self._refine_worker = None
         self._ref_pattern_set: ReferencePatternSet = None
         self._sim_pat_array = None   # last generated simulated pattern
+        # Gate for the Sim-vs-Exp comparison dialog: only set True by the
+        # explicit "Compare" button click.  Auto-regenerations (IPF clicks,
+        # mode toggle, refinement) update the cached pattern + step-4 preview
+        # silently without popping the comparison window.
+        self._show_compare_dialog = False
         # Sim-vs-Exp dialog: lock the colour scale and colorbar after the
         # first click of Generate Pattern so subsequent clicks plot against
         # the same reference scale instead of stacking new colorbars.
         self._sim_pat_residual_vabs = None
         self._sim_pat_residual_cbar = None
         self._sim_exp_pat   = None   # experimental pattern at the clicked position
-        self._sim_ref_row   = 0
-        self._sim_ref_col   = 0
-        self._ipf_rgb       = None   # cached RGB map; rendered into both IPF canvases
-        self._sim_ref_marker = None  # marker on the dialog's IPF axis (sim mode)
+        # _sim_ref_row / _sim_ref_col were retired — sim mode now reads
+        # the selected scan position directly from self.ref_row / self.ref_col
+        # (the same spinboxes used by real-reference mode).
+        self._ipf_rgb       = None   # cached RGB map for the main IPF
 
-        # ── Mode selector ─────────────────────────────────────────────────────
-        mode_group  = QGroupBox("Reference Mode")
+        # ── Reference mode switch ─────────────────────────────────────────────
+        # iOS-style sliding toggle: left = real (experimental), right =
+        # simulated.  Internally still backed by the existing QRadioButtons
+        # (kept hidden) so all downstream code that checks
+        # `self._single_radio.isChecked()` / `_sim_radio.isChecked()` and the
+        # `_on_mode_changed(btn_id)` handler keep working unchanged.  The
+        # per-grain (id=1) mode is no longer reachable from the UI but its
+        # underlying widgets are preserved for easy re-enabling later.
+        mode_group  = QGroupBox("Reference Pattern Type")
         mode_layout = QHBoxLayout()
-        self._single_radio   = QRadioButton("Single reference")
-        self._pergrain_radio = QRadioButton("Per-grain (auto)")
-        self._sim_radio      = QRadioButton("Simulated")
+
+        self._mode_switch = _ToggleSwitch(
+            left_label="Real",
+            right_label="Simulated",
+            parent=self,
+        )
+        # Pin to its sizeHint instead of stretching — without this it
+        # expands to fill the row and looks oversized.
+        self._mode_switch.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        mode_layout.addWidget(self._mode_switch)
+        mode_layout.addStretch()       # pushes the switch to the left
+        mode_group.setLayout(mode_layout)
+
+        # Hidden drivers: the QRadioButtons that the switch flips.  No
+        # parent widget (None) and never added to a layout — they exist
+        # only to fire the QButtonGroup idToggled signal that downstream
+        # handlers listen to.
+        self._single_radio   = QRadioButton(); self._single_radio.setVisible(False)
+        self._sim_radio      = QRadioButton(); self._sim_radio.setVisible(False)
+        self._pergrain_radio = QRadioButton(); self._pergrain_radio.setVisible(False)
         self._single_radio.setChecked(True)
         self._mode_grp = QButtonGroup(self)
         self._mode_grp.addButton(self._single_radio,   0)
-        self._mode_grp.addButton(self._pergrain_radio, 1)
         self._mode_grp.addButton(self._sim_radio,      2)
-        mode_layout.addWidget(self._single_radio)
-        mode_layout.addWidget(self._pergrain_radio)
-        mode_layout.addWidget(self._sim_radio)
-        mode_layout.addStretch()
-        mode_group.setLayout(mode_layout)
-
+        self._mode_grp.addButton(self._pergrain_radio, 1)
         self._mode_grp.idToggled.connect(self._on_mode_changed)
+
+        # Connect the switch → radio drivers so the existing handler runs.
+        def _switch_to_radio(checked: bool):
+            if checked:
+                self._sim_radio.setChecked(True)
+            else:
+                self._single_radio.setChecked(True)
+        self._mode_switch.toggled.connect(_switch_to_radio)
 
         # ── Left panel (1/3): position controls + pattern preview ─────────────
         left        = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 6, 0)
         left_layout.setSpacing(8)
+
+        # The Reference-Pattern-Type box used to live in a top row by itself.
+        # Place it as the first widget in the left column instead — that way
+        # it inherits the same width as the Reference Position group below.
+        left_layout.addWidget(mode_group)
 
         # Single-reference position group
         self._pos_group  = QGroupBox("Reference Position")
@@ -1568,6 +1842,12 @@ class ReferencePatternPage(QWizardPage):
 
         self.ref_row.valueChanged.connect(self._update_ref_marker)
         self.ref_col.valueChanged.connect(self._update_ref_marker)
+        # When in sim mode, changes to ref_row/ref_col should auto-reload the
+        # Euler angles from the .ang file at the new scan pixel.  Wired here
+        # so that BOTH IPF clicks (via _apply_ipf_click → setValue) and manual
+        # spinbox edits trigger the reload.
+        self.ref_row.valueChanged.connect(self._on_ref_position_changed)
+        self.ref_col.valueChanged.connect(self._on_ref_position_changed)
 
         pos_layout.addRow("Row  (y):", self.ref_row)
         pos_layout.addRow("Col  (x):", self.ref_col)
@@ -1575,25 +1855,9 @@ class ReferencePatternPage(QWizardPage):
         self._pos_group.setLayout(pos_layout)
         left_layout.addWidget(self._pos_group)
 
-        # ── Strain formulation ───────────────────────────────────────────────
-        self._strain_form_group = QGroupBox("Strain Formulation")
-        strain_form_layout = QFormLayout()
-        strain_form_layout.addRow(_note(
-            "Default is finite strain (polar decomposition of F, normalised\n"
-            "by the out-of-plane stretch). Enable to use the small-strain\n"
-            "formulation: ε = ½(∇u + ∇uᵀ), ω = ½(∇u − ∇uᵀ) with ∇u = F − I."
-        ))
-        self._small_strain = QCheckBox("Use small-strain formulation")
-        self._small_strain.setChecked(False)
-        self._small_strain.setToolTip(
-            "If unchecked, strain is computed via polar decomposition of the "
-            "deformation gradient (finite strain, Ernould convention). "
-            "If checked, strain is the symmetric part of the displacement "
-            "gradient ∇u = F − I — only valid in the small-deformation regime."
-        )
-        strain_form_layout.addRow(self._small_strain)
-        self._strain_form_group.setLayout(strain_form_layout)
-        left_layout.addWidget(self._strain_form_group)
+        # NOTE: the strain formulation toggle was moved to Step 2 (scan
+        # geometry) so it sits alongside the other once-per-run geometry
+        # choices instead of inside the per-reference settings.
 
         # Per-grain info group (hidden in single mode)
         self._grain_info_group  = QGroupBox("Per-Grain References")
@@ -1622,16 +1886,17 @@ class ReferencePatternPage(QWizardPage):
         self._sim_mp_status.setWordWrap(True)
         sim_layout.addRow("Master pattern:", self._sim_mp_status)
 
-        self._sim_phi1 = QDoubleSpinBox(); self._sim_phi1.setRange(0, 360); self._sim_phi1.setDecimals(3); self._sim_phi1.setSuffix(" °")
-        self._sim_Phi  = QDoubleSpinBox(); self._sim_Phi.setRange(0, 180);  self._sim_Phi.setDecimals(3);  self._sim_Phi.setSuffix(" °")
-        self._sim_phi2 = QDoubleSpinBox(); self._sim_phi2.setRange(0, 360); self._sim_phi2.setDecimals(3); self._sim_phi2.setSuffix(" °")
-        sim_layout.addRow("φ₁ (phi1):", self._sim_phi1)
-        sim_layout.addRow("Φ  (Phi):",  self._sim_Phi)
-        sim_layout.addRow("φ₂ (phi2):", self._sim_phi2)
-        sim_layout.addRow(_note("Click the IPF map to auto-fill from scan orientation."))
+        # Euler angles come from the .ang at the currently-selected ref
+        # position — they are not user-tunable here.  Refinement / tuner
+        # results overwrite the stored tuple and refresh the label.
+        self._sim_euler_deg = (0.0, 0.0, 0.0)
+        self._sim_euler_lbl = QLabel("φ₁ = —   Φ = —   φ₂ = —")
+        self._sim_euler_lbl.setStyleSheet("font-family: monospace;")
+        sim_layout.addRow("Euler (Bunge):", self._sim_euler_lbl)
+        sim_layout.addRow(_note("Click the IPF map to update from scan orientation."))
 
-        self._sim_gen_btn = QPushButton("Generate Pattern")
-        self._sim_gen_btn.clicked.connect(self._generate_sim_pattern)
+        self._sim_gen_btn = QPushButton("Compare Simulated and Experimental Patterns")
+        self._sim_gen_btn.clicked.connect(self._on_compare_clicked)
         sim_layout.addRow("", self._sim_gen_btn)
 
         self._sim_tuner_btn = QPushButton("Open Live Tuner…")
@@ -1644,165 +1909,54 @@ class ReferencePatternPage(QWizardPage):
 
         self._refine_btn = QPushButton("Refine PC && Euler…")
         self._refine_btn.setToolTip(
-            "Maximise normalised cross-correlation between the experimental\n"
-            "and simulated reference patterns (Nelder-Mead) to refine the\n"
-            "pattern centre and Euler angles. Results are written back to\n"
-            "the Euler spinboxes and the geometry-page PC fields."
+            "Open the PC / Euler refinement settings dialog.  From there, "
+            "tune the Nelder-Mead controls (restarts, σ, symmetry, sim "
+            "preprocessing overrides) and click Run Refinement."
         )
-        self._refine_btn.clicked.connect(self._run_pc_euler_refine)
+        self._refine_btn.clicked.connect(self._open_refine_settings)
         sim_layout.addRow("", self._refine_btn)
 
-        self._refine_max_iter = QSpinBox()
-        self._refine_max_iter.setRange(50, 2000)
-        self._refine_max_iter.setValue(300)
-        self._refine_max_iter.setSingleStep(50)
-        self._refine_max_iter.setToolTip(
-            "Maximum Nelder-Mead function evaluations per restart.\n"
-            "Total cost ≈ (Refine max iters) × (Restarts)."
+        # The Nelder-Mead controls used to live inline here; they now live
+        # in a dedicated dialog built in _build_refine_settings_dialog().
+
+        # ── Pipeline-side reference-pattern tweaks (moved from Step 3) ──────
+        # These three controls used to live on the Step 3 "Reference Pattern
+        # Preprocessing (override)" group.  They've been migrated here so all
+        # simulated-reference-related settings sit in one place.  The
+        # per-component overrides + the master-toggle + the preview checkbox
+        # from that group were dropped as redundant.
+        sim_layout.addRow(_note("── Advanced (applied during IC-GN run) ──"))
+
+        self._spectral_match_ref = QCheckBox(
+            "Spectral-match reference to experimental patterns"
         )
-        sim_layout.addRow("Refine max iters:", self._refine_max_iter)
+        self._spectral_match_ref.setChecked(False)
+        sim_layout.addRow(self._spectral_match_ref)
 
-        # ── Multi-start controls ────────────────────────────────────────────
-        sim_layout.addRow(_note("── Multi-start Nelder-Mead ──"))
-
-        self._refine_n_restarts = QSpinBox()
-        self._refine_n_restarts.setRange(1, 32)
-        self._refine_n_restarts.setValue(4)
-        self._refine_n_restarts.setToolTip(
-            "Number of Nelder-Mead runs.  Restart 1 starts at delta=0 "
-            "(identical to single-start behaviour); restarts 2..N start at "
-            "random Gaussian perturbations of zero.  Defends against local "
-            "minima from symmetry-equivalent basins and PC/Euler degeneracy.\n"
-            "Set to 1 to disable multi-start.  Total cost ≈ N × max_iter."
+        self._tikhonov_perspective = QCheckBox(
+            "Tikhonov-regularize perspective (h_31, h_32) in IC-GN"
         )
-        sim_layout.addRow("Restarts (N):", self._refine_n_restarts)
+        self._tikhonov_perspective.setChecked(False)
 
-        self._refine_restart_rotvec_std = QDoubleSpinBox()
-        self._refine_restart_rotvec_std.setRange(0.0, 30.0)
-        self._refine_restart_rotvec_std.setDecimals(2)
-        self._refine_restart_rotvec_std.setSingleStep(0.5)
-        self._refine_restart_rotvec_std.setValue(3.0)
-        self._refine_restart_rotvec_std.setSuffix(" °")
-        self._refine_restart_rotvec_std.setToolTip(
-            "Standard deviation of the random rotation-vector seed used for "
-            "restarts 2..N (in degrees).  Typical .ang orientations are "
-            "accurate to a few degrees, so 3° is a good default.  Larger "
-            "values widen the search but also waste restarts in clearly-wrong "
-            "regions."
+        self._tikhonov_lambda = QDoubleSpinBox()
+        self._tikhonov_lambda.setRange(0.0, 1000.0)
+        self._tikhonov_lambda.setSingleStep(0.1)
+        self._tikhonov_lambda.setDecimals(3)
+        self._tikhonov_lambda.setValue(0.5)
+
+        def _toggle_tikhonov(enabled: bool):
+            self._tikhonov_lambda.setEnabled(enabled)
+        self._tikhonov_perspective.toggled.connect(_toggle_tikhonov)
+        _toggle_tikhonov(self._tikhonov_perspective.isChecked())
+
+        sim_layout.addRow(self._tikhonov_perspective)
+        sim_layout.addRow("Tikhonov λ multiplier:", self._tikhonov_lambda)
+
+        self._rotate_patterns_90 = QCheckBox(
+            "Rotate patterns 90° CCW before optimization (diagnostic)"
         )
-        sim_layout.addRow("Restart rotvec σ:", self._refine_restart_rotvec_std)
-
-        self._refine_restart_pc_std = QDoubleSpinBox()
-        self._refine_restart_pc_std.setRange(0.0, 0.5)
-        self._refine_restart_pc_std.setDecimals(4)
-        self._refine_restart_pc_std.setSingleStep(0.005)
-        self._refine_restart_pc_std.setValue(0.01)
-        self._refine_restart_pc_std.setToolTip(
-            "Standard deviation of the random PC seed used for restarts 2..N "
-            "(Bruker units).  0.01 ≈ 1% of the detector size."
-        )
-        sim_layout.addRow("Restart PC σ:", self._refine_restart_pc_std)
-
-        self._refine_restart_seed = QSpinBox()
-        self._refine_restart_seed.setRange(0, 999999)
-        self._refine_restart_seed.setValue(0)
-        self._refine_restart_seed.setToolTip(
-            "RNG seed for the random restart perturbations — same seed gives "
-            "the same restart sequence across runs (useful for debugging).  "
-            "Bump to get a different sample."
-        )
-        sim_layout.addRow("Restart RNG seed:", self._refine_restart_seed)
-
-        # Symmetry-informed restarts: one extra Nelder-Mead per non-identity
-        # Laue group element.  Stacks on top of the N random restarts.
-        self._refine_symmetry_restarts = QCheckBox(
-            "Symmetry-informed restarts (one per Laue group element)"
-        )
-        self._refine_symmetry_restarts.setChecked(False)
-        self._refine_symmetry_restarts.setToolTip(
-            "When ticked, after the N random restarts run one additional "
-            "Nelder-Mead from each non-identity element of the crystal's "
-            "Laue group.  Defends against converging to the wrong symmetry-"
-            "equivalent of the true orientation.\n\n"
-            "Cost: adds (|Laue group| − 1) restarts on top of the N random "
-            "ones (e.g. +23 runs for cubic m-3m).  Total ≈ (N + 23) × max_iter."
-        )
-        sim_layout.addRow(self._refine_symmetry_restarts)
-
-        self._refine_laue_group = QComboBox()
-        # Labels mirror HREBSD.laue_elements ordering (1-indexed).
-        self._refine_laue_group.addItems([
-            "1: C1 (triclinic)",
-            "2: C2 (monoclinic)",
-            "3: C3 (trigonal-low)",
-            "4: C4 (tetragonal-low)",
-            "5: C6 (hexagonal-low)",
-            "6: D2 (orthorhombic)",
-            "7: D3 (trigonal-high)",
-            "8: D4 (tetragonal-high)",
-            "9: D6 (hexagonal-high)",
-            "10: T (cubic-low, m-3)",
-            "11: O (cubic-high, m-3m)",
-        ])
-        self._refine_laue_group.setCurrentIndex(10)   # default: cubic O (id=11)
-        self._refine_laue_group.setToolTip(
-            "Crystal Laue group used to enumerate symmetry-equivalent "
-            "orientations.  Cubic m-3m (11) covers most metals; pick the "
-            "one matching your sample.  Only used when symmetry-informed "
-            "restarts is enabled."
-        )
-        sim_layout.addRow("Laue group:", self._refine_laue_group)
-
-        sim_layout.addRow(_note("── Simulated pattern preprocessing overrides ──"))
-        sim_layout.addRow(_note(
-            "Set each to 0 to inherit from the Step 3 real-pattern value.\n"
-            "Raise high-pass to strip sim background; lower gamma to reduce contrast."
-        ))
-
-        self._refine_sim_hp_sigma = QDoubleSpinBox()
-        self._refine_sim_hp_sigma.setRange(0.0, 200.0)
-        self._refine_sim_hp_sigma.setDecimals(1)
-        self._refine_sim_hp_sigma.setSingleStep(5.0)
-        self._refine_sim_hp_sigma.setValue(0.0)
-        self._refine_sim_hp_sigma.setSpecialValueText("Same as real")
-        self._refine_sim_hp_sigma.setToolTip(
-            "High-pass sigma for the simulated pattern only.\n"
-            "Set higher than the real-pattern value (e.g. 25–40) to strip\n"
-            "the excess low-frequency background simulations produce.\n"
-            "0 = use the Step 3 high-pass sigma unchanged."
-        )
-        sim_layout.addRow("Sim high-pass σ:", self._refine_sim_hp_sigma)
-
-        self._refine_sim_lp_sigma = QDoubleSpinBox()
-        self._refine_sim_lp_sigma.setRange(0.0, 20.0)
-        self._refine_sim_lp_sigma.setDecimals(2)
-        self._refine_sim_lp_sigma.setSingleStep(0.5)
-        self._refine_sim_lp_sigma.setValue(0.0)
-        self._refine_sim_lp_sigma.setSpecialValueText("Same as real")
-        self._refine_sim_lp_sigma.setToolTip(
-            "Low-pass (smoothing) sigma for the simulated pattern only.\n"
-            "Increase to blur sharper-than-real simulated band edges.\n"
-            "0 = use the Step 3 low-pass sigma unchanged."
-        )
-        sim_layout.addRow("Sim low-pass σ:", self._refine_sim_lp_sigma)
-
-        self._refine_sim_gamma = QDoubleSpinBox()
-        self._refine_sim_gamma.setRange(0.0, 3.0)
-        self._refine_sim_gamma.setDecimals(3)
-        self._refine_sim_gamma.setSingleStep(0.05)
-        self._refine_sim_gamma.setValue(0.0)
-        self._refine_sim_gamma.setSpecialValueText("Same as real")
-        self._refine_sim_gamma.setToolTip(
-            "Gamma correction for the simulated pattern only.\n"
-            "Adjust to match the intensity distribution of the real pattern.\n"
-            "0 = use the Step 3 gamma unchanged."
-        )
-        sim_layout.addRow("Sim gamma:", self._refine_sim_gamma)
-
-        self._refine_status = QLabel("")
-        self._refine_status.setStyleSheet("color: gray; font-size: 11px;")
-        self._refine_status.setWordWrap(True)
-        sim_layout.addRow(self._refine_status)
+        self._rotate_patterns_90.setChecked(False)
+        sim_layout.addRow(self._rotate_patterns_90)
 
         self._sim_status = QLabel("")
         self._sim_status.setStyleSheet("color: gray; font-size: 11px;")
@@ -1816,44 +1970,22 @@ class ReferencePatternPage(QWizardPage):
         self._sim_settings_dialog = QDialog(self)
         self._sim_settings_dialog.setWindowTitle("Simulated Reference — Parameters")
         self._sim_settings_dialog.setModal(False)
-        self._sim_settings_dialog.resize(1200, 720)
+        self._sim_settings_dialog.resize(700, 720)
         _ssd_outer = QHBoxLayout(self._sim_settings_dialog)
         _ssd_outer.setContentsMargins(12, 12, 12, 12)
         _ssd_outer.addWidget(self._sim_group, stretch=1)
 
-        # Clickable IPF map embedded in the dialog so the user can pick a
-        # grain orientation without leaving the sim window.  Mirrors the
-        # page's IPF: same RGB, click handler delegates to the page handler.
-        _sim_ipf_group = QGroupBox("IPF Map  (ND)  —  click to load Euler from a grain")
-        _sim_ipf_layout = QVBoxLayout(_sim_ipf_group)
-        self._sim_ipf_fig    = Figure(tight_layout=True)
-        self._sim_ipf_ax     = self._sim_ipf_fig.add_subplot(111)
-        self._sim_ipf_ax.set_visible(False)
-        self._sim_ipf_canvas = FigureCanvas(self._sim_ipf_fig)
-        self._sim_ipf_canvas.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-        self._sim_ipf_canvas.mpl_connect("button_press_event", self._on_sim_ipf_click)
-        self._sim_ipf_status = QLabel("Loading IPF map…")
-        self._sim_ipf_status.setStyleSheet("color: gray;")
-        self._sim_ipf_status.setWordWrap(True)
-        _sim_ipf_layout.addWidget(self._sim_ipf_canvas, stretch=1)
-        _sim_ipf_layout.addWidget(self._sim_ipf_status)
-        _ssd_outer.addWidget(_sim_ipf_group, stretch=2)
+        # NOTE: the sim-settings dialog used to embed its own clickable IPF
+        # map.  It was removed — the main GUI's IPF on Step 4 is now the
+        # single source of truth (clicks there update ref_row/ref_col and,
+        # in sim mode, auto-load the Euler angles).
 
-        # Placeholder card on Page 4 — visible when sim mode is selected.
-        self._sim_placeholder = QGroupBox("Simulated Reference")
-        _sim_ph_layout = QVBoxLayout()
-        _sim_ph_layout.addWidget(_note(
-            "Simulated reference settings (master pattern, Euler angles,\n"
-            "preprocessing overrides, refine, tuner) are configured in a\n"
-            "separate window."
-        ))
-        self._sim_open_btn = QPushButton("Open simulated reference settings…")
-        self._sim_open_btn.clicked.connect(self._open_sim_settings)
-        _sim_ph_layout.addWidget(self._sim_open_btn)
-        self._sim_placeholder.setLayout(_sim_ph_layout)
-        left_layout.addWidget(self._sim_placeholder)
+        # NOTE: the "Simulated Reference" placeholder card used to live here
+        # (with an "Open simulated reference settings…" button).  It's been
+        # removed — flipping the mode switch to Simulated now auto-opens the
+        # settings dialog directly, so the placeholder was redundant.
+
+        self._build_refine_settings_dialog()
 
         # ── Reference Pattern Preview (lower-left) ────────────────────────────
         ref_pat_group  = QGroupBox("Reference Pattern")
@@ -1911,11 +2043,10 @@ class ReferencePatternPage(QWizardPage):
         right_layout.addWidget(ipf_group)
 
         # ── Outer layout ──────────────────────────────────────────────────────
-        top_row = QHBoxLayout()
-        top_row.addWidget(mode_group)
-
+        # The Reference-Pattern-Type group is now the first widget in the
+        # left column (above), so the outer layout is just the two-panel
+        # split with no separate top row.
         outer = QVBoxLayout()
-        outer.addLayout(top_row)
 
         panels = QHBoxLayout()
         panels.addWidget(left,  stretch=1)
@@ -2003,7 +2134,6 @@ class ReferencePatternPage(QWizardPage):
 
         # Initial visibility
         self._grain_info_group.setVisible(False)
-        self._sim_placeholder.setVisible(False)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -2056,10 +2186,18 @@ class ReferencePatternPage(QWizardPage):
     def _on_mode_changed(self, btn_id: int, checked: bool):
         if not checked:
             return
-        self._pos_group.setVisible(btn_id == 0)
+        # Reference Position is always shown — the row/col spinboxes are
+        # the single source of truth for "where the reference is selected",
+        # regardless of mode.  In sim mode, the spinboxes additionally
+        # drive the Euler-angle auto-load via _on_ref_position_changed.
+        self._pos_group.setVisible(True)
         self._grain_info_group.setVisible(btn_id == 1)
-        self._sim_placeholder.setVisible(btn_id == 2)
         if btn_id == 2:
+            # Pull Euler from .ang at the currently-selected ref position
+            # BEFORE opening the dialog — _open_sim_settings auto-triggers
+            # pattern generation and we don't want it to run on stale
+            # (0,0,0) angles.
+            self._reload_sim_euler_from_ref_position()
             self._open_sim_settings()
         else:
             self._sim_settings_dialog.hide()
@@ -2071,6 +2209,9 @@ class ReferencePatternPage(QWizardPage):
         else:
             self._clear_grain_markers()
             self._update_ref_marker()
+        # Reference-pattern preview is shared between modes — refresh so
+        # it shows experimental (real mode) or the cached sim (sim mode).
+        self._load_ref_pattern_preview()
 
     def _auto_select_references(self):
         """Build a ReferencePatternSet from the current segmentation result."""
@@ -2135,31 +2276,14 @@ class ReferencePatternPage(QWizardPage):
         self._ipf_canvas.draw_idle()
 
     # ── IPF map ───────────────────────────────────────────────────────────────
-
-    def _draw_dialog_ipf(self):
-        """Mirror the page's IPF onto the sim-dialog axis (same RGB)."""
-        if self._ipf_rgb is None:
-            self._sim_ipf_status.setText(
-                "IPF map still computing — open Page 4 first or wait."
-            )
-            return
-        self._sim_ipf_ax.set_visible(True)
-        self._sim_ipf_ax.clear()
-        self._sim_ipf_ax.imshow(self._ipf_rgb, origin="upper", interpolation="nearest")
-        self._sim_ipf_ax.axis("off")
-        self._sim_ipf_fig.tight_layout(pad=0.5)
-        self._sim_ref_marker = None
-        self._sim_ipf_canvas.draw()
-        self._sim_ipf_status.setText(
-            "Click any grain to load its Euler angles into the sim parameters."
-        )
+    # NOTE: _draw_dialog_ipf used to mirror the page IPF onto the sim
+    # dialog's embedded IPF; that dialog IPF is gone now.
 
     def _on_ipf_done(self, rgb_map, error: str):
         print(f"[Step 4 IPF] _on_ipf_done fired — rgb_map shape="
               f"{None if rgb_map is None else rgb_map.shape}  error={'<none>' if not error else error[:120]}")
         if rgb_map is None:
             self._ipf_status.setText(f"Error computing IPF map: {error}")
-            self._sim_ipf_status.setText(f"Error computing IPF map: {error}")
             return
         self._ipf_rgb = rgb_map
         self._ipf_ax.set_visible(True)
@@ -2181,24 +2305,10 @@ class ReferencePatternPage(QWizardPage):
         # the canvas size changed between the worker's emit and now.
         QTimer.singleShot(0, self._ipf_canvas.draw_idle)
         self._ipf_status.setText("Click any point to set the reference pattern.")
-        # Mirror onto the sim-dialog IPF if it exists
-        self._draw_dialog_ipf()
 
-    def _update_sim_ref_marker(self, row: int, col: int):
-        """Marker on the dialog's IPF axis (sim mode)."""
-        if not self._sim_ipf_ax.get_visible():
-            return
-        if self._sim_ref_marker is not None:
-            try:
-                self._sim_ref_marker.remove()
-            except Exception:
-                pass
-            self._sim_ref_marker = None
-        self._sim_ref_marker, = self._sim_ipf_ax.plot(
-            col, row, marker="+", color="white",
-            markersize=14, markeredgewidth=2.5, zorder=10, linestyle="none",
-        )
-        self._sim_ipf_canvas.draw_idle()
+    # NOTE: _update_sim_ref_marker was retired with the sim-dialog IPF.
+    # Callers used to invoke it after every ref-position change; those
+    # call sites have been removed below.
 
     def _apply_ipf_click(self, row: int, col: int):
         """Mode-aware action when the user clicks a row/col on either IPF axis."""
@@ -2207,26 +2317,14 @@ class ReferencePatternPage(QWizardPage):
         col  = max(0, min(col, geom["cols"] - 1))
         row  = max(0, min(row, geom["rows"] - 1))
 
-        if self._single_radio.isChecked():
-            self.ref_row.blockSignals(True)
-            self.ref_col.blockSignals(True)
+        if self._single_radio.isChecked() or self._sim_radio.isChecked():
+            # Both real and simulated modes now write to the SAME spinboxes —
+            # ref_row / ref_col are the single source of truth for "selected
+            # scan pixel".  The valueChanged signals fire _update_ref_marker
+            # (always) and _on_ref_position_changed (which reloads the Euler
+            # in sim mode), so we don't need to call those directly.
             self.ref_row.setValue(row)
             self.ref_col.setValue(col)
-            self.ref_row.blockSignals(False)
-            self.ref_col.blockSignals(False)
-            self._update_ref_marker()
-        elif self._sim_radio.isChecked():
-            self._sim_ref_row = row
-            self._sim_ref_col = col
-            ang_data = wiz.ang_data
-            if ang_data is not None:
-                eu = ang_data.eulers[row, col]  # radians
-                self._sim_phi1.setValue(float(np.degrees(eu[0])))
-                self._sim_Phi.setValue( float(np.degrees(eu[1])))
-                self._sim_phi2.setValue(float(np.degrees(eu[2])))
-                self._sim_status.setText(f"Euler angles loaded from row {row}, col {col}.")
-            self._update_ref_marker()
-            self._update_sim_ref_marker(row, col)
         else:
             # Per-grain: update the active grain's reference
             gid = self._grain_combo.currentData()
@@ -2248,13 +2346,12 @@ class ReferencePatternPage(QWizardPage):
             return
         self._apply_ipf_click(int(round(event.ydata)), int(round(event.xdata)))
 
-    def _on_sim_ipf_click(self, event):
-        if event.inaxes is not self._sim_ipf_ax or not self._sim_ipf_ax.get_visible():
-            return
-        self._apply_ipf_click(int(round(event.ydata)), int(round(event.xdata)))
+    # _on_sim_ipf_click was retired with the sim-dialog IPF.
 
     def _update_ref_marker(self):
-        """Single-reference mode marker."""
+        """Reference-position marker on the main IPF.  Now used in both
+        real-pattern and simulated-pattern modes (the spinboxes drive the
+        marker regardless of which radio is active)."""
         if not self._ipf_ax.get_visible():
             return
         if self._ref_marker is not None:
@@ -2272,19 +2369,86 @@ class ReferencePatternPage(QWizardPage):
         self._ipf_canvas.draw_idle()
         self._ref_pat_timer.start()
 
+    def _on_ref_position_changed(self, _value: int = 0):
+        """Slot fired when ref_row or ref_col changes (from either an IPF
+        click or a manual spinbox edit).  In sim mode, reload the Euler
+        angles from .ang at the new scan position AND re-generate the
+        simulated pattern so the step-4 preview tracks the click."""
+        if self._sim_radio.isChecked():
+            self._reload_sim_euler_from_ref_position()
+            mp_path = (self.wizard().field("master_pattern_path") or "").strip()
+            if mp_path and os.path.exists(mp_path):
+                self._generate_sim_pattern()
+
+    def _reload_sim_euler_from_ref_position(self):
+        """Pull (φ₁, Φ, φ₂) from the .ang at the currently-selected
+        ref position into the sim-Euler label / cached tuple."""
+        wiz = self.wizard()
+        if wiz is None or wiz.ang_data is None:
+            return
+        row = self.ref_row.value()
+        col = self.ref_col.value()
+        try:
+            eu = wiz.ang_data.eulers[row, col]    # radians
+        except Exception:
+            return
+        self._set_sim_euler_deg((float(np.degrees(eu[0])),
+                                 float(np.degrees(eu[1])),
+                                 float(np.degrees(eu[2]))))
+        self._sim_status.setText(
+            f"Euler angles auto-loaded from row {row}, col {col}."
+        )
+
+    def _set_sim_euler_deg(self, euler_deg: tuple):
+        """Cache the current (φ₁, Φ, φ₂) in degrees and refresh the label."""
+        self._sim_euler_deg = (float(euler_deg[0]),
+                               float(euler_deg[1]),
+                               float(euler_deg[2]))
+        self._sim_euler_lbl.setText(
+            f"φ₁ = {self._sim_euler_deg[0]:7.3f}°   "
+            f"Φ = {self._sim_euler_deg[1]:7.3f}°   "
+            f"φ₂ = {self._sim_euler_deg[2]:7.3f}°"
+        )
+
     def _load_ref_pattern_preview(self):
-        """Load and display the raw pattern at (ref_row, ref_col)."""
+        """Render the reference-pattern preview.
+
+        Real modes (single / per-grain) → raw experimental pattern at
+        (ref_row, ref_col).  Sim mode → last generated simulated pattern,
+        or a hint to generate one if none is cached yet."""
         wiz = self.wizard()
         if wiz is None:
             return
+        row = self.ref_row.value()
+        col = self.ref_col.value()
+
+        if self._sim_radio.isChecked():
+            if self._sim_pat_array is not None:
+                self._ref_pat_ax.clear()
+                self._ref_pat_ax.imshow(self._sim_pat_array, cmap="gray", origin="upper")
+                self._ref_pat_ax.axis("off")
+                self._ref_pat_ax.set_visible(True)
+                self._ref_pat_canvas.draw_idle()
+                self._ref_pat_status.setText(
+                    f"Simulated pattern  (φ₁={self._sim_euler_deg[0]:.2f}°  "
+                    f"Φ={self._sim_euler_deg[1]:.2f}°  φ₂={self._sim_euler_deg[2]:.2f}°)."
+                )
+                return
+            self._ref_pat_ax.clear()
+            self._ref_pat_ax.set_visible(False)
+            self._ref_pat_canvas.draw_idle()
+            self._ref_pat_status.setText(
+                "Simulated pattern not ready yet — generation runs automatically "
+                "when the simulated-reference settings open."
+            )
+            return
+
         up2_path = wiz.field("up2_path")
         if not up2_path or not os.path.exists(up2_path):
             self._ref_pat_status.setText("No UP2 file loaded.")
             return
         try:
             geom = wiz.geometry_page.get_params()
-            row = self.ref_row.value()
-            col = self.ref_col.value()
             if row >= geom["rows"] or col >= geom["cols"]:
                 return
             pat_idx = int(np.ravel_multi_index((row, col), (geom["rows"], geom["cols"])))
@@ -2307,12 +2471,11 @@ class ReferencePatternPage(QWizardPage):
     def _apply_step3_processing(self, img, up2_path: str):
         """Run a numpy pattern through the Step 3 high-pass/low-pass/gamma
         pipeline so its intensity characteristics match what the optimizer
-        will see at runtime.  The Step 3 mask is intentionally disabled
-        because simulated patterns have no detector artefacts to mask —
-        applying the mask would zero-fill them and create a spurious
-        intensity mismatch (matches the convention in
+        will see at runtime.  Applies the user's Step 3 mask too (whatever
+        mask_type they picked) — matches the convention now used in
         get_homography_cpu.simulate_reference_pattern and
-        optimize_reference._simulate).
+        optimize_reference._simulate, so the dialog's display + ZNSSD
+        residual reflect the same masked comparison the optimiser sees.
 
         Returns the processed pattern normalised to [0, 1].  If up2_path
         is missing/invalid (no Data.UP2 can be created), returns img
@@ -2328,11 +2491,14 @@ class ReferencePatternPage(QWizardPage):
             wiz = self.wizard()
             p = wiz.processing_page.get_params() if wiz else {}
             pat_obj = Data.UP2(up2_path)
+            mask_type = p.get("mask_type", "None")
+            if mask_type == "None":
+                mask_type = None
             pat_obj.set_processing(
                 low_pass_sigma          = p.get("low_pass_sigma", 1.0),
                 high_pass_sigma         = p.get("high_pass_sigma", 10.0),
                 truncate_std_scale      = 3.0,
-                mask_type               = None,   # disabled for sim/exp comparison
+                mask_type               = mask_type,
                 center_cross_half_width = 6,
                 flip_x                  = p.get("flip_x", False),
                 gamma                   = p.get("gamma", 0.8),
@@ -2345,12 +2511,244 @@ class ReferencePatternPage(QWizardPage):
             return (arr - lo) / (hi - lo + 1e-9)
 
     def _open_sim_settings(self):
-        """Show the simulated-reference settings dialog (non-modal)."""
+        """Show the simulated-reference settings dialog (non-modal) and
+        kick off pattern generation immediately — the master pattern is
+        loaded once on the first generation and cached by SimPatGen, so
+        subsequent runs (re-position, refinement, manual re-compare) skip
+        the disk hit."""
         self._sim_settings_dialog.show()
         self._sim_settings_dialog.raise_()
         self._sim_settings_dialog.activateWindow()
-        # Render the IPF mirror inside the dialog if the page has computed it
-        self._draw_dialog_ipf()
+        mp_path = (self.wizard().field("master_pattern_path") or "").strip()
+        if mp_path and os.path.exists(mp_path):
+            self._generate_sim_pattern()
+
+    def _on_compare_clicked(self):
+        """Explicit user click on the Compare button — set the gate so
+        _on_sim_done pops the sim-vs-exp comparison dialog, then trigger
+        a fresh generation."""
+        self._show_compare_dialog = True
+        self._generate_sim_pattern()
+
+    def _open_refine_settings(self):
+        """Show the PC / Euler refinement settings dialog (non-modal)."""
+        self._refine_settings_dialog.show()
+        self._refine_settings_dialog.raise_()
+        self._refine_settings_dialog.activateWindow()
+
+    def _build_refine_settings_dialog(self):
+        """Construct the dedicated PC / Euler refinement settings dialog.
+        All Nelder-Mead controls (max iters, restarts, σ, RNG seed, symmetry
+        toggle, Laue group, sim-pattern preprocessing overrides) live here
+        so the sim-settings dialog stays focused on pattern generation."""
+        self._refine_settings_dialog = QDialog(self)
+        self._refine_settings_dialog.setWindowTitle("PC / Euler Refinement — Settings")
+        self._refine_settings_dialog.setModal(False)
+        self._refine_settings_dialog.resize(560, 720)
+        outer = QVBoxLayout(self._refine_settings_dialog)
+        outer.setContentsMargins(12, 12, 12, 12)
+        form = QFormLayout()
+
+        self._refine_max_iter = QSpinBox()
+        self._refine_max_iter.setRange(50, 2000)
+        self._refine_max_iter.setValue(300)
+        self._refine_max_iter.setSingleStep(50)
+        self._refine_max_iter.setToolTip(
+            "Maximum Nelder-Mead function evaluations per restart.\n"
+            "Total cost ≈ (Refine max iters) × (Restarts)."
+        )
+        form.addRow("Refine max iters:", self._refine_max_iter)
+
+        form.addRow(_note("── Multi-start Nelder-Mead ──"))
+
+        self._refine_n_restarts = QSpinBox()
+        self._refine_n_restarts.setRange(1, 32)
+        self._refine_n_restarts.setValue(4)
+        self._refine_n_restarts.setToolTip(
+            "Number of Nelder-Mead runs.  Restart 1 starts at delta=0 "
+            "(identical to single-start behaviour); restarts 2..N start at "
+            "random Gaussian perturbations of zero.  Defends against local "
+            "minima from symmetry-equivalent basins and PC/Euler degeneracy.\n"
+            "Set to 1 to disable multi-start.  Total cost ≈ N × max_iter."
+        )
+        form.addRow("Restarts (N):", self._refine_n_restarts)
+
+        self._refine_restart_rotvec_std = QDoubleSpinBox()
+        self._refine_restart_rotvec_std.setRange(0.0, 30.0)
+        self._refine_restart_rotvec_std.setDecimals(2)
+        self._refine_restart_rotvec_std.setSingleStep(0.5)
+        self._refine_restart_rotvec_std.setValue(3.0)
+        self._refine_restart_rotvec_std.setSuffix(" °")
+        self._refine_restart_rotvec_std.setToolTip(
+            "Standard deviation of the random rotation-vector seed used for "
+            "restarts 2..N (in degrees).  Typical .ang orientations are "
+            "accurate to a few degrees, so 3° is a good default."
+        )
+        form.addRow("Restart rotvec σ:", self._refine_restart_rotvec_std)
+
+        self._refine_restart_pc_std = QDoubleSpinBox()
+        self._refine_restart_pc_std.setRange(0.0, 0.5)
+        self._refine_restart_pc_std.setDecimals(4)
+        self._refine_restart_pc_std.setSingleStep(0.005)
+        self._refine_restart_pc_std.setValue(0.01)
+        self._refine_restart_pc_std.setToolTip(
+            "Standard deviation of the random PC seed used for restarts 2..N "
+            "(Bruker units).  0.01 ≈ 1% of the detector size."
+        )
+        form.addRow("Restart PC σ:", self._refine_restart_pc_std)
+
+        self._refine_restart_seed = QSpinBox()
+        self._refine_restart_seed.setRange(0, 999999)
+        self._refine_restart_seed.setValue(0)
+        self._refine_restart_seed.setToolTip(
+            "RNG seed for the random restart perturbations — same seed gives "
+            "the same restart sequence across runs (useful for debugging)."
+        )
+        form.addRow("Restart RNG seed:", self._refine_restart_seed)
+
+        self._refine_symmetry_restarts = QCheckBox(
+            "Symmetry-informed restarts (one per Laue group element)"
+        )
+        self._refine_symmetry_restarts.setChecked(False)
+        self._refine_symmetry_restarts.setToolTip(
+            "When ticked, after the N random restarts run one additional "
+            "Nelder-Mead from each non-identity element of the crystal's "
+            "Laue group.  Defends against converging to the wrong symmetry-"
+            "equivalent of the true orientation.\n\n"
+            "Cost: adds (|Laue group| − 1) restarts on top of the N random "
+            "ones (e.g. +23 runs for cubic m-3m)."
+        )
+        form.addRow(self._refine_symmetry_restarts)
+
+        self._refine_laue_group = QComboBox()
+        self._refine_laue_group.addItems([
+            "1: C1 (triclinic)",
+            "2: C2 (monoclinic)",
+            "3: C3 (trigonal-low)",
+            "4: C4 (tetragonal-low)",
+            "5: C6 (hexagonal-low)",
+            "6: D2 (orthorhombic)",
+            "7: D3 (trigonal-high)",
+            "8: D4 (tetragonal-high)",
+            "9: D6 (hexagonal-high)",
+            "10: T (cubic-low, m-3)",
+            "11: O (cubic-high, m-3m)",
+        ])
+        self._refine_laue_group.setCurrentIndex(10)
+        self._refine_laue_group.setToolTip(
+            "Crystal Laue group used to enumerate symmetry-equivalent "
+            "orientations.  Cubic m-3m (11) covers most metals."
+        )
+        form.addRow("Laue group:", self._refine_laue_group)
+
+        form.addRow(_note("── Simulated pattern preprocessing overrides ──"))
+        form.addRow(_note(
+            "Set each to 0 to inherit from the Step 3 real-pattern value.\n"
+            "Raise high-pass to strip sim background; lower gamma to reduce contrast."
+        ))
+
+        self._refine_sim_hp_sigma = QDoubleSpinBox()
+        self._refine_sim_hp_sigma.setRange(0.0, 200.0)
+        self._refine_sim_hp_sigma.setDecimals(1)
+        self._refine_sim_hp_sigma.setSingleStep(5.0)
+        self._refine_sim_hp_sigma.setValue(0.0)
+        self._refine_sim_hp_sigma.setSpecialValueText("Same as real")
+        self._refine_sim_hp_sigma.setToolTip(
+            "High-pass sigma for the simulated pattern only.\n"
+            "0 = use the Step 3 high-pass sigma unchanged."
+        )
+        form.addRow("Sim high-pass σ:", self._refine_sim_hp_sigma)
+
+        self._refine_sim_lp_sigma = QDoubleSpinBox()
+        self._refine_sim_lp_sigma.setRange(0.0, 20.0)
+        self._refine_sim_lp_sigma.setDecimals(2)
+        self._refine_sim_lp_sigma.setSingleStep(0.5)
+        self._refine_sim_lp_sigma.setValue(0.0)
+        self._refine_sim_lp_sigma.setSpecialValueText("Same as real")
+        self._refine_sim_lp_sigma.setToolTip(
+            "Low-pass (smoothing) sigma for the simulated pattern only.\n"
+            "0 = use the Step 3 low-pass sigma unchanged."
+        )
+        form.addRow("Sim low-pass σ:", self._refine_sim_lp_sigma)
+
+        self._refine_sim_gamma = QDoubleSpinBox()
+        self._refine_sim_gamma.setRange(0.0, 3.0)
+        self._refine_sim_gamma.setDecimals(3)
+        self._refine_sim_gamma.setSingleStep(0.05)
+        self._refine_sim_gamma.setValue(0.0)
+        self._refine_sim_gamma.setSpecialValueText("Same as real")
+        self._refine_sim_gamma.setToolTip(
+            "Gamma correction for the simulated pattern only.\n"
+            "0 = use the Step 3 gamma unchanged."
+        )
+        form.addRow("Sim gamma:", self._refine_sim_gamma)
+
+        self._refine_status = QLabel("")
+        self._refine_status.setStyleSheet("color: gray; font-size: 11px;")
+        self._refine_status.setWordWrap(True)
+        form.addRow(self._refine_status)
+
+        outer.addLayout(form)
+
+        self._refine_run_btn = QPushButton("Run Refinement")
+        self._refine_run_btn.setToolTip(
+            "Start the multi-start Nelder-Mead refinement of PC and Euler "
+            "angles using the settings above."
+        )
+        self._refine_run_btn.clicked.connect(self._run_pc_euler_refine)
+        outer.addWidget(self._refine_run_btn)
+
+        # Embedded log: replaces the standalone progress dialog so the user
+        # can watch refinement output without juggling two windows.
+        self._refine_log_box = QTextEdit()
+        self._refine_log_box.setReadOnly(True)
+        self._refine_log_box.setStyleSheet("font-family: monospace; font-size: 11px;")
+        self._refine_log_box.setMinimumHeight(180)
+        outer.addWidget(self._refine_log_box, stretch=1)
+
+        # Pending refinement results — populated by _on_done, applied by
+        # Finish & Apply, discarded by Cancel.
+        self._refine_pending_euler_deg = None
+        self._refine_pending_pc        = None
+
+        btn_row = QHBoxLayout()
+        self._refine_apply_btn = QPushButton("Finish && Apply")
+        self._refine_apply_btn.setToolTip(
+            "Apply the refined Euler angles and PC to the reference page "
+            "and close this dialog."
+        )
+        self._refine_apply_btn.clicked.connect(self._on_refine_apply)
+        self._refine_cancel_btn = QPushButton("Cancel")
+        self._refine_cancel_btn.setToolTip(
+            "Discard any refinement results and close this dialog."
+        )
+        self._refine_cancel_btn.clicked.connect(self._on_refine_cancel)
+        btn_row.addWidget(self._refine_apply_btn)
+        btn_row.addWidget(self._refine_cancel_btn)
+        outer.addLayout(btn_row)
+
+    def _on_refine_apply(self):
+        """Finish & Apply — push pending refinement results to the
+        reference page and the geometry-page PC fields, then close."""
+        if self._refine_pending_euler_deg is not None:
+            self._set_sim_euler_deg(self._refine_pending_euler_deg)
+            pc = self._refine_pending_pc
+            geom_page = self.wizard().geometry_page
+            geom_page.pc_x.setValue(float(pc[0]))
+            geom_page.pc_y.setValue(float(pc[1]))
+            geom_page.pc_z.setValue(float(pc[2]))
+            # Auto-regenerate the sim at the freshly-applied values so the
+            # step-4 preview reflects the refined orientation immediately.
+            self._generate_sim_pattern()
+        self._refine_pending_euler_deg = None
+        self._refine_pending_pc        = None
+        self._refine_settings_dialog.hide()
+
+    def _on_refine_cancel(self):
+        """Discard pending results and close the dialog."""
+        self._refine_pending_euler_deg = None
+        self._refine_pending_pc        = None
+        self._refine_settings_dialog.hide()
 
     def _generate_sim_pattern(self):
         mp_path = (self.wizard().field("master_pattern_path") or "").strip()
@@ -2364,7 +2762,7 @@ class ReferencePatternPage(QWizardPage):
         geom = wiz.geometry_page.get_params()
         pc   = geom["pc_edax"]
         det_shape = (geom["pat_h"], geom["pat_w"])
-        euler_deg = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
+        euler_deg = tuple(self._sim_euler_deg)
 
         # Load the experimental pattern at the clicked position for comparison.
         # self._sim_exp_pat is kept as the RAW normalized pattern (SimTuner
@@ -2377,7 +2775,7 @@ class ReferencePatternPage(QWizardPage):
             try:
                 import Data
                 pat_obj = Data.UP2(up2_path)
-                idx = self._sim_ref_row * geom["cols"] + self._sim_ref_col
+                idx = self.ref_row.value() * geom["cols"] + self.ref_col.value()
                 if idx < pat_obj.nPatterns:
                     raw = pat_obj.read_pattern(idx, process=False).astype(np.float32)
                     lo, hi = raw.min(), raw.max()
@@ -2406,8 +2804,11 @@ class ReferencePatternPage(QWizardPage):
         # apply their own processing.
         self._sim_pat_array = pat_np
         self._sim_gen_btn.setEnabled(True)
-        eu = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
+        eu = tuple(self._sim_euler_deg)
         self._sim_status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
+        # Push the new sim into the main step-4 reference-pattern preview
+        # (shared widget between real & simulated modes).
+        self._load_ref_pattern_preview()
 
         # Run the sim through the Step 3 pipeline (high-pass / low-pass / gamma,
         # mask disabled) so display & ZNSSD compare like-for-like against the
@@ -2427,7 +2828,7 @@ class ReferencePatternPage(QWizardPage):
             self._sim_pat_ax_exp.imshow(exp_proc, cmap="gray", origin="upper")
             self._sim_pat_ax_exp.set_title(
                 f"Experimental (Step 3 processed)\n"
-                f"row={self._sim_ref_row}, col={self._sim_ref_col}", **_title_kw
+                f"row={self.ref_row.value()}, col={self.ref_col.value()}", **_title_kw
             )
         else:
             self._sim_pat_ax_exp.text(0.5, 0.5, "No UP2 file\navailable",
@@ -2520,7 +2921,7 @@ class ReferencePatternPage(QWizardPage):
         self._sim_pat_canvas.draw()
         status_metrics = f"  |  {metrics_str}" if metrics_str else ""
         self._sim_dlg_status.setText(
-            f"Experimental: row={self._sim_ref_row}, col={self._sim_ref_col}  |  "
+            f"Experimental: row={self.ref_row.value()}, col={self.ref_col.value()}  |  "
             f"Simulated: {pat_np.shape[0]}×{pat_np.shape[1]} px{status_metrics}"
         )
 
@@ -2545,7 +2946,9 @@ class ReferencePatternPage(QWizardPage):
             self._sim_flicker_ax.axis("off")
             self._sim_flicker_canvas.draw_idle()
 
-        self._sim_dialog.show()
+        if self._show_compare_dialog:
+            self._sim_dialog.show()
+            self._show_compare_dialog = False
 
     # ── Flicker animation ─────────────────────────────────────────────────────
 
@@ -2625,7 +3028,7 @@ class ReferencePatternPage(QWizardPage):
         geom     = wiz.geometry_page.get_params()
         pc_edax  = geom["pc_edax"]
         det_shape = (geom["pat_h"], geom["pat_w"])
-        euler_deg = (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value())
+        euler_deg = tuple(self._sim_euler_deg)
 
         # Load raw and processed experimental patterns if not already cached
         exp_pat_proc = None
@@ -2634,7 +3037,7 @@ class ReferencePatternPage(QWizardPage):
             try:
                 import Data
                 pat_obj = Data.UP2(up2_path)
-                idx = self._sim_ref_row * geom["cols"] + self._sim_ref_col
+                idx = self.ref_row.value() * geom["cols"] + self.ref_col.value()
                 if idx < pat_obj.nPatterns:
                     if self._sim_exp_pat is None:
                         raw = pat_obj.read_pattern(idx, process=False).astype(np.float32)
@@ -2673,10 +3076,8 @@ class ReferencePatternPage(QWizardPage):
         dlg.show()
 
     def _on_tuner_applied(self, euler_deg: tuple, pc_edax: tuple, tilt_deg: float):
-        """Push values from the tuner back into the reference page spinboxes."""
-        self._sim_phi1.setValue(euler_deg[0])
-        self._sim_Phi.setValue(euler_deg[1])
-        self._sim_phi2.setValue(euler_deg[2])
+        """Push values from the tuner back into the reference page."""
+        self._set_sim_euler_deg(euler_deg)
         geom_page = self.wizard().geometry_page
         geom_page.pc_x.setValue(pc_edax[0])
         geom_page.pc_y.setValue(pc_edax[1])
@@ -2708,27 +3109,16 @@ class ReferencePatternPage(QWizardPage):
         geom = wiz.geometry_page.get_params()
         p    = wiz.processing_page.get_params()
 
-        pat_idx    = self._sim_ref_row * geom["cols"] + self._sim_ref_col
-        euler_init = np.deg2rad([self._sim_phi1.value(),
-                                 self._sim_Phi.value(),
-                                 self._sim_phi2.value()])
+        pat_idx    = self.ref_row.value() * geom["cols"] + self.ref_col.value()
+        euler_init = np.deg2rad(list(self._sim_euler_deg))
         pc_init    = tuple(geom["pc_edax"])
 
         save_dir = os.path.join(os.path.dirname(up2_path), "pc_euler_refine")
 
-        # Progress dialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle("PC / Euler Refinement")
-        dlg.resize(640, 420)
-        dlg_layout = QVBoxLayout(dlg)
-        log_box = QTextEdit()
-        log_box.setReadOnly(True)
-        log_box.setStyleSheet("font-family: monospace; font-size: 11px;")
-        dlg_layout.addWidget(log_box)
-        close_btn = QPushButton("Running…")
-        close_btn.setEnabled(False)
-        close_btn.clicked.connect(dlg.accept)
-        dlg_layout.addWidget(close_btn)
+        # Log output goes directly into the embedded box on the refine
+        # settings dialog — no standalone progress window any more.
+        log_box = self._refine_log_box
+        log_box.clear()
 
         _sim_hp = self._refine_sim_hp_sigma.value()
         _sim_lp = self._refine_sim_lp_sigma.value()
@@ -2762,41 +3152,32 @@ class ReferencePatternPage(QWizardPage):
 
         def _on_done(euler_opt, pc_opt):
             euler_deg = np.degrees(euler_opt)
-            self._sim_phi1.setValue(float(euler_deg[0]))
-            self._sim_Phi.setValue(float(euler_deg[1]))
-            self._sim_phi2.setValue(float(euler_deg[2]))
-            geom_page = wiz.geometry_page
-            geom_page.pc_x.setValue(float(pc_opt[0]))
-            geom_page.pc_y.setValue(float(pc_opt[1]))
-            geom_page.pc_z.setValue(float(pc_opt[2]))
+            # Stash the result as pending — actual apply happens when the
+            # user clicks Finish & Apply on the refine dialog.
+            self._refine_pending_euler_deg = (float(euler_deg[0]),
+                                              float(euler_deg[1]),
+                                              float(euler_deg[2]))
+            self._refine_pending_pc = (float(pc_opt[0]),
+                                       float(pc_opt[1]),
+                                       float(pc_opt[2]))
             self._refine_status.setText(
                 f"Refined — φ₁={euler_deg[0]:.3f}°  Φ={euler_deg[1]:.3f}°  "
                 f"φ₂={euler_deg[2]:.3f}°  |  "
                 f"PC: ({pc_opt[0]:.5f}, {pc_opt[1]:.5f}, {pc_opt[2]:.5f})"
             )
             self._refine_status.setStyleSheet("color: green; font-size: 11px;")
-            log_box.append("\nRefinement complete — Euler and PC updated.")
-            close_btn.setText("Close")
-            close_btn.setEnabled(True)
-            self._refine_btn.setEnabled(True)
-            # Auto-regenerate the simulated pattern at the refined values so
-            # the user immediately sees the new sim/exp/ZNSSD comparison
-            # without having to click Generate Pattern again.
-            log_box.append("Regenerating simulated pattern at refined values…")
-            self._generate_sim_pattern()
+            log_box.append("\nRefinement complete — click Finish && Apply to keep the result, or Cancel to discard.")
+            self._refine_run_btn.setEnabled(True)
 
         def _on_error(tb):
             log_box.append(f"\n[ERROR]\n{tb}")
-            close_btn.setText("Close")
-            close_btn.setEnabled(True)
-            self._refine_btn.setEnabled(True)
+            self._refine_run_btn.setEnabled(True)
 
         self._refine_worker.log_signal.connect(_on_log)
         self._refine_worker.done_signal.connect(_on_done)
         self._refine_worker.error_signal.connect(_on_error)
         self._refine_worker.start()
-        self._refine_btn.setEnabled(False)
-        dlg.exec()
+        self._refine_run_btn.setEnabled(False)
 
     # NOTE: The PC plane fit UI (button, modal, status label) used to live
     # here.  It was removed from the GUI per user request — the standalone
@@ -2804,7 +3185,19 @@ class ReferencePatternPage(QWizardPage):
     # if you want to re-wire it later.
 
     def get_params(self) -> dict:
-        common = {"small_strain": self._small_strain.isChecked()}
+        # small_strain now lives on Step 2 (ScanGeometryPage); nothing to add here.
+        # Advanced sim-reference tweaks (spectral match, Tikhonov, rotate-90)
+        # moved from Step 3 into Step 4's simulated section — surface them
+        # for the pipeline regardless of which ref_mode is active so the
+        # toggles still take effect for the experimental-reference path too.
+        common = {
+            "spectral_match_ref":         self._spectral_match_ref.isChecked(),
+            "perspective_regularization": (
+                float(self._tikhonov_lambda.value())
+                if self._tikhonov_perspective.isChecked() else 0.0
+            ),
+            "rotate_patterns_90":         self._rotate_patterns_90.isChecked(),
+        }
         if self._single_radio.isChecked():
             return {
                 "ref_mode":     "single",
@@ -2815,7 +3208,7 @@ class ReferencePatternPage(QWizardPage):
             return {
                 "ref_mode":            "simulated",
                 "master_pattern_path": (self.wizard().field("master_pattern_path") or "").strip(),
-                "euler_deg":           (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value()),
+                "euler_deg":           tuple(self._sim_euler_deg),
                 "sim_pat_array":       self._sim_pat_array,
                 **common,
             }
@@ -2918,134 +3311,12 @@ class PatternProcessingPage(QWizardPage):
         crop_group.setLayout(crop_layout)
         ctrl.addWidget(crop_group)
 
-        # ── Reference Pattern Preprocessing (override) ─────────────────────────
-        ref_group  = QGroupBox("Reference Pattern Preprocessing (override)")
-        ref_layout = QFormLayout()
-        ref_layout.addRow(_note(
-            "When enabled, the reference pattern (at ref_position) is processed "
-            "with these values instead of the main settings above.  All other "
-            "patterns still use the main settings.  Useful when the reference "
-            "pattern differs in intensity / dynamic range from the targets."
-        ))
-
-        self._ref_preproc_enabled = QCheckBox("Use different preprocessing for the reference pattern")
-        self._ref_preproc_enabled.setChecked(False)
-        ref_layout.addRow(self._ref_preproc_enabled)
-
-        self._ref_high_pass = QDoubleSpinBox()
-        self._ref_high_pass.setRange(0, 200);  self._ref_high_pass.setValue(10.0)
-        self._ref_low_pass = QDoubleSpinBox()
-        self._ref_low_pass.setRange(0, 100);   self._ref_low_pass.setValue(0.0)
-        self._ref_gamma = QDoubleSpinBox()
-        self._ref_gamma.setRange(0.1, 3.0);    self._ref_gamma.setValue(1.0)
-        self._ref_gamma.setSingleStep(0.05)
-        self._ref_mask_type = QComboBox()
-        self._ref_mask_type.addItems(["None", "circular", "center_cross"])
-
-        ref_layout.addRow("Reference high-pass σ:", self._ref_high_pass)
-        ref_layout.addRow("Reference low-pass σ:",  self._ref_low_pass)
-        ref_layout.addRow("Reference gamma:",       self._ref_gamma)
-        ref_layout.addRow("Reference mask type:",   self._ref_mask_type)
-
-        self._preview_use_ref = QCheckBox("Live-preview the reference with these settings")
-        self._preview_use_ref.setChecked(False)
-        self._preview_use_ref.setToolTip(
-            "When ticked, the live preview below uses the reference pattern "
-            "(at ref_position from Step 4) and the override values above.  "
-            "Untick to go back to the main-preprocessing preview of whichever "
-            "pattern index is selected."
-        )
-        ref_layout.addRow(self._preview_use_ref)
-
-        # Spectral-match toggle (independent of the other reference-preprocessing
-        # overrides — works whether the reference came from a saved sim in the
-        # .up2, a freshly-rendered sim, or any other source).
-        self._spectral_match_ref = QCheckBox(
-            "Spectral-match reference to experimental patterns"
-        )
-        self._spectral_match_ref.setChecked(False)
-        self._spectral_match_ref.setToolTip(
-            "Reshape the reference's |FFT| amplitude spectrum to match the "
-            "average amplitude spectrum of the experimental patterns in this "
-            ".up2.  Phase (geometry) is preserved.  Auto-tunes per-frequency, "
-            "no parameters required.  Fixes the directional gradient anisotropy "
-            "that often biases ε_22 / ω_32 with simulated references."
-        )
-        ref_layout.addRow(self._spectral_match_ref)
-
-        # Tikhonov regularization on the perspective channels (h_31, h_32).
-        # Stacks with spectral matching — addresses the IC-GN basin-flip
-        # mechanism caused by large PC y-offsets, which spectral matching
-        # alone doesn't fully fix.
-        self._tikhonov_perspective = QCheckBox(
-            "Tikhonov-regularize perspective (h_31, h_32) in IC-GN"
-        )
-        self._tikhonov_perspective.setChecked(False)
-        self._tikhonov_perspective.setToolTip(
-            "Multiplicatively scales H[6,6] and H[7,7] of the IC-GN Hessian "
-            "by (1 + λ).  Keeps the perspective channels close to their "
-            "initial-guess geometric values, preventing IC-GN from sliding "
-            "y-displacement into h_32·x_02 (which manifests as wrong-sign ε_22 "
-            "and spurious ω_32 when the PC y-offset is large).  Stacks with "
-            "spectral matching."
-        )
-        self._tikhonov_lambda = QDoubleSpinBox()
-        self._tikhonov_lambda.setRange(0.0, 1000.0)
-        self._tikhonov_lambda.setSingleStep(0.1)
-        self._tikhonov_lambda.setDecimals(3)
-        self._tikhonov_lambda.setValue(0.5)   # gentle default
-        self._tikhonov_lambda.setToolTip(
-            "Multiplicative factor: H[6,6] *= (1 + λ).  Step scale on h_31/h_32 "
-            "is 1/(1+λ).  0.0 disables (no change).  0.5 ≈ step shrinks by 33%. "
-            "1.0 ≈ step shrinks by 50%.  10 ≈ step shrinks by 91% (effective "
-            "soft-freeze).  Raise if wrong-sign ε_22 persists; lower if "
-            "h_31/h_32 look over-constrained in the *_results_*.npy."
-        )
-
-        def _toggle_tikhonov(enabled: bool):
-            self._tikhonov_lambda.setEnabled(enabled)
-        self._tikhonov_perspective.toggled.connect(_toggle_tikhonov)
-        _toggle_tikhonov(self._tikhonov_perspective.isChecked())
-
-        ref_layout.addRow(self._tikhonov_perspective)
-        ref_layout.addRow("Tikhonov λ multiplier:", self._tikhonov_lambda)
-
-        # Diagnostic: rotate every pattern by 90° CCW (in memory) before the
-        # optimization runs.  .up2 file is untouched.  Used to check whether
-        # the strain result rotates with the patterns (as it should for a
-        # PC-consistent pipeline) or shifts in some unexpected way (which
-        # would indicate a frame-convention bug).
-        self._rotate_patterns_90 = QCheckBox(
-            "Rotate patterns 90° CCW before optimization (diagnostic)"
-        )
-        self._rotate_patterns_90.setChecked(False)
-        self._rotate_patterns_90.setToolTip(
-            "Applies np.rot90(k=1) to the reference pattern, all target "
-            "patterns, the mask, and any reference override before IC-GN "
-            "runs.  The .up2 file is NOT modified.  PC vectors are passed "
-            "through unchanged so you can compare the strain result with and "
-            "without the rotation to assess PC-sensitivity."
-        )
-        ref_layout.addRow(self._rotate_patterns_90)
-
-        # Enable / disable the override controls based on the master checkbox.
-        def _toggle_ref_preproc(enabled: bool):
-            for w in (self._ref_high_pass, self._ref_low_pass, self._ref_gamma,
-                      self._ref_mask_type, self._preview_use_ref):
-                w.setEnabled(enabled)
-            self._schedule_preview()
-        self._ref_preproc_enabled.toggled.connect(_toggle_ref_preproc)
-        _toggle_ref_preproc(self._ref_preproc_enabled.isChecked())
-
-        # Re-render the preview when any override value changes (only meaningful
-        # when the preview is in reference-mode, but cheap either way).
-        for w in (self._ref_high_pass, self._ref_low_pass, self._ref_gamma):
-            w.valueChanged.connect(self._schedule_preview)
-        self._ref_mask_type.currentIndexChanged.connect(self._schedule_preview)
-        self._preview_use_ref.toggled.connect(self._schedule_preview)
-
-        ref_group.setLayout(ref_layout)
-        ctrl.addWidget(ref_group)
+        # NOTE: the entire "Reference Pattern Preprocessing (override)" group
+        # used to live here.  Its useful controls (spectral matching, Tikhonov
+        # regularization, rotate-90 diagnostic) have been moved to the
+        # Simulated-Reference settings on Step 4.  The per-component overrides
+        # (high-pass / low-pass / gamma / mask) were redundant with the
+        # existing "Sim …" overrides on Step 4 and have been dropped.
 
         # Advanced options group
         adv_group  = QGroupBox("Advanced Options")
@@ -3219,23 +3490,11 @@ class PatternProcessingPage(QWizardPage):
             self._preview_worker.done_signal.disconnect()
             self._preview_worker.error_signal.disconnect()
 
-        # Build the params for the preview.  When the user has ticked
-        # "Live-preview the reference with these settings", swap the main
-        # preprocessing fields for the reference-override fields so the
-        # preview shows what the reference will actually look like at run time.
+        # The previous override-swap logic (for the now-removed reference
+        # preprocessing override block) has been deleted.  The preview now
+        # always reflects the main Step 3 preprocessing settings.
         preview_params = self.get_params()
-        if (self._ref_preproc_enabled.isChecked()
-                and self._preview_use_ref.isChecked()):
-            ref = preview_params["ref_preprocessing"]
-            preview_params = {**preview_params,
-                "high_pass_sigma": ref["high_pass_sigma"],
-                "low_pass_sigma":  ref["low_pass_sigma"],
-                "gamma":           ref["gamma"],
-                "mask_type":       ref["mask_type"],
-            }
-            self._prev_status.setText("Processing reference pattern (override settings)…")
-        else:
-            self._prev_status.setText("Processing…")
+        self._prev_status.setText("Processing…")
 
         self._preview_worker = PatternPreviewWorker(up2_path, pat_idx, preview_params)
         self._preview_worker.done_signal.connect(self._on_preview_done)
@@ -3315,7 +3574,10 @@ class PatternProcessingPage(QWizardPage):
     # ── Params ────────────────────────────────────────────────────────────────
 
     def get_params(self) -> dict:
-        params = {
+        # ref_preprocessing / spectral_match_ref / perspective_regularization /
+        # rotate_patterns_90 used to be set here.  They've moved to
+        # ReferencePatternPage.get_params (Step 4 → Simulated Reference settings).
+        return {
             "high_pass_sigma": self.high_pass.value(),
             "low_pass_sigma":  self.low_pass.value(),
             "gamma":           self.gamma.value(),
@@ -3323,24 +3585,6 @@ class PatternProcessingPage(QWizardPage):
             "mask_type":       self.mask_type.currentText(),
             "crop_fraction":   self.crop_fraction.value(),
         }
-        if self._ref_preproc_enabled.isChecked():
-            params["ref_preprocessing"] = {
-                "enabled":         True,
-                "high_pass_sigma": self._ref_high_pass.value(),
-                "low_pass_sigma":  self._ref_low_pass.value(),
-                "gamma":           self._ref_gamma.value(),
-                "mask_type":       self._ref_mask_type.currentText(),
-            }
-        # Spectral-match toggle is independent of the override block above.
-        params["spectral_match_ref"] = self._spectral_match_ref.isChecked()
-        # Tikhonov regularization on h_31, h_32 (0 disables).
-        params["perspective_regularization"] = (
-            float(self._tikhonov_lambda.value())
-            if self._tikhonov_perspective.isChecked() else 0.0
-        )
-        # Diagnostic: rotate patterns 90° CCW before IC-GN.
-        params["rotate_patterns_90"] = self._rotate_patterns_90.isChecked()
-        return params
 
 
 # ─────────────────────────────────────────────────────────────────────────────

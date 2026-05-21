@@ -39,6 +39,9 @@ from HREBSD import (
 )
 
 
+_MASTER_PATTERN_CACHE: dict = {}
+
+
 def _read_master_pattern_h5(file_path: str) -> tuple:
     """Load energy-resolved NH/SH master patterns and the MC-grid accum_e
     from an EMsoft-style .h5 master file.
@@ -51,7 +54,16 @@ def _read_master_pattern_h5(file_path: str) -> tuple:
 
     EMsoft stores accum_e as (ns, ns, nE) and the master patterns as
     (1, nE, H, W); both are normalized to (nE, *) here.
+
+    Cached by absolute path so repeated calls in a session don't re-hit
+    disk or re-decode the HDF5 — the master pattern is large and otherwise
+    re-loaded for every simulated-pattern generation.
     """
+    key = os.path.realpath(file_path)
+    cached = _MASTER_PATTERN_CACHE.get(key)
+    if cached is not None:
+        return cached
+
     with h5py.File(file_path, "r") as f:
         e_accum = f["EMData/MCOpenCL/accum_e"][:].astype(np.float32)
         nh = f["EMData/EBSDmaster/mLPNH"][:].astype(np.float32).squeeze()
@@ -84,11 +96,13 @@ def _read_master_pattern_h5(file_path: str) -> tuple:
             f"nE={nE_master}.  Expected one accum_e axis of length {nE_master}."
         )
 
-    return (
+    result = (
         torch.from_numpy(nh).contiguous(),
         torch.from_numpy(sh).contiguous(),
         torch.from_numpy(accum_e_mc).contiguous(),
     )
+    _MASTER_PATTERN_CACHE[key] = result
+    return result
 
 
 class patternSimulation:
