@@ -2636,6 +2636,11 @@ class ReferencePatternPage(QWizardPage):
             close_btn.setText("Close")
             close_btn.setEnabled(True)
             self._refine_btn.setEnabled(True)
+            # Auto-regenerate the simulated pattern at the refined values so
+            # the user immediately sees the new sim/exp/ZNSSD comparison
+            # without having to click Generate Pattern again.
+            log_box.append("Regenerating simulated pattern at refined values…")
+            self._generate_sim_pattern()
 
         def _on_error(tb):
             log_box.append(f"\n[ERROR]\n{tb}")

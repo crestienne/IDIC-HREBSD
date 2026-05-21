@@ -649,13 +649,17 @@ def spectral_match_pattern(
     ref_pat: np.ndarray,
     target_amp: np.ndarray,
     eps: float = 1e-3,
-    cap: float = 10.0,
+    cap: float = 4.0,
+    strength: float = 0.5,
 ) -> np.ndarray:
     """Reshape `ref_pat`'s amplitude spectrum to match `target_amp`, preserving
     the reference's phase.  Auto-tuning fix for sim/exp gradient anisotropy
     (the polar gradient flower from Figure 7 of debug_two_patterns).
 
-    The math:  ref' = IFFT( FFT(ref) · min(target_amp / |FFT(ref)|, cap) )
+    The math:
+        ratio       = min(target_amp / |FFT(ref)|, cap)
+        boost       = 1 + strength * (ratio − 1)     (blend with no-op)
+        ref'        = IFFT( FFT(ref) · boost )
 
     The phase carries the geometry (where Kikuchi bands are); the amplitude
     carries how strong each (kx, ky) frequency is.  Re-scaling amplitude
@@ -667,7 +671,13 @@ def spectral_match_pattern(
         target_amp : (H, W) target amplitude spectrum, e.g. from
                      `average_exp_amplitude_spectrum(pat_obj)`.
         eps        : floor on the boost denominator (fraction of |FFT(ref)|.max).
-        cap        : maximum per-frequency boost factor.
+        cap        : maximum per-frequency boost factor (default 4.0 — was 10.0
+                     before, which let extreme boosts at low-amplitude
+                     frequencies inject ringing that biased ε₁₁).
+        strength   : blend factor between identity (0.0, no matching) and full
+                     amplitude replacement (1.0).  Default 0.5 — applies half
+                     the spectral correction, which reduces the directional-
+                     anisotropy fix's contribution to strain estimates.
 
     Returns:
         ref_pat_matched : same shape & dtype as ref_pat.
@@ -675,7 +685,10 @@ def spectral_match_pattern(
     ref_F      = np.fft.fft2(ref_pat - ref_pat.mean())
     eps_floor  = float(eps) * float(np.abs(ref_F).max())
     ratio      = np.minimum(target_amp / (np.abs(ref_F) + eps_floor), float(cap))
-    ref_F_match = ref_F * ratio
+    # Blend toward the unmatched pattern.  strength=1 → original behavior;
+    # strength=0 → no spectral matching at all.
+    boost      = 1.0 + float(strength) * (ratio - 1.0)
+    ref_F_match = ref_F * boost
     out         = np.real(np.fft.ifft2(ref_F_match))
     return out.astype(ref_pat.dtype, copy=False)
 
