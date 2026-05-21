@@ -75,6 +75,20 @@ class LoadFilesPage(QWizardPage):
             ),
         )
 
+        self.master_pattern_edit = QLineEdit()
+        self.master_pattern_edit.setPlaceholderText(
+            "Path to EMsoft .h5 master pattern (optional — only needed for simulated references)…"
+        )
+        file_layout.addRow(
+            "Master pattern (.h5):",
+            _make_browse_row(
+                self, self.master_pattern_edit,
+                "HDF5 master pattern (*.h5 *.hdf5);;All files (*)",
+                "Select master pattern file",
+                start_dir_fn=lambda: os.path.dirname(self.up2_edit.text()) if self.up2_edit.text() else None,
+            ),
+        )
+
         self._ang_load_status = QLabel("")
         self._ang_load_status.setStyleSheet("color: gray; font-style: italic;")
         file_layout.addRow("", self._ang_load_status)
@@ -207,6 +221,7 @@ class LoadFilesPage(QWizardPage):
         # Default values let you click through all steps without real files.
         self.registerField("up2_path",  self.up2_edit)
         self.registerField("ang_path",  self.ang_edit)
+        self.registerField("master_pattern_path", self.master_pattern_edit)
         self.registerField("run_name",  self.run_name_edit)
         self.registerField("output_dir", self.out_edit)
 
@@ -1503,6 +1518,11 @@ class ReferencePatternPage(QWizardPage):
         self._refine_worker = None
         self._ref_pattern_set: ReferencePatternSet = None
         self._sim_pat_array = None   # last generated simulated pattern
+        # Sim-vs-Exp dialog: lock the colour scale and colorbar after the
+        # first click of Generate Pattern so subsequent clicks plot against
+        # the same reference scale instead of stacking new colorbars.
+        self._sim_pat_residual_vabs = None
+        self._sim_pat_residual_cbar = None
         self._sim_exp_pat   = None   # experimental pattern at the clicked position
         self._sim_ref_row   = 0
         self._sim_ref_col   = 0
@@ -1595,14 +1615,12 @@ class ReferencePatternPage(QWizardPage):
         self._sim_group  = QGroupBox("Simulated Reference")
         sim_layout = QFormLayout()
 
-        self._sim_mp_edit = QLineEdit()
-        self._sim_mp_edit.setPlaceholderText("Path to EMsoft .h5 master pattern…")
-        self._sim_mp_btn  = QPushButton("Browse…")
-        self._sim_mp_btn.setFixedWidth(80)
-        self._sim_mp_btn.clicked.connect(self._browse_master_pattern)
-        mp_row = QWidget(); mph = QHBoxLayout(mp_row); mph.setContentsMargins(0,0,0,0)
-        mph.addWidget(self._sim_mp_edit); mph.addWidget(self._sim_mp_btn)
-        sim_layout.addRow("Master pattern:", mp_row)
+        # Master-pattern path is set in Step 1; surface it here read-only so
+        # users have visual confirmation of what file will be used.
+        self._sim_mp_status = QLabel("(set on Step 1)")
+        self._sim_mp_status.setStyleSheet("color: gray; font-style: italic;")
+        self._sim_mp_status.setWordWrap(True)
+        sim_layout.addRow("Master pattern:", self._sim_mp_status)
 
         self._sim_phi1 = QDoubleSpinBox(); self._sim_phi1.setRange(0, 360); self._sim_phi1.setDecimals(3); self._sim_phi1.setSuffix(" °")
         self._sim_Phi  = QDoubleSpinBox(); self._sim_Phi.setRange(0, 180);  self._sim_Phi.setDecimals(3);  self._sim_Phi.setSuffix(" °")
@@ -1921,7 +1939,7 @@ class ReferencePatternPage(QWizardPage):
         self._sim_pat_canvas.setStyleSheet(f"background-color: {_bg};")
         self._sim_pat_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._sim_dlg_status = QLabel("")
-        self._sim_dlg_status.setStyleSheet("color: gray; font-size: 11px;")
+        self._sim_dlg_status.setStyleSheet("color: white; font-size: 13px;")
         self._sim_dlg_status.setWordWrap(True)
         _sdlg_layout.addWidget(self._sim_pat_canvas, stretch=1)
         _sdlg_layout.addWidget(self._sim_dlg_status)
@@ -1940,6 +1958,15 @@ class ReferencePatternPage(QWizardPage):
 
         self.ref_row.setMaximum(geom["rows"] - 1)
         self.ref_col.setMaximum(geom["cols"] - 1)
+
+        # Mirror the master-pattern path from Step 1 into the read-only label.
+        mp_path = (wiz.field("master_pattern_path") or "").strip()
+        if mp_path:
+            self._sim_mp_status.setText(mp_path)
+            self._sim_mp_status.setStyleSheet("color: gray;")
+        else:
+            self._sim_mp_status.setText("(not set — go to Step 1 to choose an .h5 master pattern)")
+            self._sim_mp_status.setStyleSheet("color: gray; font-style: italic;")
 
         if not ang_path or not os.path.exists(ang_path):
             self._ipf_status.setText("No ANG file — cannot draw IPF map.")
@@ -2268,18 +2295,12 @@ class ReferencePatternPage(QWizardPage):
         # Render the IPF mirror inside the dialog if the page has computed it
         self._draw_dialog_ipf()
 
-    def _browse_master_pattern(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select EMsoft master pattern", "",
-            "HDF5 Master Pattern (*.h5 *.hdf5);;All files (*)"
-        )
-        if path:
-            self._sim_mp_edit.setText(path)
-
     def _generate_sim_pattern(self):
-        mp_path = self._sim_mp_edit.text().strip()
+        mp_path = (self.wizard().field("master_pattern_path") or "").strip()
         if not mp_path or not os.path.exists(mp_path):
-            self._sim_status.setText("Please select a valid master pattern file first.")
+            self._sim_status.setText(
+                "Please select a valid master pattern file on Step 1 first."
+            )
             return
 
         wiz  = self.wizard()
@@ -2339,19 +2360,23 @@ class ReferencePatternPage(QWizardPage):
         sim_proc = self._apply_step3_processing(pat_np, up2_path)
         exp_proc = self._sim_exp_pat_proc if self._sim_exp_pat_proc is not None else self._sim_exp_pat
 
+        # White, slightly larger titles so they're readable on the dark dialog
+        # background — the matplotlib default is black.
+        _title_kw = dict(fontsize=12, color="white", fontweight="bold")
+
         # Left: experimental (or placeholder if no UP2 loaded)
         self._sim_pat_ax_exp.clear()
         if exp_proc is not None:
             self._sim_pat_ax_exp.imshow(exp_proc, cmap="gray", origin="upper")
             self._sim_pat_ax_exp.set_title(
                 f"Experimental (Step 3 processed)\n"
-                f"row={self._sim_ref_row}, col={self._sim_ref_col}", fontsize=9
+                f"row={self._sim_ref_row}, col={self._sim_ref_col}", **_title_kw
             )
         else:
             self._sim_pat_ax_exp.text(0.5, 0.5, "No UP2 file\navailable",
                                       ha="center", va="center", transform=self._sim_pat_ax_exp.transAxes,
-                                      fontsize=10, color="gray")
-            self._sim_pat_ax_exp.set_title("Experimental", fontsize=9)
+                                      fontsize=11, color="white")
+            self._sim_pat_ax_exp.set_title("Experimental", **_title_kw)
         self._sim_pat_ax_exp.axis("off")
 
         # Centre: simulated (Step 3 processed)
@@ -2359,7 +2384,7 @@ class ReferencePatternPage(QWizardPage):
         self._sim_pat_ax_sim.imshow(sim_proc, cmap="gray", origin="upper")
         self._sim_pat_ax_sim.set_title(
             f"Simulated (Step 3 processed)\n"
-            f"φ₁={eu[0]:.2f}°  Φ={eu[1]:.2f}°  φ₂={eu[2]:.2f}°", fontsize=9
+            f"φ₁={eu[0]:.2f}°  Φ={eu[1]:.2f}°  φ₂={eu[2]:.2f}°", **_title_kw
         )
         self._sim_pat_ax_sim.axis("off")
 
@@ -2405,21 +2430,33 @@ class ReferencePatternPage(QWizardPage):
             ssim_str = f"SSIM = {ssim_val:.4f}" if ssim_val is not None else "SSIM unavailable"
             metrics_str = f"{ssim_str}   ZNCC = {zncc_val:.4f}   ZNSSD = {znssd_val:.4f}"
 
-            # Symmetric diverging colormap, robust 98th-percentile clipping.
-            vabs = max(float(np.percentile(np.abs(residual), 98)), 1e-9)
+            # FROZEN colour scale: vabs is computed only on the FIRST click and
+            # reused on every subsequent click.  Same for the colorbar object
+            # itself — matplotlib otherwise stacks a new colorbar axis on each
+            # call, so by the 4th click you'd have 4 colorbars side-by-side.
+            if getattr(self, "_sim_pat_residual_vabs", None) is None:
+                self._sim_pat_residual_vabs = max(
+                    float(np.percentile(np.abs(residual), 98)), 1e-9
+                )
+            vabs = self._sim_pat_residual_vabs
             im = self._sim_pat_ax_diff.imshow(
                 residual, cmap="RdBu_r", origin="upper", vmin=-vabs, vmax=+vabs,
             )
-            self._sim_pat_fig.colorbar(im, ax=self._sim_pat_ax_diff, fraction=0.046, pad=0.04)
+            if getattr(self, "_sim_pat_residual_cbar", None) is None:
+                cbar = self._sim_pat_fig.colorbar(
+                    im, ax=self._sim_pat_ax_diff, fraction=0.046, pad=0.04
+                )
+                cbar.ax.tick_params(labelcolor="white", labelsize=10)
+                self._sim_pat_residual_cbar = cbar
             self._sim_pat_ax_diff.set_title(
-                f"ZNSSD residual  (Sim − Exp, z-normalized)\n{metrics_str}", fontsize=9
+                f"ZNSSD residual  (Sim − Exp, z-normalized)\n{metrics_str}", **_title_kw
             )
         else:
             self._sim_pat_ax_diff.text(0.5, 0.5, "No experimental\npattern available",
                                        ha="center", va="center",
                                        transform=self._sim_pat_ax_diff.transAxes,
-                                       fontsize=10, color="gray")
-            self._sim_pat_ax_diff.set_title("Difference", fontsize=9)
+                                       fontsize=11, color="white")
+            self._sim_pat_ax_diff.set_title("Difference", **_title_kw)
         self._sim_pat_ax_diff.axis("off")
 
         self._sim_pat_fig.tight_layout(pad=0.5)
@@ -2436,7 +2473,7 @@ class ReferencePatternPage(QWizardPage):
         self._sim_status.setText(f"Error: {msg.splitlines()[-1]}")
 
     def _open_sim_tuner(self):
-        mp_path = self._sim_mp_edit.text().strip()
+        mp_path = (self.wizard().field("master_pattern_path") or "").strip()
         if not mp_path or not os.path.exists(mp_path):
             self._sim_status.setText("Select a master pattern file before opening the tuner.")
             return
@@ -2519,10 +2556,10 @@ class ReferencePatternPage(QWizardPage):
                                 "Load a UP2 file first (Step 1).")
             return
 
-        mp_path = self._sim_mp_edit.text().strip()
+        mp_path = (self.wizard().field("master_pattern_path") or "").strip()
         if not mp_path or not os.path.exists(mp_path):
             QMessageBox.warning(self, "Missing master pattern",
-                                "Set a valid master pattern path first.")
+                                "Set a valid master pattern path on Step 1 first.")
             return
 
         geom = wiz.geometry_page.get_params()
@@ -2624,7 +2661,7 @@ class ReferencePatternPage(QWizardPage):
         if self._sim_radio.isChecked():
             return {
                 "ref_mode":            "simulated",
-                "master_pattern_path": self._sim_mp_edit.text().strip(),
+                "master_pattern_path": (self.wizard().field("master_pattern_path") or "").strip(),
                 "euler_deg":           (self._sim_phi1.value(), self._sim_Phi.value(), self._sim_phi2.value()),
                 "sim_pat_array":       self._sim_pat_array,
                 **common,
