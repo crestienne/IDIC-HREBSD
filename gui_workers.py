@@ -1172,6 +1172,8 @@ class PcEulerRefineWorker(QThread):
                  restart_rotvec_std_deg: float = 3.0,
                  restart_pc_std: float = 0.01,
                  restart_seed: int = 0,
+                 symmetry_restarts: bool = False,
+                 laue_group_id: int = 11,
                  save_dir: str = "debug",
                  sim_high_pass_sigma: float = None,
                  sim_low_pass_sigma: float = None,
@@ -1192,6 +1194,8 @@ class PcEulerRefineWorker(QThread):
         self.restart_rotvec_std_deg  = restart_rotvec_std_deg
         self.restart_pc_std          = restart_pc_std
         self.restart_seed            = restart_seed
+        self.symmetry_restarts       = symmetry_restarts
+        self.laue_group_id           = laue_group_id
         self.save_dir                = save_dir
         self.sim_high_pass_sigma     = sim_high_pass_sigma
         self.sim_low_pass_sigma      = sim_low_pass_sigma
@@ -1231,6 +1235,8 @@ class PcEulerRefineWorker(QThread):
                 restart_rotvec_std_deg = self.restart_rotvec_std_deg,
                 restart_pc_std         = self.restart_pc_std,
                 restart_seed           = self.restart_seed,
+                symmetry_restarts      = self.symmetry_restarts,
+                laue_group_id          = self.laue_group_id,
                 save_dir               = self.save_dir,
                 sim_high_pass_sigma    = self.sim_high_pass_sigma,
                 sim_low_pass_sigma     = self.sim_low_pass_sigma,

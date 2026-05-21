@@ -98,6 +98,149 @@ def _qu_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     ], dtype=np.float64)
 
 
+def _qu_to_rotvec(qu: np.ndarray) -> np.ndarray:
+    """Quaternion → rotation vector (axis · angle), inverse of _rotvec_to_qu.
+
+    Used to convert a Laue-group symmetry element into the `delta` rotation
+    vector parameterisation the Nelder-Mead optimiser steps in.  Stable
+    near identity via atan2.
+    """
+    qu = np.asarray(qu, dtype=np.float64)
+    # Canonical sign so the rotation angle lives in [0, π].
+    if qu[0] < 0:
+        qu = -qu
+    w = float(np.clip(qu[0], -1.0, 1.0))
+    imag = qu[1:4]
+    imag_norm = float(np.linalg.norm(imag))
+    if imag_norm < 1e-12:
+        return np.zeros(3, dtype=np.float64)
+    angle = 2.0 * np.arctan2(imag_norm, w)
+    return imag * (angle / imag_norm)
+
+
+# ── Laue group tables (proper-rotation subgroups, w, x, y, z) ─────────────
+# Identical to EMsoft / HREBSD ordering: Laue id 1 = C1, … 11 = O.  Element 0
+# of each table is the identity.  Tables built once at import time.
+
+_R2 = 0.7071067811865475244008443621048490392848359376884740365883398689
+_R3 = 0.8660254037844386467637231707529361834714026269051903140279034897
+
+_LAUE_C1 = np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float64)
+_LAUE_C2 = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+_LAUE_C3 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0,  _R3],
+    [0.5, 0.0, 0.0, -_R3],
+], dtype=np.float64)
+_LAUE_C4 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+    [_R2, 0.0, 0.0,  _R2],
+    [_R2, 0.0, 0.0, -_R2],
+], dtype=np.float64)
+_LAUE_C6 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0,  _R3],
+    [0.5, 0.0, 0.0, -_R3],
+    [0.0, 0.0, 0.0, 1.0],
+    [_R3, 0.0, 0.0,  0.5],
+    [_R3, 0.0, 0.0, -0.5],
+], dtype=np.float64)
+_LAUE_D2 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+], dtype=np.float64)
+_LAUE_D3 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0,  _R3],
+    [0.5, 0.0, 0.0, -_R3],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, -0.5, _R3, 0.0],
+    [0.0,  0.5, _R3, 0.0],
+], dtype=np.float64)
+_LAUE_D4 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [_R2, 0.0, 0.0,  _R2],
+    [_R2, 0.0, 0.0, -_R2],
+    [0.0,  _R2,  _R2, 0.0],
+    [0.0, -_R2,  _R2, 0.0],
+], dtype=np.float64)
+_LAUE_D6 = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.5, 0.0, 0.0,  _R3],
+    [0.5, 0.0, 0.0, -_R3],
+    [0.0, 0.0, 0.0, 1.0],
+    [_R3, 0.0, 0.0,  0.5],
+    [_R3, 0.0, 0.0, -0.5],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, -0.5,  _R3, 0.0],
+    [0.0,  0.5,  _R3, 0.0],
+    [0.0,  _R3,  0.5, 0.0],
+    [0.0, -_R3,  0.5, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+], dtype=np.float64)
+_LAUE_T = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.5,  0.5, -0.5,  0.5],
+    [0.5,  0.5,  0.5, -0.5],
+    [0.5,  0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5, -0.5],
+    [0.5, -0.5,  0.5,  0.5],
+    [0.5, -0.5,  0.5, -0.5],
+    [0.5, -0.5, -0.5,  0.5],
+    [0.5,  0.5,  0.5,  0.5],
+], dtype=np.float64)
+_LAUE_O = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [_R2, 0.0, 0.0,  _R2],
+    [_R2, 0.0, 0.0, -_R2],
+    [0.0,  _R2,  _R2, 0.0],
+    [0.0, -_R2,  _R2, 0.0],
+    [0.5,  0.5, -0.5,  0.5],
+    [0.5,  0.5,  0.5, -0.5],
+    [0.5,  0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5, -0.5],
+    [0.5, -0.5,  0.5,  0.5],
+    [0.5, -0.5,  0.5, -0.5],
+    [0.5, -0.5, -0.5,  0.5],
+    [0.5,  0.5,  0.5,  0.5],
+    [_R2,  _R2, 0.0, 0.0],
+    [_R2, -_R2, 0.0, 0.0],
+    [_R2, 0.0,  _R2, 0.0],
+    [_R2, 0.0, -_R2, 0.0],
+    [0.0,  _R2, 0.0,  _R2],
+    [0.0, -_R2, 0.0,  _R2],
+    [0.0, 0.0,  _R2,  _R2],
+    [0.0, 0.0, -_R2,  _R2],
+], dtype=np.float64)
+
+_LAUE_GROUPS = (
+    _LAUE_C1, _LAUE_C2, _LAUE_C3, _LAUE_C4, _LAUE_C6,
+    _LAUE_D2, _LAUE_D3, _LAUE_D4, _LAUE_D6, _LAUE_T, _LAUE_O,
+)
+
+
+def _laue_elements_numpy(laue_id: int) -> np.ndarray:
+    """Return the proper-rotation Laue group quaternions as a (mult/2, 4)
+    numpy array.  laue_id is 1-indexed: 1=C1, … 11=O (cubic m-3m).  Element
+    0 of the returned array is always the identity quaternion."""
+    idx = int(laue_id)
+    if not 1 <= idx <= len(_LAUE_GROUPS):
+        raise ValueError(f"laue_id must be in [1, {len(_LAUE_GROUPS)}]; got {idx}")
+    return _LAUE_GROUPS[idx - 1]
+
+
 def _wrap_euler_to_branch(euler: np.ndarray, euler_ref: np.ndarray) -> np.ndarray:
     """Pick the Euler representative in the same 2π branch as `euler_ref`.
 
@@ -797,6 +940,8 @@ def optimize_pc_and_euler(
     restart_rotvec_std_deg: float = 3.0,
     restart_pc_std: float = 0.01,
     restart_seed: int = 0,
+    symmetry_restarts: bool = False,
+    laue_group_id: int = 11,
     sim_high_pass_sigma: float = None,
     sim_low_pass_sigma: float = None,
     sim_gamma: float = None,
@@ -858,6 +1003,16 @@ def optimize_pc_and_euler(
         Default 0.01 — about 1% of the detector size in Bruker units.
     restart_seed : int
         RNG seed for reproducible restart sequences (default 0).
+    symmetry_restarts : bool
+        If True, run one additional Nelder-Mead restart from each non-identity
+        element of the crystal's Laue group (e.g. 23 extra runs for cubic
+        m-3m).  These cover the full set of symmetry-equivalent orientations
+        of euler_init.  Combined with the N random restarts, total cost =
+        ``(n_restarts + |Laue group| - 1) × max_iter``.  Default False.
+    laue_group_id : int
+        Index into HREBSD.laue_elements: 1=C1, 2=C2, 3=C3, 4=C4, 5=C6,
+        6=D2, 7=D3, 8=D4, 9=D6, 10=T, 11=O (cubic m-3m, default).  Ignored
+        unless symmetry_restarts is True.
     sim_high_pass_sigma : float, optional
         Override high_pass_sigma for the simulated pattern only.
         Set higher than the experimental value (e.g. 25–30) to remove the
@@ -1036,6 +1191,46 @@ def optimize_pc_and_euler(
         )
         print(f"[restart {r+1}/{n_restarts}] done — "
               f"best ZNSSD so far = {best_znssd[0]:.6f}  (after {nfev[0]} total evals)")
+
+    # ------------------------------------------------------------------
+    # Symmetry-informed restarts.  For each non-identity element g of the
+    # crystal's Laue group, start at delta = log(g) so the Nelder-Mead
+    # simplex begins from the symmetry-equivalent of euler_init under g.
+    # EBSD patterns are invariant under these rotations, so each equivalent
+    # is a global minimum of the cost landscape; restarting from each one
+    # is the strongest defence against converging to the WRONG equivalent.
+    # ------------------------------------------------------------------
+    if symmetry_restarts:
+        laue_qu = _laue_elements_numpy(laue_group_id)   # (mult/2, 4)
+        # laue_qu[0] is identity — skip (random restart 0 already covers it).
+        sym_count = max(0, laue_qu.shape[0] - 1)
+        print(f"\n[symmetry restarts] Laue group id={laue_group_id} → "
+              f"{sym_count} additional restarts")
+        for si in range(1, laue_qu.shape[0]):
+            g           = laue_qu[si]
+            rotvec_seed = _qu_to_rotvec(g)
+            x0_delta    = np.concatenate([rotvec_seed, np.zeros(3)])
+            print(f"\n[sym restart {si}/{sym_count}] g = {g.round(4)}  "
+                  f"rotvec_seed = {np.degrees(rotvec_seed).round(2)}°  "
+                  f"(|rotvec| = {np.degrees(np.linalg.norm(rotvec_seed)):.2f}°)")
+            minimize(
+                objective,
+                x0_delta,
+                method="Nelder-Mead",
+                options={
+                    "maxiter":         max_iter,
+                    "maxfev":          max_iter,
+                    "xatol":           1e-5,
+                    "fatol":           1e-6,
+                    "adaptive":        True,
+                    "initial_simplex": _build_initial_simplex(
+                        x0_delta, euler_step_deg, pc_step
+                    ),
+                },
+            )
+            print(f"[sym restart {si}/{sym_count}] done — "
+                  f"best ZNSSD so far = {best_znssd[0]:.6f}  "
+                  f"(after {nfev[0]} total evals)")
 
     # ------------------------------------------------------------------
     # Report

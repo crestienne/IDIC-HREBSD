@@ -1638,8 +1638,102 @@ class ReferencePatternPage(QWizardPage):
         self._refine_max_iter.setRange(50, 2000)
         self._refine_max_iter.setValue(300)
         self._refine_max_iter.setSingleStep(50)
-        self._refine_max_iter.setToolTip("Maximum Nelder-Mead function evaluations.")
+        self._refine_max_iter.setToolTip(
+            "Maximum Nelder-Mead function evaluations per restart.\n"
+            "Total cost ≈ (Refine max iters) × (Restarts)."
+        )
         sim_layout.addRow("Refine max iters:", self._refine_max_iter)
+
+        # ── Multi-start controls ────────────────────────────────────────────
+        sim_layout.addRow(_note("── Multi-start Nelder-Mead ──"))
+
+        self._refine_n_restarts = QSpinBox()
+        self._refine_n_restarts.setRange(1, 32)
+        self._refine_n_restarts.setValue(4)
+        self._refine_n_restarts.setToolTip(
+            "Number of Nelder-Mead runs.  Restart 1 starts at delta=0 "
+            "(identical to single-start behaviour); restarts 2..N start at "
+            "random Gaussian perturbations of zero.  Defends against local "
+            "minima from symmetry-equivalent basins and PC/Euler degeneracy.\n"
+            "Set to 1 to disable multi-start.  Total cost ≈ N × max_iter."
+        )
+        sim_layout.addRow("Restarts (N):", self._refine_n_restarts)
+
+        self._refine_restart_rotvec_std = QDoubleSpinBox()
+        self._refine_restart_rotvec_std.setRange(0.0, 30.0)
+        self._refine_restart_rotvec_std.setDecimals(2)
+        self._refine_restart_rotvec_std.setSingleStep(0.5)
+        self._refine_restart_rotvec_std.setValue(3.0)
+        self._refine_restart_rotvec_std.setSuffix(" °")
+        self._refine_restart_rotvec_std.setToolTip(
+            "Standard deviation of the random rotation-vector seed used for "
+            "restarts 2..N (in degrees).  Typical .ang orientations are "
+            "accurate to a few degrees, so 3° is a good default.  Larger "
+            "values widen the search but also waste restarts in clearly-wrong "
+            "regions."
+        )
+        sim_layout.addRow("Restart rotvec σ:", self._refine_restart_rotvec_std)
+
+        self._refine_restart_pc_std = QDoubleSpinBox()
+        self._refine_restart_pc_std.setRange(0.0, 0.5)
+        self._refine_restart_pc_std.setDecimals(4)
+        self._refine_restart_pc_std.setSingleStep(0.005)
+        self._refine_restart_pc_std.setValue(0.01)
+        self._refine_restart_pc_std.setToolTip(
+            "Standard deviation of the random PC seed used for restarts 2..N "
+            "(Bruker units).  0.01 ≈ 1% of the detector size."
+        )
+        sim_layout.addRow("Restart PC σ:", self._refine_restart_pc_std)
+
+        self._refine_restart_seed = QSpinBox()
+        self._refine_restart_seed.setRange(0, 999999)
+        self._refine_restart_seed.setValue(0)
+        self._refine_restart_seed.setToolTip(
+            "RNG seed for the random restart perturbations — same seed gives "
+            "the same restart sequence across runs (useful for debugging).  "
+            "Bump to get a different sample."
+        )
+        sim_layout.addRow("Restart RNG seed:", self._refine_restart_seed)
+
+        # Symmetry-informed restarts: one extra Nelder-Mead per non-identity
+        # Laue group element.  Stacks on top of the N random restarts.
+        self._refine_symmetry_restarts = QCheckBox(
+            "Symmetry-informed restarts (one per Laue group element)"
+        )
+        self._refine_symmetry_restarts.setChecked(False)
+        self._refine_symmetry_restarts.setToolTip(
+            "When ticked, after the N random restarts run one additional "
+            "Nelder-Mead from each non-identity element of the crystal's "
+            "Laue group.  Defends against converging to the wrong symmetry-"
+            "equivalent of the true orientation.\n\n"
+            "Cost: adds (|Laue group| − 1) restarts on top of the N random "
+            "ones (e.g. +23 runs for cubic m-3m).  Total ≈ (N + 23) × max_iter."
+        )
+        sim_layout.addRow(self._refine_symmetry_restarts)
+
+        self._refine_laue_group = QComboBox()
+        # Labels mirror HREBSD.laue_elements ordering (1-indexed).
+        self._refine_laue_group.addItems([
+            "1: C1 (triclinic)",
+            "2: C2 (monoclinic)",
+            "3: C3 (trigonal-low)",
+            "4: C4 (tetragonal-low)",
+            "5: C6 (hexagonal-low)",
+            "6: D2 (orthorhombic)",
+            "7: D3 (trigonal-high)",
+            "8: D4 (tetragonal-high)",
+            "9: D6 (hexagonal-high)",
+            "10: T (cubic-low, m-3)",
+            "11: O (cubic-high, m-3m)",
+        ])
+        self._refine_laue_group.setCurrentIndex(10)   # default: cubic O (id=11)
+        self._refine_laue_group.setToolTip(
+            "Crystal Laue group used to enumerate symmetry-equivalent "
+            "orientations.  Cubic m-3m (11) covers most metals; pick the "
+            "one matching your sample.  Only used when symmetry-informed "
+            "restarts is enabled."
+        )
+        sim_layout.addRow("Laue group:", self._refine_laue_group)
 
         sim_layout.addRow(_note("── Simulated pattern preprocessing overrides ──"))
         sim_layout.addRow(_note(
@@ -2460,19 +2554,25 @@ class ReferencePatternPage(QWizardPage):
         _sim_lp = self._refine_sim_lp_sigma.value()
         _sim_g  = self._refine_sim_gamma.value()
         self._refine_worker = PcEulerRefineWorker(
-            up2_path            = up2_path,
-            pat_idx             = pat_idx,
-            processing_params   = p,
-            master_pattern_path = mp_path,
-            euler_angles_init   = euler_init,
-            pc_init             = pc_init,
-            sample_tilt_deg     = geom["tilt"],
-            detector_tilt_deg   = geom["det_tilt"],
-            max_iter            = self._refine_max_iter.value(),
-            save_dir            = save_dir,
-            sim_high_pass_sigma = _sim_hp if _sim_hp > 0.0 else None,
-            sim_low_pass_sigma  = _sim_lp if _sim_lp > 0.0 else None,
-            sim_gamma           = _sim_g  if _sim_g  > 0.0 else None,
+            up2_path               = up2_path,
+            pat_idx                = pat_idx,
+            processing_params      = p,
+            master_pattern_path    = mp_path,
+            euler_angles_init      = euler_init,
+            pc_init                = pc_init,
+            sample_tilt_deg        = geom["tilt"],
+            detector_tilt_deg      = geom["det_tilt"],
+            max_iter               = self._refine_max_iter.value(),
+            n_restarts             = self._refine_n_restarts.value(),
+            restart_rotvec_std_deg = self._refine_restart_rotvec_std.value(),
+            restart_pc_std         = self._refine_restart_pc_std.value(),
+            restart_seed           = self._refine_restart_seed.value(),
+            symmetry_restarts      = self._refine_symmetry_restarts.isChecked(),
+            laue_group_id          = self._refine_laue_group.currentIndex() + 1,
+            save_dir               = save_dir,
+            sim_high_pass_sigma    = _sim_hp if _sim_hp > 0.0 else None,
+            sim_low_pass_sigma     = _sim_lp if _sim_lp > 0.0 else None,
+            sim_gamma              = _sim_g  if _sim_g  > 0.0 else None,
         )
 
         def _on_log(msg):
