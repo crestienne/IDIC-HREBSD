@@ -698,6 +698,10 @@ class ROISelectionPage(QWizardPage):
         self._grain_norm            = None
         self._grain_discrete_colors = None
         self._roi_rects             = [None, None]
+        self._roi_mask              = None   # (rows, cols) bool, True = inside ROI
+        self._grain_boundary_mask   = None   # (rows, cols) bool, True = boundary pixel
+        # Track boundary overlays so we can wipe them before redrawing.
+        self._boundary_overlays     = {"ipf": None, "grain": None}
 
         # ── Grain segmentation group ──────────────────────────────────────────
         seg_group  = QGroupBox("Grain Segmentation  (optional)")
@@ -985,6 +989,52 @@ class ROISelectionPage(QWizardPage):
         self._seg_worker.log_signal.connect(self._seg_status.setText)
         self._seg_worker.start()
 
+    @staticmethod
+    def _compute_grain_boundary_mask(grain_ids):
+        """Return a (rows, cols) bool array where True marks any pixel that
+        sits on the edge of its grain (i.e. at least one 4-neighbour has a
+        different grain ID).  Matches segment.plot_ipf_with_grain_boundaries
+        boundary detection."""
+        if grain_ids is None:
+            return None
+        boundary = np.zeros(grain_ids.shape, dtype=bool)
+        h_diff = grain_ids[:-1, :] != grain_ids[1:, :]
+        v_diff = grain_ids[:, :-1] != grain_ids[:, 1:]
+        boundary[:-1, :] |= h_diff
+        boundary[1:,  :] |= h_diff
+        boundary[:, :-1] |= v_diff
+        boundary[:, 1:]  |= v_diff
+        return boundary
+
+    def _overlay_grain_boundaries(self, ax, canvas, key, restrict_mask=None,
+                                  color=(1.0, 1.0, 1.0), alpha=0.9):
+        """Paint the cached grain boundaries onto an axis as a translucent
+        RGBA overlay.  `restrict_mask` (optional bool array, same shape)
+        limits the overlay to pixels where the mask is True — used after
+        ROI selection so boundary lines don't show in whited-out areas."""
+        if self._grain_boundary_mask is None or not ax.get_visible():
+            return
+        # Remove any prior overlay so successive calls don't stack.
+        prev = self._boundary_overlays.get(key)
+        if prev is not None:
+            try:
+                prev.remove()
+            except Exception:
+                pass
+            self._boundary_overlays[key] = None
+
+        boundary = self._grain_boundary_mask
+        if restrict_mask is not None:
+            boundary = boundary & restrict_mask
+        if not boundary.any():
+            return
+
+        overlay = np.zeros((*boundary.shape, 4), dtype=np.float32)
+        overlay[boundary] = [color[0], color[1], color[2], alpha]
+        im = ax.imshow(overlay, origin="upper", interpolation="nearest", zorder=4)
+        self._boundary_overlays[key] = im
+        canvas.draw_idle()
+
     def _on_grain_click(self, event):
         """Click-handler for the grain ID map: shows which grain was clicked
         and (if the grain has a row in the side-panel legend) checks the
@@ -1073,11 +1123,16 @@ class ROISelectionPage(QWizardPage):
             )
             return
 
+        # Build the persistent ROI mask once — used to update both the grain
+        # map and the IPF map below, and exposed downstream via _roi_mask
+        # for any pipeline path that wants a per-pixel keep mask.
+        mask_keep = np.isin(self._grain_ids, selected)
+        self._roi_mask = mask_keep
+
         # Re-render the grain map: only selected grains keep their colour.
         if (self._grain_remapped is not None and
                 self._grain_discrete_colors is not None):
             import matplotlib.colors as _mcolors
-            mask_keep = np.isin(self._grain_ids, selected)
             masked_remap = np.ma.masked_where(~mask_keep, self._grain_remapped)
             highlight_lut = _mcolors.ListedColormap(
                 self._grain_discrete_colors, name="grain_selected"
@@ -1090,10 +1145,44 @@ class ROISelectionPage(QWizardPage):
                 interpolation="nearest", origin="upper",
             )
             self._grain_ax.axis("off")
+            # Re-paint boundaries on top, but only inside the ROI.
+            self._overlay_grain_boundaries(
+                self._grain_ax, self._grain_canvas, "grain",
+                restrict_mask=mask_keep, color=(0.0, 0.0, 0.0), alpha=0.85,
+            )
             self._grain_canvas.draw()
 
+        # Re-render the IPF map with the same ROI mask: ROI pixels keep
+        # their IPF colour, everything else becomes solid white.  Drops
+        # the prior black rectangle entirely.
+        if self._rgb_map is not None:
+            ipf_masked = self._rgb_map.copy()
+            # Whiten the outside-ROI pixels (and unassigned grain-0 pixels).
+            ipf_masked[~mask_keep] = 1.0
+            # Tidy any leftover rect on the IPF from a previous rect-ROI run.
+            if self._roi_rects[0] is not None:
+                try:
+                    self._roi_rects[0].remove()
+                except Exception:
+                    pass
+                self._roi_rects[0] = None
+            self._ipf_ax.clear()
+            self._ipf_ax.imshow(ipf_masked, origin="upper", interpolation="nearest")
+            label = self._dir_combo.currentText().split()[0]
+            self._ipf_ax.set_title(f"IPF Map  //  {label}  (ROI only)", fontsize=9)
+            self._ipf_ax.axis("off")
+            self._ipf_ax.set_visible(True)
+            # Boundaries inside the ROI only — drawn in white over the IPF.
+            self._overlay_grain_boundaries(
+                self._ipf_ax, self._ipf_canvas, "ipf",
+                restrict_mask=mask_keep, color=(1.0, 1.0, 1.0), alpha=0.9,
+            )
+            self._ipf_canvas.draw_idle()
+
         # Compute the union bbox so the downstream ROI math still has rows/cols.
-        rows_idx, cols_idx = np.where(np.isin(self._grain_ids, selected))
+        # We skip _update_roi_rects() — the rect overlay is meaningless when
+        # the IPF/grain views are already masked to the selection.
+        rows_idx, cols_idx = np.where(mask_keep)
         if rows_idx.size > 0:
             for sb in (self.roi_row_start, self.roi_row_stop,
                        self.roi_col_start, self.roi_col_stop):
@@ -1105,7 +1194,6 @@ class ROISelectionPage(QWizardPage):
             for sb in (self.roi_row_start, self.roi_row_stop,
                        self.roi_col_start, self.roi_col_stop):
                 sb.blockSignals(False)
-            self._update_roi_rects()
 
         # Cache and display.
         self._roi_selected_grain_ids = sorted(selected)
@@ -1240,6 +1328,24 @@ class ROISelectionPage(QWizardPage):
         self._populate_grain_checkbox_legend(legend_entries)
 
         self._grain_fig.tight_layout(pad=0.5)
+
+        # ── Grain boundary mask + overlay (whole scan, pre-ROI) ──────────
+        self._grain_boundary_mask = self._compute_grain_boundary_mask(grain_ids)
+        # Boundaries on the grain map: black on the coloured fills.
+        self._overlay_grain_boundaries(
+            self._grain_ax, self._grain_canvas, "grain",
+            restrict_mask=None, color=(0.0, 0.0, 0.0), alpha=0.85,
+        )
+        # Boundaries on the IPF map as well — keep the IPF colours intact
+        # (we no longer auto-mask discarded pixels) and just paint white
+        # boundary lines on top so grain edges are visible there too.
+        if self._rgb_map is not None and self._ipf_ax.get_visible():
+            # The IPF was rendered before segmentation; just stamp the
+            # overlay on top without clearing the axis.
+            self._overlay_grain_boundaries(
+                self._ipf_ax, self._ipf_canvas, "ipf",
+                restrict_mask=None, color=(1.0, 1.0, 1.0), alpha=0.9,
+            )
 
         # NOTE: the IPF map used to be redrawn here (masking discarded grain-0
         # pixels to black) after segmentation finished.  That auto-update has
@@ -1408,6 +1514,22 @@ class ROISelectionPage(QWizardPage):
 
     def _update_roi_rects(self):
         import matplotlib.patches as mpatches
+
+        # In grain-ROI mode the IPF and grain maps are masked to the
+        # selected grains — drawing a rectangle on top is misleading, so
+        # we suppress the overlay entirely.
+        if self._grain_radio.isChecked():
+            # Tidy any rects left over from a prior rect-ROI session.
+            for idx in (0, 1):
+                if self._roi_rects[idx] is not None:
+                    try:
+                        self._roi_rects[idx].remove()
+                    except Exception:
+                        pass
+                    self._roi_rects[idx] = None
+            self._ipf_canvas.draw_idle()
+            self._grain_canvas.draw_idle()
+            return
 
         axes_canvas = [
             (self._ipf_ax,   self._ipf_canvas,   0),
@@ -2072,6 +2194,66 @@ class ReferencePatternPage(QWizardPage):
         # it inherits the same width as the Reference Position group below.
         left_layout.addWidget(mode_group)
 
+        # ── Reference Pattern Count (Single / Multiple) ──────────────────────
+        # Orthogonal to the Real/Simulated toggle above.  "Multiple" routes
+        # through the existing per-grain (id=1) radio so all of the per-grain
+        # plumbing (grain_info_group, _auto_select_references, ref_pattern_set,
+        # get_params -> ref_mode="per_grain") keeps working unchanged.
+        count_group  = QGroupBox("Reference Pattern Count")
+        count_layout = QHBoxLayout()
+        self._count_switch = _ToggleSwitch(
+            left_label="Single",
+            right_label="Multiple",
+            parent=self,
+        )
+        self._count_switch.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self._count_switch.setToolTip(
+            "Single — one reference pattern for the whole ROI.\n"
+            "Multiple — one reference pattern per grain selected on Step 4.\n"
+            "Multiple requires a grain ROI selection on Step 4."
+        )
+        count_layout.addWidget(self._count_switch)
+        count_layout.addStretch()
+        count_group.setLayout(count_layout)
+        left_layout.addWidget(count_group)
+
+        # Wire the count switch through the existing _mode_grp by flipping
+        # the hidden _pergrain_radio when Multiple is on.  When the switch
+        # goes back to Single we re-assert whichever Real/Simulated radio
+        # was last active.
+        def _count_to_radio(multiple: bool):
+            if multiple:
+                # Refuse the switch if no grains were picked on Step 4.
+                wiz = self.wizard()
+                roi_page = getattr(wiz, "roi_page", None) if wiz else None
+                gids = (getattr(roi_page, "_roi_selected_grain_ids", None)
+                        if roi_page else None)
+                if not gids:
+                    QMessageBox.information(
+                        self, "No grain ROI",
+                        "Pick at least one grain on Step 4 (Grain ROI → "
+                        "Select Region of Interest) before enabling Multiple."
+                    )
+                    self._count_switch.blockSignals(True)
+                    self._count_switch.setChecked(False)
+                    self._count_switch.blockSignals(False)
+                    return
+                self._pergrain_radio.setChecked(True)
+            else:
+                # Revert to whichever Real/Simulated state the type-toggle says.
+                if self._mode_switch.isChecked():
+                    self._sim_radio.setChecked(True)
+                else:
+                    self._single_radio.setChecked(True)
+        self._count_switch.toggled.connect(_count_to_radio)
+
+        # When the user flips Real ↔ Simulated while in Multiple mode, we
+        # want the new selection to apply per-grain too.  No code needed —
+        # the user's count switch state is preserved and downstream mode
+        # already lives on the _pergrain_radio.
+
         # Single-reference position group
         self._pos_group  = QGroupBox("Reference Position")
         pos_layout = QFormLayout()
@@ -2495,9 +2677,22 @@ class ReferencePatternPage(QWizardPage):
     def showEvent(self, event):
         """If the IPF was rendered before the canvas had its real size
         (worker emitted faster than the page laid out), force a redraw
-        once the page is actually visible."""
+        once the page is actually visible.  Also re-applies the ROI mask
+        so revisits after a Step-4 grain selection catch up immediately."""
         super().showEvent(event)
         if self._ipf_rgb is not None and self._ipf_ax.get_visible():
+            self._ipf_ax.clear()
+            self._ipf_ax.imshow(
+                self._apply_roi_mask(self._ipf_rgb),
+                origin="upper", interpolation="nearest",
+            )
+            self._ipf_ax.axis("off")
+            self._overlay_step5_boundaries()
+            # Reinstate the active markers so they don't get wiped by the clear.
+            if self._single_radio.isChecked() or self._sim_radio.isChecked():
+                self._update_ref_marker()
+            else:
+                self._draw_grain_markers()
             self._ipf_canvas.draw_idle()
 
     # ── Mode switching ────────────────────────────────────────────────────────
@@ -2559,18 +2754,26 @@ class ReferencePatternPage(QWizardPage):
             # Fall back to mean if segmentation didn't store a KAM (e.g. older
             # cached run).  The UI hint also tells the user to re-segment.
             strategy = "mean"
+        # Restrict to the user's Step-4 grain selection when one exists, so
+        # "Multiple" reference mode lines up exactly with the ROI grains.
+        selected_gids = getattr(wiz.roi_page, "_roi_selected_grain_ids", None)
         self._ref_pattern_set = select_references(
             grain_ids, ang_data, geom["cols"],
             strategy=strategy,
             kam=kam,
             interior_erode=2,
+            selected_grain_ids=selected_gids if selected_gids else None,
         )
 
         n = len(self._ref_pattern_set)
         _strat_label = ("lowest KAM" if strategy == "kam_min"
                         else "closest to mean orientation")
+        _filter_note = (
+            f" (filtered to {len(selected_gids)} ROI grain{'s' if len(selected_gids) != 1 else ''})"
+            if selected_gids else ""
+        )
         self._grain_count_lbl.setText(
-            f"{n} grain{'s' if n != 1 else ''} found — one reference "
+            f"{n} grain{'s' if n != 1 else ''}{_filter_note} — one reference "
             f"auto-selected per grain ({_strat_label}, interior-filtered)."
         )
 
@@ -2615,6 +2818,48 @@ class ReferencePatternPage(QWizardPage):
     # NOTE: _draw_dialog_ipf used to mirror the page IPF onto the sim
     # dialog's embedded IPF; that dialog IPF is gone now.
 
+    def _apply_roi_mask(self, rgb_map):
+        """If the user picked grain ROIs on Step 4, whiten the non-ROI
+        pixels of an IPF RGB array so the Step-5 view mirrors Step 4.
+        Returns the (possibly modified) array — the caller is responsible
+        for passing it to imshow."""
+        wiz = self.wizard()
+        roi_page = getattr(wiz, "roi_page", None) if wiz else None
+        roi_mask = getattr(roi_page, "_roi_mask", None) if roi_page else None
+        if roi_mask is None or roi_mask.shape != rgb_map.shape[:2]:
+            return rgb_map
+        out = rgb_map.copy()
+        out[~roi_mask] = 1.0
+        return out
+
+    def _overlay_step5_boundaries(self):
+        """Paint the cached grain-boundary mask from Step 4 onto the
+        Step-5 IPF axis as a white translucent overlay.  Boundaries
+        outside the active ROI are suppressed."""
+        wiz = self.wizard()
+        roi_page = getattr(wiz, "roi_page", None) if wiz else None
+        boundary = getattr(roi_page, "_grain_boundary_mask", None) if roi_page else None
+        if boundary is None or not self._ipf_ax.get_visible():
+            return
+        roi_mask = getattr(roi_page, "_roi_mask", None) if roi_page else None
+        # Wipe any previous overlay on this axis (we tag it with .gid).
+        for im in list(self._ipf_ax.images):
+            if getattr(im, "_is_boundary_overlay", False):
+                try:
+                    im.remove()
+                except Exception:
+                    pass
+        bnd = boundary
+        if roi_mask is not None and roi_mask.shape == bnd.shape:
+            bnd = bnd & roi_mask
+        if not bnd.any():
+            return
+        overlay = np.zeros((*bnd.shape, 4), dtype=np.float32)
+        overlay[bnd] = [1.0, 1.0, 1.0, 0.9]
+        im = self._ipf_ax.imshow(overlay, origin="upper", interpolation="nearest", zorder=4)
+        im._is_boundary_overlay = True
+        self._ipf_canvas.draw_idle()
+
     def _on_ipf_done(self, rgb_map, error: str):
         print(f"[Step 4 IPF] _on_ipf_done fired — rgb_map shape="
               f"{None if rgb_map is None else rgb_map.shape}  error={'<none>' if not error else error[:120]}")
@@ -2624,8 +2869,9 @@ class ReferencePatternPage(QWizardPage):
         self._ipf_rgb = rgb_map
         self._ipf_ax.set_visible(True)
         self._ipf_ax.clear()
-        self._ipf_ax.imshow(rgb_map, origin="upper", interpolation="nearest")
+        self._ipf_ax.imshow(self._apply_roi_mask(rgb_map), origin="upper", interpolation="nearest")
         self._ipf_ax.axis("off")
+        self._overlay_step5_boundaries()
         try:
             self._ipf_fig.tight_layout(pad=0.5)
         except Exception as exc:
@@ -2652,6 +2898,26 @@ class ReferencePatternPage(QWizardPage):
         geom = wiz.geometry_page.get_params()
         col  = max(0, min(col, geom["cols"] - 1))
         row  = max(0, min(row, geom["rows"] - 1))
+
+        # If a Step-4 grain ROI is active and the clicked pixel falls
+        # outside it, warn the user with an opt-in "Set anyway" path.
+        roi_page = getattr(wiz, "roi_page", None) if wiz else None
+        roi_mask = getattr(roi_page, "_roi_mask", None) if roi_page else None
+        if roi_mask is not None and roi_mask.shape[0] > row and roi_mask.shape[1] > col:
+            if not bool(roi_mask[row, col]):
+                btn = QMessageBox.warning(
+                    self, "Reference outside ROI",
+                    f"The pixel you clicked (row={row}, col={col}) is outside "
+                    f"the grain ROI selected on Step 4.\n\n"
+                    f"Reference patterns are normally chosen inside the ROI "
+                    f"so the strain field is anchored to a pattern that "
+                    f"actually gets optimised.\n\n"
+                    f"Set the reference here anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if btn != QMessageBox.StandardButton.Yes:
+                    return
 
         if self._single_radio.isChecked() or self._sim_radio.isChecked():
             # Both real and simulated modes now write to the SAME spinboxes —

@@ -76,6 +76,7 @@ def select_references(
     strategy: str = "mean",
     kam: np.ndarray = None,
     interior_erode: int = 2,
+    selected_grain_ids: list = None,
 ) -> ReferencePatternSet:
     """For each grain label > 0, pick a representative reference pixel.
 
@@ -120,9 +121,18 @@ def select_references(
     eulers = ang_data.eulers   # (rows, cols, 3)
     pc     = ang_data.pc       # single PC for the whole scan
 
+    # If the caller passed an explicit list of grain IDs (e.g. the user's
+    # interactive Step 4 selection), only build entries for those grains.
+    if selected_grain_ids is not None:
+        _allowed = set(int(g) for g in selected_grain_ids if int(g) != 0)
+    else:
+        _allowed = None
+
     entries = []
     for gid in np.unique(grain_ids):
         if gid == 0:
+            continue
+        if _allowed is not None and int(gid) not in _allowed:
             continue
         grain_mask = (grain_ids == gid)
 
