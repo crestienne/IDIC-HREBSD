@@ -346,10 +346,48 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
     # 6. TS_inv per position
     TS_inv = delta_pc_to_TS(Δpc, pc_ref, patshape)   # (n_rows, n_cols, 3, 3)
 
-    # ── sanity check: at ref_position Δpc=0 so TS_inv must be identity ──
-    print(f"TS_inv at ref_position [{ref_row}, {ref_col}]:")
+    # ── debug block ────────────────────────────────────────────────────────
+    # Three classes of bug to make visible:
+    #   (a) anchor mismatch  → Δpc at ref_position != 0
+    #   (b) magnitude wrong  → corner Δpc orders-of-magnitude off
+    #   (c) sign wrong       → drift direction opposite of expected
+    print("─" * 68)
+    print("[PC correction debug]")
+    print(f"  scan_shape          : {scan_shape}")
+    print(f"  step_size_um        : {step_size_um}")
+    print(f"  pc_ref              : ({pc_ref[0]:.6f}, {pc_ref[1]:.6f}, {pc_ref[2]:.6f})")
+    print(f"  ref_position        : ({ref_row}, {ref_col})")
+    print(f"  patshape (H, W) px  : {patshape}")
+    print(f"  pixel_size_um       : {pixel_size_um}")
+    print(f"  sample / det tilt   : {sample_tilt_deg}° / {detector_tilt_deg}°")
+    print(f"  override supplied?  : {pc_grid_override is not None}")
+
+    Δpc_ref     = Δpc[ref_row, ref_col]
+    print(f"  Δpc @ ref_position  : ({Δpc_ref[0]:+.3e}, "
+          f"{Δpc_ref[1]:+.3e}, {Δpc_ref[2]:+.3e})  (expected ~0)")
+
+    corners = {
+        "(0, 0)"                              : Δpc[0, 0],
+        f"(0, {n_cols - 1})"                  : Δpc[0, n_cols - 1],
+        f"({n_rows - 1}, 0)"                  : Δpc[n_rows - 1, 0],
+        f"({n_rows - 1}, {n_cols - 1})"       : Δpc[n_rows - 1, n_cols - 1],
+    }
+    print("  Δpc at scan corners (xstar, ystar, zstar):")
+    for label, d in corners.items():
+        print(f"    {label:>14s} : "
+              f"({d[0]:+.3e}, {d[1]:+.3e}, {d[2]:+.3e})")
+
+    Δpc_abs = np.abs(Δpc)
+    print(f"  Δpc magnitudes (per-axis max across scan):")
+    print(f"    |Δxstar|max = {Δpc_abs[..., 0].max():.3e}  "
+          f"|Δystar|max = {Δpc_abs[..., 1].max():.3e}  "
+          f"|Δzstar|max = {Δpc_abs[..., 2].max():.3e}")
+    print("    (typical for SEM scans: 1e-4 .. 1e-3 of detector size)")
+
+    print(f"  TS_inv at ref_position [{ref_row}, {ref_col}] "
+          f"(expected: 3×3 identity):")
     print(np.round(TS_inv[ref_row, ref_col], 6))
-    print("(expected: 3×3 identity)")
+    print("─" * 68)
 
     W_corrected = TS_inv @ W
 
