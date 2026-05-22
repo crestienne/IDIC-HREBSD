@@ -300,41 +300,9 @@ def plot_all_results(results: dict, params: dict):
         save_path=None,   # not saved — TFBC-corrected version is saved below
     )
 
-    # ── Euler angle estimates from omega ─────────────────────────────────────
-    # Relative (skew-omega → Rodrigues → Bunge): small angles around 0°.
-    # Wrap to (-180, 180] so the divergent colourmap centres on 0.
-    if all(k in results for k in ("phi1_rel", "Phi_rel", "phi2_rel")):
-        phi1_rel, Phi_rel, phi2_rel = results["phi1_rel"], results["Phi_rel"], results["phi2_rel"]
-        phi1_rel_c = (phi1_rel + 180.0) % 360.0 - 180.0
-        phi2_rel_c = (phi2_rel + 180.0) % 360.0 - 180.0
-        Phi_rel_c  = (Phi_rel  + 180.0) % 360.0 - 180.0
-        plot_component_grid(
-            [
-                {"data": phi1_rel_c, "label": r"$\varphi_1$ (°, rel)", "vmin": -rv, "vmax": rv},
-                {"data": Phi_rel_c,  "label": r"$\Phi$ (°, rel)",      "vmin": -rv, "vmax": rv},
-                {"data": phi2_rel_c, "label": r"$\varphi_2$ (°, rel)", "vmin": -rv, "vmax": rv},
-            ],
-            cmap="coolwarm",
-            title="Euler angles — relative (from omega only)",
-            save_path=_sp("Euler_relative.png"),
-            figsize=(15, 5),
-        )
-
-    # Absolute (R_omega · R_Hough → Bunge): full Bunge range.
-    if all(k in results for k in ("phi1_abs", "Phi_abs", "phi2_abs")):
-        phi1_abs, Phi_abs, phi2_abs = results["phi1_abs"], results["Phi_abs"], results["phi2_abs"]
-        if not np.all(np.isnan(phi1_abs)):
-            plot_component_grid(
-                [
-                    {"data": phi1_abs, "label": r"$\varphi_1$ (°, abs)", "vmin": 0,   "vmax": 360, "cmap": "twilight"},
-                    {"data": Phi_abs,  "label": r"$\Phi$ (°, abs)",      "vmin": 0,   "vmax": 180, "cmap": "viridis"},
-                    {"data": phi2_abs, "label": r"$\varphi_2$ (°, abs)", "vmin": 0,   "vmax": 360, "cmap": "twilight"},
-                ],
-                cmap="viridis",
-                title="Euler angles — absolute ($R_\\omega \\cdot R_{Hough}$)",
-                save_path=_sp("Euler_absolute.png"),
-                figsize=(15, 5),
-            )
+    # Euler-angle plotting (relative and absolute) was removed from the
+    # results viewer — the fields are still saved in the .npy result file
+    # for downstream tooling that wants them.
 
     # ── Strain line maps ──────────────────────────────────────────────────────
     # Use physical distance (µm) along the line if step_size is provided;
