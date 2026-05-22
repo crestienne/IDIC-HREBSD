@@ -772,11 +772,15 @@ class ROISelectionPage(QWizardPage):
         mh.addStretch()
         roi_layout.addRow("ROI mode:", mode_w)
 
-        # Grain selector (hidden until segmentation done)
-        self._grain_roi_combo = QComboBox()
-        self._grain_roi_combo.setVisible(False)
-        self._grain_roi_combo.currentIndexChanged.connect(self._on_grain_roi_changed)
-        roi_layout.addRow("Grain:", self._grain_roi_combo)
+        # Grain dropdown was removed — grain ROI is now driven by clicking
+        # on the interactive grain ID map (see Grain ID Map dialog).
+        # `_populate_grain_combo`, `_on_grain_roi_changed`, `_apply_grain_roi`
+        # remain defined below but are no longer wired up.
+        self._roi_selected_grains_lbl = QLabel("Selected grains: (none)")
+        self._roi_selected_grains_lbl.setWordWrap(True)
+        self._roi_selected_grains_lbl.setStyleSheet("color: gray;")
+        self._roi_selected_grains_lbl.setVisible(False)
+        roi_layout.addRow("Grains:", self._roi_selected_grains_lbl)
 
         self.roi_row_start = QSpinBox(); self.roi_row_start.setRange(0, 9999); self.roi_row_start.setValue(0)
         self.roi_row_stop  = QSpinBox(); self.roi_row_stop.setRange(1, 10000); self.roi_row_stop.setValue(10)
@@ -849,9 +853,14 @@ class ROISelectionPage(QWizardPage):
         _bg = THEME["surface_bg"]
         self._grain_dialog = QDialog(self)
         self._grain_dialog.setWindowTitle("Grain ID Map")
-        self._grain_dialog.resize(700, 600)
-        grain_vbox = QVBoxLayout(self._grain_dialog)
-        grain_vbox.setContentsMargins(4, 4, 4, 4)
+        self._grain_dialog.resize(1000, 650)
+        grain_outer = QHBoxLayout(self._grain_dialog)
+        grain_outer.setContentsMargins(4, 4, 4, 4)
+
+        # Left side: canvas + status
+        grain_left = QWidget()
+        grain_vbox = QVBoxLayout(grain_left)
+        grain_vbox.setContentsMargins(0, 0, 0, 0)
 
         self._grain_fig = Figure(tight_layout=True, facecolor=_bg)
         self._grain_ax  = self._grain_fig.add_subplot(111)
@@ -868,6 +877,46 @@ class ROISelectionPage(QWizardPage):
 
         grain_vbox.addWidget(self._grain_canvas)
         grain_vbox.addWidget(self._grain_status)
+
+        # Right side: interactive checkbox legend + "Select ROI" button.
+        # Each grain row in the legend has a colour swatch + QCheckBox.
+        # Clicking a grain in the canvas auto-checks the matching row but
+        # never unchecks it (the user must use the checkbox itself for that).
+        grain_right = QWidget()
+        grain_right.setFixedWidth(260)
+        grain_right_layout = QVBoxLayout(grain_right)
+        grain_right_layout.setContentsMargins(8, 0, 0, 0)
+
+        grain_right_layout.addWidget(QLabel("<b>Grains (top 10 by size)</b>"))
+
+        self._grain_legend_scroll = QScrollArea()
+        self._grain_legend_scroll.setWidgetResizable(True)
+        self._grain_legend_container = QWidget()
+        self._grain_legend_vbox = QVBoxLayout(self._grain_legend_container)
+        self._grain_legend_vbox.setContentsMargins(2, 2, 2, 2)
+        self._grain_legend_vbox.addStretch()
+        self._grain_legend_scroll.setWidget(self._grain_legend_container)
+        grain_right_layout.addWidget(self._grain_legend_scroll, stretch=1)
+
+        self._select_roi_btn = QPushButton("Select Region of Interest")
+        self._select_roi_btn.setToolTip(
+            "Mask out every non-checked grain (whites them out) and load the "
+            "selected grain IDs into the main ROI sub-box."
+        )
+        self._select_roi_btn.clicked.connect(self._on_select_roi_clicked)
+        self._select_roi_btn.setEnabled(False)
+        grain_right_layout.addWidget(self._select_roi_btn)
+
+        grain_outer.addWidget(grain_left, stretch=2)
+        grain_outer.addWidget(grain_right)
+
+        # Per-grain checkbox cache + last computed ROI selection.
+        self._grain_checkboxes: dict[int, "QCheckBox"] = {}
+        self._roi_selected_grain_ids: list[int] = []
+
+        # Click-to-identify on the grain map — reports the grain ID + size of
+        # whatever pixel the user clicks via the grain dialog's status label.
+        self._grain_canvas.mpl_connect("button_press_event", self._on_grain_click)
 
         self._splitter.addWidget(ipf_panel)
 
@@ -935,6 +984,139 @@ class ROISelectionPage(QWizardPage):
         self._seg_worker.done_signal.connect(self._on_seg_done)
         self._seg_worker.log_signal.connect(self._seg_status.setText)
         self._seg_worker.start()
+
+    def _on_grain_click(self, event):
+        """Click-handler for the grain ID map: shows which grain was clicked
+        and (if the grain has a row in the side-panel legend) checks the
+        matching box.  Clicking the SAME grain a second time does NOT
+        uncheck — only manually toggling the QCheckBox does that."""
+        if self._grain_ids is None or event.inaxes is not self._grain_ax:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        rows, cols = self._grain_ids.shape
+        col = int(round(event.xdata))
+        row = int(round(event.ydata))
+        if not (0 <= row < rows and 0 <= col < cols):
+            return
+        gid = int(self._grain_ids[row, col])
+        if gid == 0:
+            self._grain_status.setText(
+                f"(row={row}, col={col}) — pixel was discarded "
+                f"(grain too small / unassigned)."
+            )
+            return
+        size = int(np.sum(self._grain_ids == gid))
+        chk = self._grain_checkboxes.get(gid)
+        if chk is not None:
+            if not chk.isChecked():
+                chk.setChecked(True)   # idempotent: never unchecks here
+            self._grain_status.setText(
+                f"(row={row}, col={col}) → Grain {gid}  ({size} px) — checked."
+            )
+        else:
+            self._grain_status.setText(
+                f"(row={row}, col={col}) → Grain {gid}  ({size} px) — "
+                f"not in top-10 legend, can't be selected."
+            )
+
+    def _populate_grain_checkbox_legend(self, legend_entries):
+        """Rebuild the side-panel checkbox legend from a list of
+        (grain_id, size_px, rgba_color) tuples."""
+        # Clear existing rows (everything except the trailing stretch).
+        while self._grain_legend_vbox.count() > 1:
+            item = self._grain_legend_vbox.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        self._grain_checkboxes.clear()
+
+        for gid, sz, col in legend_entries:
+            row_w = QWidget()
+            row_layout = QHBoxLayout(row_w)
+            row_layout.setContentsMargins(2, 2, 2, 2)
+
+            swatch = QLabel()
+            swatch.setFixedSize(18, 18)
+            rgb_hex = "#{:02x}{:02x}{:02x}".format(
+                int(col[0] * 255), int(col[1] * 255), int(col[2] * 255)
+            )
+            swatch.setStyleSheet(
+                f"background-color: {rgb_hex}; border: 1px solid #555;"
+            )
+            row_layout.addWidget(swatch)
+
+            chk = QCheckBox(f"Grain {gid}  ({sz} px)")
+            chk.setChecked(False)
+            self._grain_checkboxes[gid] = chk
+            row_layout.addWidget(chk, stretch=1)
+
+            # Insert before the trailing stretch so rows pack top-down.
+            self._grain_legend_vbox.insertWidget(
+                self._grain_legend_vbox.count() - 1, row_w
+            )
+
+        self._select_roi_btn.setEnabled(bool(legend_entries))
+
+    def _on_select_roi_clicked(self):
+        """Apply the user's grain selection: mask out unchecked grains on
+        the map (whites them), populate the main ROI sub-box with the
+        selected grain IDs, and set the ROI bbox spinboxes to the union
+        bounding box of the selected grains."""
+        selected = [gid for gid, chk in self._grain_checkboxes.items()
+                    if chk.isChecked()]
+        if not selected:
+            QMessageBox.information(
+                self, "No grains selected",
+                "Tick at least one grain (click on the map or the checkbox) "
+                "before selecting the region of interest."
+            )
+            return
+
+        # Re-render the grain map: only selected grains keep their colour.
+        if (self._grain_remapped is not None and
+                self._grain_discrete_colors is not None):
+            import matplotlib.colors as _mcolors
+            mask_keep = np.isin(self._grain_ids, selected)
+            masked_remap = np.ma.masked_where(~mask_keep, self._grain_remapped)
+            highlight_lut = _mcolors.ListedColormap(
+                self._grain_discrete_colors, name="grain_selected"
+            )
+            highlight_lut.set_bad(color="white")
+            self._grain_ax.clear()
+            self._grain_ax.set_facecolor("white")
+            self._grain_ax.imshow(
+                masked_remap, cmap=highlight_lut, norm=self._grain_norm,
+                interpolation="nearest", origin="upper",
+            )
+            self._grain_ax.axis("off")
+            self._grain_canvas.draw()
+
+        # Compute the union bbox so the downstream ROI math still has rows/cols.
+        rows_idx, cols_idx = np.where(np.isin(self._grain_ids, selected))
+        if rows_idx.size > 0:
+            for sb in (self.roi_row_start, self.roi_row_stop,
+                       self.roi_col_start, self.roi_col_stop):
+                sb.blockSignals(True)
+            self.roi_row_start.setValue(int(rows_idx.min()))
+            self.roi_row_stop.setValue(int(rows_idx.max()) + 1)
+            self.roi_col_start.setValue(int(cols_idx.min()))
+            self.roi_col_stop.setValue(int(cols_idx.max()) + 1)
+            for sb in (self.roi_row_start, self.roi_row_stop,
+                       self.roi_col_start, self.roi_col_stop):
+                sb.blockSignals(False)
+            self._update_roi_rects()
+
+        # Cache and display.
+        self._roi_selected_grain_ids = sorted(selected)
+        self._roi_selected_grains_lbl.setText(
+            "Selected grains: " + ", ".join(str(g) for g in sorted(selected))
+        )
+        self._roi_selected_grains_lbl.setStyleSheet("color: white;")
+        self._grain_status.setText(
+            f"ROI = {len(selected)} grain(s): "
+            f"{', '.join(str(g) for g in sorted(selected))}."
+        )
 
     def _show_kam_map(self):
         """Open a dialog displaying the KAM map from the latest segmentation."""
@@ -1031,63 +1213,49 @@ class ROISelectionPage(QWizardPage):
             _masked_remap, cmap=grain_lut, norm=grain_norm,
             interpolation="nearest", origin="upper",
         )
-        title = f"Grain IDs  ({n_surviving} grains"
-        if n_small:
-            title += f", {n_small} discarded)"
-        else:
-            title += ")"
-        self._grain_ax.set_title(title, fontsize=9)
         self._grain_ax.axis("off")
+        # Status line carries the count info (title was removed per UX).
+        _info = f"{n_surviving} grains"
+        if n_small:
+            _info += f"  •  {n_small} discarded"
+        _info += "  •  click a pixel to identify its grain"
+        self._grain_status.setText(_info)
 
 
-        # ── Grain legend ──────────────────────────────────────────────────────
-        # Colors derived from the same LUT so they are guaranteed to match.
-        # compact_idx is 1-based → grain_lut maps 1→color[0], 2→color[1], …
+        # ── Grain legend (Qt side panel with checkboxes) ─────────────────────
+        # Top-N grains by size get a row in the side panel.  Each row =
+        # colour swatch + checkbox.  The matplotlib in-figure legend that
+        # used to sit below the canvas was removed in favour of this
+        # interactive Qt legend.
         legend_entries = [
             (gid, int(sizes[gid]), discrete_colors[(ci - 1) % n_surviving])
             for ci, gid in enumerate(surviving_ids, start=1)
         ]
 
-        MAX_LEGEND = 30
+        MAX_LEGEND = 10
         if len(legend_entries) > MAX_LEGEND:
             legend_entries.sort(key=lambda x: -x[1])
             legend_entries = legend_entries[:MAX_LEGEND]
-            leg_title = f"Largest {MAX_LEGEND} grains"
-        else:
-            leg_title = "Grains"
 
-        legend_patches = [
-            mpatches.Patch(facecolor=col, edgecolor="white", linewidth=0.3,
-                           label=f"G{gid}  ({sz} px)")
-            for gid, sz, col in legend_entries
-        ]
-        # Cap at 4 columns so the legend never gets wider than the plot.
-        ncols = max(1, min(4, (len(legend_patches) + 7) // 8))
-        self._grain_ax.legend(
-            handles=legend_patches,
-            title=leg_title,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.04),
-            fontsize=6,
-            title_fontsize=7,
-            ncol=ncols,
-            framealpha=0.85,
-            handlelength=1.2,
-            handleheight=0.9,
-        )
+        self._populate_grain_checkbox_legend(legend_entries)
 
         self._grain_fig.tight_layout(pad=0.5)
 
-        if self._rgb_map is not None:
-            masked_rgb = self._rgb_map.copy()
-            masked_rgb[grain_ids == 0] = 0.0
-            self._ipf_ax.clear()
-            self._ipf_ax.imshow(masked_rgb, origin="upper", interpolation="nearest")
-            label = self._dir_combo.currentText().split()[0]
-            self._ipf_ax.set_title(f"IPF Map  //  {label}", fontsize=9)
-            self._ipf_ax.axis("off")
-            self._roi_rects[0] = None
-            self._ipf_canvas.draw()
+        # NOTE: the IPF map used to be redrawn here (masking discarded grain-0
+        # pixels to black) after segmentation finished.  That auto-update has
+        # been unwired — the IPF map stays as the user last saw it.  Code
+        # preserved for reference:
+        #
+        # if self._rgb_map is not None:
+        #     masked_rgb = self._rgb_map.copy()
+        #     masked_rgb[grain_ids == 0] = 0.0
+        #     self._ipf_ax.clear()
+        #     self._ipf_ax.imshow(masked_rgb, origin="upper", interpolation="nearest")
+        #     label = self._dir_combo.currentText().split()[0]
+        #     self._ipf_ax.set_title(f"IPF Map  //  {label}", fontsize=9)
+        #     self._ipf_ax.axis("off")
+        #     self._roi_rects[0] = None
+        #     self._ipf_canvas.draw()
 
         self._grain_dialog.show()
 
@@ -1101,7 +1269,9 @@ class ROISelectionPage(QWizardPage):
         )
         discard_note = f"  ({n_small} discarded — shown black)" if n_small else ""
         self._seg_status.setText(f"Done — {n_grains} grains segmented.{discard_note}")
-        self._populate_grain_combo()
+        # The grain-ROI dropdown was removed in favour of the interactive map.
+        # Just enable the "Grain" radio so the user can switch ROI mode.
+        self._grain_radio.setEnabled(self._grain_ids is not None and n_grains > 0)
 
     # ── IPF map ───────────────────────────────────────────────────────────────
 
@@ -1156,7 +1326,7 @@ class ROISelectionPage(QWizardPage):
         if not checked:
             return
         is_grain = (btn_id == 1)
-        self._grain_roi_combo.setVisible(is_grain)
+        self._roi_selected_grains_lbl.setVisible(is_grain)
         show_rect = not is_grain
         for w in (self._roi_row_w, self._roi_col_w, self._roi_note):
             w.setVisible(show_rect)
@@ -1166,11 +1336,16 @@ class ROISelectionPage(QWizardPage):
                 label_item = layout.itemAt(row, layout.ItemRole.LabelRole)
                 if label_item and label_item.widget():
                     label_item.widget().setVisible(show_rect)
-        if is_grain and self._grain_ids is not None:
-            self._on_grain_roi_changed(self._grain_roi_combo.currentIndex())
 
     def _populate_grain_combo(self):
-        """Rebuild the grain dropdown after segmentation finishes."""
+        """Rebuild the grain dropdown after segmentation finishes.
+
+        NOTE: the dropdown widget was removed — this method is kept for
+        reference but is no longer called by the segmentation pipeline.
+        Guards against ``self._grain_roi_combo`` missing so it doesn't crash
+        if anything else invokes it accidentally."""
+        if not hasattr(self, "_grain_roi_combo"):
+            return
         self._grain_roi_combo.blockSignals(True)
         self._grain_roi_combo.clear()
         if self._grain_ids is not None:
@@ -1187,6 +1362,9 @@ class ROISelectionPage(QWizardPage):
             self._on_grain_roi_changed(self._grain_roi_combo.currentIndex())
 
     def _on_grain_roi_changed(self, index: int):
+        # Dropdown removed — kept for reference, no longer wired.
+        if not hasattr(self, "_grain_roi_combo"):
+            return
         if index < 0 or self._grain_ids is None:
             return
         grain_id = self._grain_roi_combo.itemData(index)
@@ -1222,8 +1400,8 @@ class ROISelectionPage(QWizardPage):
                 masked, cmap=highlight_lut, norm=self._grain_norm,
                 interpolation="nearest", origin="upper",
             )
-            self._grain_ax.set_title(f"Grain {grain_id}  (selected)", fontsize=9)
             self._grain_ax.axis("off")
+            self._grain_status.setText(f"Showing only Grain {grain_id}.")
             self._grain_canvas.draw()
 
     # ── ROI rectangle ─────────────────────────────────────────────────────────
@@ -1269,9 +1447,12 @@ class ROISelectionPage(QWizardPage):
             ]
         }
         if self._grain_radio.isChecked():
-            gid = self._grain_roi_combo.currentData()
-            if gid is not None:
-                result["_roi_grain_id"] = gid
+            # Grain ROI is now driven by the interactive map.  Expose both
+            # the full list and the first id for backward compatibility
+            # with downstream code that expects a single grain.
+            if self._roi_selected_grain_ids:
+                result["_roi_grain_ids"] = list(self._roi_selected_grain_ids)
+                result["_roi_grain_id"]  = self._roi_selected_grain_ids[0]
         return result
 
 
