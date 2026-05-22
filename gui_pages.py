@@ -4,8 +4,8 @@ gui_pages.py — all QWizardPage subclasses for the DIC-HREBSD wizard.
   LoadFilesPage         — Step 1: select UP2, ANG, output folder
   ScanGeometryPage      — Step 2: tilts, PC, detector / scan geometry
   PatternProcessingPage — Step 3: frequency filters, mask, flip
-  ReferencePatternPage  — Step 4: pick and preview the reference pattern
-  ROISelectionPage      — Step 5: grain segmentation + region of interest
+  ROISelectionPage      — Step 4: grain segmentation + region of interest
+  ReferencePatternPage  — Step 5: pick and preview the reference pattern
   OptimizationRunPage   — Step 6: run the pipeline, launch vis dialog
 """
 
@@ -682,7 +682,7 @@ class ROISelectionPage(QWizardPage):
 
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 5 of 6 — Grain Segmentation & Region of Interest")
+        self.setTitle("Step 4 of 6 — Grain Segmentation & Region of Interest")
         self.setSubTitle(
             "Optionally segment grains, then define a region of interest. "
             "A yellow box marks the ROI on both maps."
@@ -726,15 +726,6 @@ class ROISelectionPage(QWizardPage):
         self._seg_btn = QPushButton("Run Segmentation")
         self._seg_btn.clicked.connect(self._start_segmentation)
 
-        self._kam_btn = QPushButton("Show KAM Map…")
-        self._kam_btn.setToolTip(
-            "Open a dialog showing the per-pixel kernel-average misorientation "
-            "(KAM) computed during segmentation.  Boundaries appear bright; "
-            "interior pixels of homogeneous grains are dark."
-        )
-        self._kam_btn.clicked.connect(self._show_kam_map)
-        self._kam_btn.setEnabled(False)   # enabled after segmentation finishes
-
         self._seg_status = QLabel(" ")
         self._seg_status.setStyleSheet("color: gray;")
         self._seg_status.setWordWrap(True)
@@ -743,7 +734,6 @@ class ROISelectionPage(QWizardPage):
         sbh = QHBoxLayout(seg_btn_row)
         sbh.setContentsMargins(0, 0, 0, 0)
         sbh.addWidget(self._seg_btn)
-        sbh.addWidget(self._kam_btn)
         sbh.addStretch()
 
         self._dir_combo = QComboBox()
@@ -818,6 +808,19 @@ class ROISelectionPage(QWizardPage):
         ipf_dir_layout.addRow("IPF direction:", dir_w)
         ipf_dir_group.setLayout(ipf_dir_layout)
 
+        # ── KAM map button (in its own group, sibling of IPF-direction) ──────
+        kam_group = QGroupBox("KAM Map")
+        kam_layout = QVBoxLayout()
+        self._kam_btn = QPushButton("Show KAM Map…")
+        self._kam_btn.setToolTip(
+            "Open a dialog with the per-pixel kernel-average misorientation "
+            "(KAM) computed during segmentation."
+        )
+        self._kam_btn.clicked.connect(self._show_kam_map)
+        self._kam_btn.setEnabled(False)   # enabled after segmentation finishes
+        kam_layout.addWidget(self._kam_btn)
+        kam_group.setLayout(kam_layout)
+
         # ── Map display (IPF left, grain map right) ───────────────────────────
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -875,7 +878,10 @@ class ROISelectionPage(QWizardPage):
 
         outer = QVBoxLayout()
         outer.addLayout(top_row)
-        outer.addWidget(ipf_dir_group)
+        ipf_dir_row = QHBoxLayout()
+        ipf_dir_row.addWidget(ipf_dir_group, stretch=1)
+        ipf_dir_row.addWidget(kam_group)
+        outer.addLayout(ipf_dir_row)
         outer.addWidget(self._splitter, stretch=1)
         self.setLayout(outer)
 
@@ -945,7 +951,6 @@ class ROISelectionPage(QWizardPage):
         fig = Figure(facecolor=_bg, tight_layout=True)
         ax  = fig.add_subplot(111)
         ax.set_facecolor(_bg)
-        # 98th-percentile clip so a few boundary outliers don't crush the dynamic range.
         finite = self._kam[np.isfinite(self._kam)]
         vmax = float(np.percentile(finite, 98)) if finite.size else 1.0
         im = ax.imshow(self._kam, cmap="inferno", origin="upper", vmin=0, vmax=vmax)
@@ -998,11 +1003,20 @@ class ROISelectionPage(QWizardPage):
         self._grain_remapped = remapped
         self._grain_remap    = remap
 
-        # Build a ListedColormap cycling tab20b for exactly n_surviving grains.
-        # BoundaryNorm gives each integer compact index a unique discrete color
-        # with no interpolation.
-        _base_colors = list(_plt.cm.tab20b.colors)   # 20 RGBA tuples
-        discrete_colors = [_base_colors[i % 20] for i in range(n_surviving)]
+        # Build a ListedColormap with one color per grain.  Uses HSV with
+        # golden-ratio hue stepping so adjacent grain IDs always get
+        # noticeably different hues (φ⁻¹ guarantees the hue sequence never
+        # clusters), and modulates saturation / value slightly so two grains
+        # that happen to land near the same hue still differ in brightness.
+        import colorsys
+        GOLDEN = 0.6180339887498949
+        discrete_colors = []
+        for i in range(n_surviving):
+            h = (i * GOLDEN) % 1.0
+            s = 0.75 if (i % 2 == 0) else 0.95
+            v = 0.95 if (i % 3 != 0) else 0.75
+            r, g, b = colorsys.hsv_to_rgb(h, s, v)
+            discrete_colors.append((r, g, b, 1.0))
         grain_lut  = _mcolors.ListedColormap(discrete_colors, name="grain_discrete")
         grain_lut.set_bad(color="black")
         grain_norm = _mcolors.BoundaryNorm(
@@ -1030,7 +1044,7 @@ class ROISelectionPage(QWizardPage):
         # Colors derived from the same LUT so they are guaranteed to match.
         # compact_idx is 1-based → grain_lut maps 1→color[0], 2→color[1], …
         legend_entries = [
-            (gid, int(sizes[gid]), discrete_colors[(ci - 1) % 20])
+            (gid, int(sizes[gid]), discrete_colors[(ci - 1) % n_surviving])
             for ci, gid in enumerate(surviving_ids, start=1)
         ]
 
@@ -1047,9 +1061,8 @@ class ROISelectionPage(QWizardPage):
                            label=f"G{gid}  ({sz} px)")
             for gid, sz, col in legend_entries
         ]
-        # Pack the legend wide-and-short so it fits below the plot without
-        # eating vertical space.
-        ncols = max(1, min(8, (len(legend_patches) + 1) // 2))
+        # Cap at 4 columns so the legend never gets wider than the plot.
+        ncols = max(1, min(4, (len(legend_patches) + 7) // 8))
         self._grain_ax.legend(
             handles=legend_patches,
             title=leg_title,
@@ -1791,7 +1804,7 @@ class ReferencePatternPage(QWizardPage):
 
     def __init__(self):
         super().__init__()
-        self.setTitle("Step 4 of 6 — Reference Pattern")
+        self.setTitle("Step 5 of 6 — Reference Pattern")
         self.setSubTitle(
             "Choose single-reference or per-grain mode, then click a point on "
             "the IPF map to set the reference pattern."
@@ -1912,7 +1925,7 @@ class ReferencePatternPage(QWizardPage):
         # Per-grain info group (hidden in single mode)
         self._grain_info_group  = QGroupBox("Per-Grain References")
         grain_info_layout = QVBoxLayout()
-        self._grain_count_lbl = QLabel("No segmentation found — proceed to Step 5 first.")
+        self._grain_count_lbl = QLabel("No segmentation found — proceed to Step 4 first.")
         self._grain_count_lbl.setWordWrap(True)
 
         # Selection strategy dropdown — "closest to mean orientation" (default)
@@ -2346,7 +2359,7 @@ class ReferencePatternPage(QWizardPage):
 
         if grain_ids is None:
             self._grain_count_lbl.setText(
-                "No segmentation found — proceed to Step 5 and run segmentation first."
+                "No segmentation found — proceed to Step 4 and run segmentation first."
             )
             self._ref_pattern_set = None
             self._grain_combo.clear()

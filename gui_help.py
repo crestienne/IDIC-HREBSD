@@ -57,7 +57,7 @@ HELP_CONTENT = [
 <p>Once a valid UP2 file is loaded, the first pattern in the stack is displayed
 here in greyscale. This is a quick sanity-check only — it confirms the file
 can be read and shows the raw (unprocessed) pattern. Actual pattern
-pre-processing is configured in Step 5.</p>
+pre-processing is configured in Step 3.</p>
 
 <hr>
 
@@ -79,25 +79,23 @@ determines which symmetry relations are applied during the strain calculation.</
  
  """},
 
-{"title": "Step 3 — Segmentation & ROI",   "body": """
- 
+{"title": "Step 3 — Pattern Processing",       "body": "<p>TO DO</p>"},
+
+{"title": "Step 4 — Segmentation & ROI",   "body": """
+
  <p> This sections enables regions of the scan to be selected for analysis.</p>
 <h3> Segmentation</h3>
 <p> There are two presets available for segmentation:  </p>
- 
+
 <li><b>Misorientation</b> — the minium misorientation angle (in degrees) that define the grain boundaries </li>
 <li><b>Minimum Grain Size </b> — the minimum number of pixels a grain must have to be considered </li>
- 
+
  <h3> ROI Selection</h3>
  <p> Enables sections of the scan to be selected for analysis. Eventually there will be more options than the rectangular selection tool, but for now this is the only option. </p>
- 
+
  """},
 
-
-
-
-    {"title": "Step 4 — Reference Pattern",        "body": "<p>TO DO</p>"},
-    {"title": "Step 5 — Pattern Processing",       "body": "<p>TO DO</p>"},
+    {"title": "Step 5 — Reference Pattern",        "body": "<p>TO DO</p>"},
     {"title": "Step 6 — Run",                      "body": "<p>TO DO</p>"},
     {"title": "Reference Frames",                  "body": "<p>TO DO</p>"},
     {"title": "Acknowledgements",                  "body": "<p>TO DO</p>"},
