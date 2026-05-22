@@ -255,6 +255,7 @@ def optimize(
     rotate_patterns_90: bool = False,
     progress_callback: Callable = None,
     debug_gradients: bool = False,
+    subset_shape_kind: str = "rect",
 ) -> np.ndarray:
     """Routine for running the inverse composition gauss-newton algorithm.
 
@@ -276,8 +277,16 @@ def optimize(
 
     ### Prepare the inputs ###
     # Check the crop fraction
-    if crop_fraction <= 0 or crop_fraction >= 1:
-        raise ValueError("Crop fraction must be between 0 and 1.")
+    if subset_shape_kind not in ("rect", "circle"):
+        raise ValueError(
+            f"subset_shape_kind must be 'rect' or 'circle', got {subset_shape_kind!r}."
+        )
+    if crop_fraction <= 0:
+        raise ValueError("Crop fraction must be greater than 0.")
+    if subset_shape_kind == "rect" and crop_fraction >= 1:
+        raise ValueError("Crop fraction must be < 1 in rect mode.")
+    if subset_shape_kind == "circle" and crop_fraction > 1:
+        raise ValueError("Crop fraction must be <= 1 in circle mode.")
     
     # Check convergence parameters
     if max_iter <= 0:
@@ -347,9 +356,30 @@ def optimize(
             ref_pat_override = np.rot90(ref_pat_override, k=1)
 
     h0 = (patshape[1] // 2, patshape[0] // 2)
-    crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
-    crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
-    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col)) #(y, x format)
+    # ── Subset / crop region ──────────────────────────────────────────────────
+    # "rect"   (default): centred rectangle with side = crop_fraction × patshape.
+    # "circle"          : centred disc of radius = crop_fraction × min(H,W)/2.
+    #                    The bounding-box square of that disc becomes
+    #                    `subset_slice`; the per-pixel disc mask is merged into
+    #                    the user-supplied `mask` below so IC-GN evaluates only
+    #                    pixels inside the circle.
+    subset_circle_mask = None
+    if subset_shape_kind == "circle":
+        _half = min(patshape) / 2.0
+        radius = int(round(crop_fraction * _half))
+        radius = max(1, min(radius, patshape[0] // 2, patshape[1] // 2))
+        cy = patshape[0] // 2
+        cx = patshape[1] // 2
+        crop_row = cy - radius
+        crop_col = cx - radius
+        subset_slice = (slice(crop_row, crop_row + 2 * radius),
+                        slice(crop_col, crop_col + 2 * radius))
+        yy, xx = np.ogrid[:2 * radius, :2 * radius]
+        subset_circle_mask = ((yy - radius) ** 2 + (xx - radius) ** 2) <= radius ** 2
+    else:
+        crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
+        crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
+        subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col))  # (y, x)
 
 
     ### Reference precompute ###
@@ -435,6 +465,19 @@ def optimize(
     #changing
     xi = np.array([X[subset_slice].flatten(), Y[subset_slice].flatten()]) #(y,x) ordering
     subset_shape = X[subset_slice].shape
+
+    # If the subset is a circle, intersect the user mask with the disc.  We
+    # build a full-pattern mask here (rather than only operating on the
+    # bounding-box slice) so the existing `mask[subset_slice]` code path
+    # below continues to work unchanged for both rect and circle subsets.
+    if subset_circle_mask is not None:
+        full = np.zeros(patshape, dtype=bool)
+        if mask is not None:
+            full[subset_slice] = mask[subset_slice] & subset_circle_mask
+        else:
+            full[subset_slice] = subset_circle_mask
+        mask = full
+        print(f"Subset shape: circle (radius={subset_circle_mask.shape[0]//2} px)")
 
     # Apply mask: exclude pixels that were zeroed out during preprocessing
     valid = None

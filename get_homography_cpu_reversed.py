@@ -103,6 +103,7 @@ def optimize_reversed(
     rotate_patterns_90: bool = False,
     progress_callback: Callable = None,
     debug_gradients: bool = False,
+    subset_shape_kind: str = "rect",
 ) -> np.ndarray:
     """Run IC-GN with reference and target roles swapped.
 
@@ -115,8 +116,16 @@ def optimize_reversed(
     """
 
     ### Prepare the inputs ###
-    if crop_fraction <= 0 or crop_fraction >= 1:
-        raise ValueError("Crop fraction must be between 0 and 1.")
+    if subset_shape_kind not in ("rect", "circle"):
+        raise ValueError(
+            f"subset_shape_kind must be 'rect' or 'circle', got {subset_shape_kind!r}."
+        )
+    if crop_fraction <= 0:
+        raise ValueError("Crop fraction must be greater than 0.")
+    if subset_shape_kind == "rect" and crop_fraction >= 1:
+        raise ValueError("Crop fraction must be < 1 in rect mode.")
+    if subset_shape_kind == "circle" and crop_fraction > 1:
+        raise ValueError("Crop fraction must be <= 1 in circle mode.")
     if max_iter <= 0:
         raise ValueError("Maximum number of iterations must be greater than 0.")
     if conv_tol <= 0:
@@ -181,9 +190,37 @@ def optimize_reversed(
             ref_pat_override = np.rot90(ref_pat_override, k=1)
 
     h0 = (patshape[1] // 2, patshape[0] // 2)
-    crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
-    crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
-    subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col))
+    # Mirror of get_homography_cpu.optimize's subset-shape branch.
+    subset_circle_mask = None
+    if subset_shape_kind == "circle":
+        _half  = min(patshape) / 2.0
+        radius = int(round(crop_fraction * _half))
+        radius = max(1, min(radius, patshape[0] // 2, patshape[1] // 2))
+        cy = patshape[0] // 2
+        cx = patshape[1] // 2
+        crop_row = cy - radius
+        crop_col = cx - radius
+        subset_slice = (slice(crop_row, crop_row + 2 * radius),
+                        slice(crop_col, crop_col + 2 * radius))
+        yy, xx = np.ogrid[:2 * radius, :2 * radius]
+        subset_circle_mask = ((yy - radius) ** 2 + (xx - radius) ** 2) <= radius ** 2
+        if mask is not None:
+            full = np.zeros(patshape, dtype=bool)
+            full[subset_slice] = mask[subset_slice] & subset_circle_mask
+            mask = full
+        else:
+            mask = np.zeros(patshape, dtype=bool)
+            mask[subset_slice] = subset_circle_mask
+        print(f"[reversed] Subset shape: circle (radius={radius} px)")
+        # Skip the rect-style crop_row/crop_col reassignment below.
+        _SKIP_RECT = True
+    else:
+        _SKIP_RECT = False
+
+    if not _SKIP_RECT:
+        crop_row = int(patshape[0] * (1 - crop_fraction) / 2)
+        crop_col = int(patshape[1] * (1 - crop_fraction) / 2)
+        subset_slice = (slice(crop_row, -crop_row), slice(crop_col, -crop_col))
 
     ### Constant target pattern (formerly the "reference") ###
     if use_simulated_reference:
