@@ -383,37 +383,9 @@ class PipelineWorker(QThread):
         def _2d(arr):
             return arr.reshape(eff_rows, eff_cols)
 
-        # ── Euler-angle estimates from omega ──────────────────────────────────
-        # Relative: omega itself exponentiated to a rotation, then Bunge.
-        # Absolute: compose with the per-pixel Hough Euler from the .ang file
-        #          → R_abs = R_omega · R_hough, then extract Bunge.
-        # NaN-safe: omega rows with NaNs propagate via skew_to_R; we mask.
-        nan_mask_eu = np.any(np.isnan(omega.reshape(-1, 9)), axis=1)
-        omega_safe = np.where(nan_mask_eu[:, None, None], 0.0, omega)
-        rel_deg = conversions.omega_array_to_bunge(omega_safe, degrees=True)
-        rel_deg[nan_mask_eu] = np.nan
-
-        # Per-pattern reference Euler from the .ang file at the same scan
-        # position.  Slice the ROI if one is active so shapes match.
-        eulers_full = ang_data.eulers           # (full_R, full_C, 3) in radians
-        full_R, full_C = ang_data.shape
-        roi_slice = p.get("roi_slice", None)
-        if roi_slice is not None:
-            eulers_roi = eulers_full[roi_slice[0], roi_slice[1], :]
-        else:
-            eulers_roi = eulers_full
-        eulers_flat = eulers_roi.reshape(-1, 3)
-        if eulers_flat.shape[0] != omega.shape[0]:
-            # Shape mismatch — fall back to broadcasting a single Euler so
-            # the abs panel still works.  This shouldn't happen in practice.
-            eulers_flat = np.tile(eulers_flat[:1], (omega.shape[0], 1))
-        R_omega = conversions.skew_to_rotation_matrix_array(omega_safe)
-        R_hough = conversions.bunge_to_rotation_matrix(
-            eulers_flat[:, 0], eulers_flat[:, 1], eulers_flat[:, 2], degrees=False
-        )
-        R_abs   = R_omega @ R_hough
-        abs_deg = conversions.rotation_matrix_array_to_bunge(R_abs, degrees=True)
-        abs_deg[nan_mask_eu] = np.nan
+        # Euler-angle outputs (phi1/Phi/phi2 rel & abs) were removed — they
+        # weren't being plotted any more, so the omega→Bunge conversion and
+        # R_omega·R_hough composition are no longer computed or saved.
 
         results_npy_path = os.path.join(folder, f"{comp}_results_{date}.npy")
         _results_dict = {
@@ -425,12 +397,6 @@ class PipelineWorker(QThread):
             "w13": _2d(np.degrees(omega[:, 0, 2])),
             "w21": _2d(np.degrees(omega[:, 1, 0])),
             "w32": _2d(np.degrees(omega[:, 2, 1])),
-            "phi1_rel": _2d(rel_deg[:, 0]),
-            "Phi_rel":  _2d(rel_deg[:, 1]),
-            "phi2_rel": _2d(rel_deg[:, 2]),
-            "phi1_abs": _2d(abs_deg[:, 0]),
-            "Phi_abs":  _2d(abs_deg[:, 1]),
-            "phi2_abs": _2d(abs_deg[:, 2]),
             "F":   F,
             "rows": np.array(eff_rows),
             "cols": np.array(eff_cols),
@@ -521,6 +487,7 @@ class PipelineWorker(QThread):
             perspective_regularization=p.get("perspective_regularization", 0.0),
             rotate_patterns_90=p.get("rotate_patterns_90", False),
             debug_gradients=False,
+            subset_shape_kind=("circle" if p.get("mask_type") == "circular" else "rect"),
         )
 
         # Drop ref_pat_override if it's None to avoid passing it to optimizers
@@ -632,6 +599,7 @@ class PipelineWorker(QThread):
             perspective_regularization = p.get("perspective_regularization", 0.0),
             rotate_patterns_90   = p.get("rotate_patterns_90", False),
             debug_gradients      = False,
+            subset_shape_kind    = ("circle" if p.get("mask_type") == "circular" else "rect"),
         )
 
         self.log_signal.emit("Starting optimization with simulated reference…")
@@ -719,6 +687,7 @@ class PipelineWorker(QThread):
             perspective_regularization=p.get("perspective_regularization", 0.0),
             rotate_patterns_90=p.get("rotate_patterns_90", False),
             debug_gradients=False,
+            subset_shape_kind=("circle" if p.get("mask_type") == "circular" else "rect"),
         )
 
         t_total = time.perf_counter()
@@ -828,6 +797,7 @@ class IPFWorker(QThread):
 
 class SegmentWorker(QThread):
     done_signal = pyqtSignal(object, object, str)  # grain_ids, kam, error_msg
+    log_signal  = pyqtSignal(str)                  # human-readable progress text
 
     def __init__(self, ang_path: str, patshape: tuple, threshold: float,
                  min_grain_size: int = 1, ang_data=None):
@@ -843,11 +813,29 @@ class SegmentWorker(QThread):
             import utilities, segment
             ang_data = self.ang_data
             if ang_data is None:
+                self.log_signal.emit("Loading .ang file…")
                 ang_data = utilities.read_ang(
                     self.ang_path, self.patshape, segment_grain_threshold=None
                 )
+            self.log_signal.emit(
+                f"Segmenting {ang_data.quats.shape[0]}×{ang_data.quats.shape[1]} scan "
+                f"(threshold={self.threshold}°, min_grain_size={self.min_grain_size})…"
+            )
+
+            def _on_progress(visited, total, n_grains, pct):
+                self.log_signal.emit(
+                    f"  {pct:5.1f}% — {visited:>9d}/{total} pixels, "
+                    f"{n_grains} grains so far"
+                )
+
             grain_ids, kam = segment.segment_grains(
-                ang_data.quats, self.threshold, self.min_grain_size, progress=False
+                ang_data.quats, self.threshold, self.min_grain_size,
+                progress=False,
+                progress_callback=_on_progress,
+            )
+            self.log_signal.emit(
+                f"Done — {int(grain_ids.max())} grains "
+                f"(after min_grain_size={self.min_grain_size} filter)."
             )
             self.done_signal.emit(grain_ids, kam, "")
         except Exception:
@@ -955,35 +943,8 @@ class VisWorker(QThread):
         def _2d(arr):
             return arr.reshape(rows, cols)
 
-        # ── Euler-angle estimates from omega (same logic as PipelineWorker) ──
-        nan_mask_eu = np.any(np.isnan(omega.reshape(-1, 9)), axis=1)
-        omega_safe  = np.where(nan_mask_eu[:, None, None], 0.0, omega)
-        rel_deg = conversions.omega_array_to_bunge(omega_safe, degrees=True)
-        rel_deg[nan_mask_eu] = np.nan
-
-        # Absolute orientation needs the per-pixel Hough Euler from the .ang
-        # file at the same ROI; if unavailable, the abs panel is filled with
-        # NaN so the plotter just skips it.
-        abs_deg = np.full_like(rel_deg, np.nan)
-        ang_path = p.get("ang_path", "")
-        if ang_path and os.path.isfile(ang_path):
-            ang_data = p.get("_ang_data") or utilities.read_ang(
-                ang_path, patshape, segment_grain_threshold=None
-            )
-            full_R, full_C = ang_data.shape
-            eu_2d = ang_data.eulers.reshape(full_R, full_C, 3)
-            roi_slice = p.get("roi_slice", None)
-            eu_roi = eu_2d[roi_slice[0], roi_slice[1], :] if roi_slice is not None else eu_2d
-            eulers_flat = eu_roi.reshape(-1, 3)
-            if eulers_flat.shape[0] == omega.shape[0]:
-                R_omega = conversions.skew_to_rotation_matrix_array(omega_safe)
-                R_hough = conversions.bunge_to_rotation_matrix(
-                    eulers_flat[:, 0], eulers_flat[:, 1], eulers_flat[:, 2],
-                    degrees=False,
-                )
-                R_abs = R_omega @ R_hough
-                abs_deg = conversions.rotation_matrix_array_to_bunge(R_abs, degrees=True)
-                abs_deg[nan_mask_eu] = np.nan
+        # Euler-angle outputs were removed — no longer plotted, computed,
+        # or saved.
 
         result = {
             "h11": _2d(h11), "h12": _2d(h12), "h13": _2d(h13),
@@ -995,12 +956,6 @@ class VisWorker(QThread):
             "w13": _2d(np.degrees(omega[:, 0, 2])),
             "w21": _2d(np.degrees(omega[:, 1, 0])),
             "w32": _2d(np.degrees(omega[:, 2, 1])),
-            "phi1_rel": _2d(rel_deg[:, 0]),
-            "Phi_rel":  _2d(rel_deg[:, 1]),
-            "phi2_rel": _2d(rel_deg[:, 2]),
-            "phi1_abs": _2d(abs_deg[:, 0]),
-            "Phi_abs":  _2d(abs_deg[:, 1]),
-            "phi2_abs": _2d(abs_deg[:, 2]),
             "rows": rows, "cols": cols,
             "F_flat": F,          # (N, 3, 3) — needed for TFBC polar decomposition
         }
@@ -1045,11 +1000,8 @@ class VisWorker(QThread):
         if "h_guess" in d:
             result["h_guess"] = d["h_guess"]
 
-        # Optional: Euler-angle estimates (saved by recent PipelineWorker runs).
-        for k in ("phi1_rel", "Phi_rel", "phi2_rel",
-                  "phi1_abs", "Phi_abs", "phi2_abs"):
-            if k in d:
-                result[k] = d[k]
+        # Older runs may have phi1/Phi/phi2 fields saved — ignore them, the
+        # results viewer no longer plots Euler angles.
 
         # Load base orientations from .ang if provided (needed for TFBC)
         ang_path = p.get("ang_path", "")

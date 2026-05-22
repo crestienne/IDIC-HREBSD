@@ -691,6 +691,7 @@ class ROISelectionPage(QWizardPage):
         self._seg_worker  = None
         self._rgb_map     = None
         self._grain_ids             = None
+        self._kam                   = None
         self._grain_remapped        = None
         self._grain_remap           = None
         self._grain_lut             = None
@@ -725,6 +726,15 @@ class ROISelectionPage(QWizardPage):
         self._seg_btn = QPushButton("Run Segmentation")
         self._seg_btn.clicked.connect(self._start_segmentation)
 
+        self._kam_btn = QPushButton("Show KAM Map…")
+        self._kam_btn.setToolTip(
+            "Open a dialog showing the per-pixel kernel-average misorientation "
+            "(KAM) computed during segmentation.  Boundaries appear bright; "
+            "interior pixels of homogeneous grains are dark."
+        )
+        self._kam_btn.clicked.connect(self._show_kam_map)
+        self._kam_btn.setEnabled(False)   # enabled after segmentation finishes
+
         self._seg_status = QLabel(" ")
         self._seg_status.setStyleSheet("color: gray;")
         self._seg_status.setWordWrap(True)
@@ -733,6 +743,7 @@ class ROISelectionPage(QWizardPage):
         sbh = QHBoxLayout(seg_btn_row)
         sbh.setContentsMargins(0, 0, 0, 0)
         sbh.addWidget(self._seg_btn)
+        sbh.addWidget(self._kam_btn)
         sbh.addStretch()
 
         self._dir_combo = QComboBox()
@@ -916,15 +927,52 @@ class ROISelectionPage(QWizardPage):
             ang_data=cached,
         )
         self._seg_worker.done_signal.connect(self._on_seg_done)
+        self._seg_worker.log_signal.connect(self._seg_status.setText)
         self._seg_worker.start()
 
-    def _on_seg_done(self, grain_ids, _kam, error: str):
+    def _show_kam_map(self):
+        """Open a dialog displaying the KAM map from the latest segmentation."""
+        if self._kam is None:
+            QMessageBox.information(self, "No KAM",
+                                    "Run segmentation first to produce a KAM map.")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Kernel Average Misorientation (KAM)")
+        dlg.resize(780, 640)
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        _bg = THEME["surface_bg"]
+        fig = Figure(facecolor=_bg, tight_layout=True)
+        ax  = fig.add_subplot(111)
+        ax.set_facecolor(_bg)
+        # 98th-percentile clip so a few boundary outliers don't crush the dynamic range.
+        finite = self._kam[np.isfinite(self._kam)]
+        vmax = float(np.percentile(finite, 98)) if finite.size else 1.0
+        im = ax.imshow(self._kam, cmap="inferno", origin="upper", vmin=0, vmax=vmax)
+        ax.set_title(
+            f"KAM (deg)  —  max shown = {vmax:.3f}°",
+            color="white", fontweight="bold",
+        )
+        ax.axis("off")
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.ax.tick_params(colors="white")
+        canvas = FigureCanvas(fig)
+        canvas.setStyleSheet(f"background-color: {_bg};")
+        layout = QVBoxLayout(dlg)
+        layout.addWidget(canvas)
+        dlg.show()
+        # Keep a reference so the dialog isn't garbage-collected immediately.
+        self._kam_dialog = dlg
+
+    def _on_seg_done(self, grain_ids, kam, error: str):
         self._seg_btn.setEnabled(True)
         if grain_ids is None:
             self._seg_status.setText(f"Error: {error}")
             return
 
         self._grain_ids = grain_ids
+        self._kam       = kam
+        self._kam_btn.setEnabled(True)
         # Count grains that survived the min-size filter (label > 0)
         sizes    = np.bincount(grain_ids.ravel())          # index 0 = grain-0 pixels
         n_grains = int(np.count_nonzero(sizes[1:]))        # valid grains only
@@ -999,12 +1047,14 @@ class ROISelectionPage(QWizardPage):
                            label=f"G{gid}  ({sz} px)")
             for gid, sz, col in legend_entries
         ]
-        ncols = max(1, min(4, (len(legend_patches) + 7) // 8))
+        # Pack the legend wide-and-short so it fits below the plot without
+        # eating vertical space.
+        ncols = max(1, min(8, (len(legend_patches) + 1) // 2))
         self._grain_ax.legend(
             handles=legend_patches,
             title=leg_title,
-            loc="lower left",
-            bbox_to_anchor=(0.0, -0.01),
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.04),
             fontsize=6,
             title_fontsize=7,
             ncol=ncols,
@@ -1864,9 +1914,34 @@ class ReferencePatternPage(QWizardPage):
         grain_info_layout = QVBoxLayout()
         self._grain_count_lbl = QLabel("No segmentation found — proceed to Step 5 first.")
         self._grain_count_lbl.setWordWrap(True)
+
+        # Selection strategy dropdown — "closest to mean orientation" (default)
+        # or "lowest KAM (most uniform)".  The KAM map comes from segmentation.
+        _strategy_row = QHBoxLayout()
+        _strategy_row.addWidget(QLabel("Pick reference by:"))
+        self._ref_strategy_combo = QComboBox()
+        self._ref_strategy_combo.addItems([
+            "Closest to mean orientation",
+            "Lowest KAM (most uniform)",
+        ])
+        self._ref_strategy_combo.setToolTip(
+            "How to choose the representative pixel within each grain.\n"
+            "• Closest to mean orientation — uses the arithmetic-mean quaternion.\n"
+            "• Lowest KAM — uses the in-grain kernel-average misorientation\n"
+            "  computed during segmentation.  Boundary pixels (high KAM) are\n"
+            "  excluded by the interior filter.\n\n"
+            "Both strategies erode each grain by 2 px before picking, to keep\n"
+            "the reference away from grain boundaries / scan edges."
+        )
+        self._ref_strategy_combo.currentIndexChanged.connect(
+            lambda _i: self._auto_select_references()
+        )
+        _strategy_row.addWidget(self._ref_strategy_combo, stretch=1)
+
         self._active_grain_lbl = QLabel("Active grain for override:")
         self._grain_combo = QComboBox()
         grain_info_layout.addWidget(self._grain_count_lbl)
+        grain_info_layout.addLayout(_strategy_row)
         grain_info_layout.addWidget(self._active_grain_lbl)
         grain_info_layout.addWidget(self._grain_combo)
         grain_info_layout.addWidget(_note(
@@ -2283,10 +2358,27 @@ class ReferencePatternPage(QWizardPage):
             return
 
         geom = wiz.geometry_page.get_params()
-        self._ref_pattern_set = select_references(grain_ids, ang_data, geom["cols"])
+        strategy = ("kam_min" if self._ref_strategy_combo.currentIndex() == 1
+                    else "mean")
+        kam = getattr(wiz.roi_page, "_kam", None)
+        if strategy == "kam_min" and kam is None:
+            # Fall back to mean if segmentation didn't store a KAM (e.g. older
+            # cached run).  The UI hint also tells the user to re-segment.
+            strategy = "mean"
+        self._ref_pattern_set = select_references(
+            grain_ids, ang_data, geom["cols"],
+            strategy=strategy,
+            kam=kam,
+            interior_erode=2,
+        )
 
         n = len(self._ref_pattern_set)
-        self._grain_count_lbl.setText(f"{n} grain{'s' if n != 1 else ''} found — one reference auto-selected per grain.")
+        _strat_label = ("lowest KAM" if strategy == "kam_min"
+                        else "closest to mean orientation")
+        self._grain_count_lbl.setText(
+            f"{n} grain{'s' if n != 1 else ''} found — one reference "
+            f"auto-selected per grain ({_strat_label}, interior-filtered)."
+        )
 
         self._grain_combo.blockSignals(True)
         self._grain_combo.clear()
@@ -3429,6 +3521,11 @@ class PatternProcessingPage(QWizardPage):
         for w in (self.high_pass, self.low_pass, self.gamma):
             w.valueChanged.connect(self._schedule_preview)
         self.mask_type.currentIndexChanged.connect(self._schedule_preview)
+        self.mask_type.currentIndexChanged.connect(self._update_crop_rect)
+        # Circle mode allows crop_fraction = 1.0 (full inscribed disc); rect
+        # mode must stay strictly below 1.  Swap the spinbox max each time
+        # the mask type changes.
+        self.mask_type.currentIndexChanged.connect(self._update_crop_fraction_max)
         self.flip_x.toggled.connect(self._schedule_preview)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -3560,8 +3657,18 @@ class PatternProcessingPage(QWizardPage):
         self._prev_status.setText("Preview error — check console.")
         print("\n--- Preview error ---\n" + msg)
 
+    def _update_crop_fraction_max(self):
+        """Allow crop_fraction up to 1.0 in circle mode; clamp to 0.99 in
+        rect mode (the IC-GN solver rejects rect with crop_fraction >= 1)."""
+        if self.mask_type.currentText() == "circular":
+            self.crop_fraction.setRange(0.1, 1.0)
+        else:
+            self.crop_fraction.setRange(0.1, 0.99)
+
     def _update_crop_rect(self):
-        """Draw / redraw the green crop-fraction outline on the filtered pattern."""
+        """Draw / redraw the green crop-fraction outline on the filtered
+        pattern.  Switches to a circle when mask_type is 'circular' so the
+        overlay matches the actual IC-GN evaluation region."""
         if not self._ax_proc.get_visible() or self._preview_shape is None:
             return
         import matplotlib.patches as _mp
@@ -3572,13 +3679,25 @@ class PatternProcessingPage(QWizardPage):
                 pass
             self._crop_rect = None
         H, W = self._preview_shape
-        cf       = self.crop_fraction.value()
-        margin_x = (1.0 - cf) / 2.0 * W
-        margin_y = (1.0 - cf) / 2.0 * H
-        self._crop_rect = _mp.Rectangle(
-            (margin_x - 0.5, margin_y - 0.5), cf * W, cf * H,
-            linewidth=1.5, edgecolor="#a6e3a1", facecolor="none", zorder=5,
-        )
+        cf = self.crop_fraction.value()
+        if self.mask_type.currentText() == "circular":
+            # Disc inscribed in the pattern, radius = cf * min(H, W) / 2,
+            # centered on the geometric image center — matches the IC-GN
+            # subset_shape_kind="circle" path in get_homography_cpu.optimize.
+            radius = cf * min(H, W) / 2.0
+            cx = W / 2.0 - 0.5
+            cy = H / 2.0 - 0.5
+            self._crop_rect = _mp.Circle(
+                (cx, cy), radius,
+                linewidth=1.5, edgecolor="#a6e3a1", facecolor="none", zorder=5,
+            )
+        else:
+            margin_x = (1.0 - cf) / 2.0 * W
+            margin_y = (1.0 - cf) / 2.0 * H
+            self._crop_rect = _mp.Rectangle(
+                (margin_x - 0.5, margin_y - 0.5), cf * W, cf * H,
+                linewidth=1.5, edgecolor="#a6e3a1", facecolor="none", zorder=5,
+            )
         self._ax_proc.add_patch(self._crop_rect)
         self._canvas_proc.draw_idle()
 
