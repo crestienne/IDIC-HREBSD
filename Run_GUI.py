@@ -23,9 +23,10 @@ import matplotlib
 matplotlib.use("QtAgg")
 
 from PyQt6.QtWidgets import QApplication, QWizard
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QPoint
+from PyQt6.QtGui import QFont, QPainter, QColor
 
-from gui_theme import apply_theme
+from gui_theme import apply_theme, THEME
 from gui_pages import (
     LoadFilesPage,
     ScanGeometryPage,
@@ -83,18 +84,48 @@ class HREBSDWizard(QWizard):
         self.addPage(self.files_page)
         self.addPage(self.geometry_page)
         self.addPage(self.processing_page)
-        self.addPage(self.reference_page)
         self.addPage(self.roi_page)
+        self.addPage(self.reference_page)
         self.addPage(self.run_page)
+
+        # The yellow progress strip (paintEvent) depends on the current
+        # page — force a repaint whenever the user navigates.
+        self.currentIdChanged.connect(lambda _id: self.update())
+
+    def paintEvent(self, event):
+        """Paint a thin yellow progress strip across the bottom of the
+        wizard, just above the button row.  The strip grows from 1/6 of
+        the wizard width on Step 1 to the full width on Step 6."""
+        super().paintEvent(event)
+        btn = self.button(QWizard.WizardButton.HelpButton)
+        if btn is None or not btn.isVisible():
+            return
+        ids = self.pageIds()
+        try:
+            step_index = ids.index(self.currentId())   # 0..5
+        except ValueError:
+            return
+        n_steps = max(len(ids), 1)
+        fraction = (step_index + 1) / n_steps
+        top = btn.mapTo(self, QPoint(0, 0)).y()
+        painter = QPainter(self)
+        painter.fillRect(
+            0, top - 18,
+            int(self.width() * fraction), 5,
+            QColor(THEME["accent"]),
+        )
 
     def _show_help(self):
         dlg = HelpDialog(current_page_index=self.currentId(), parent=self)
         dlg.exec()
 
-    def _on_custom_button_clicked(self, which):
-        """Dispatch for the custom buttons in the wizard's bottom row."""
-        if which == QWizard.WizardButton.CustomButton1:
-            self._launch_vis_dialog()
+    def _on_custom_button_clicked(self, _which):
+        """Dispatch for the custom buttons in the wizard's bottom row.
+        Only CustomButton1 (Open Results Viewer) is registered, so the
+        slot always launches the viewer.  We previously gated on
+        `which == QWizard.WizardButton.CustomButton1`, but the signal
+        delivers a plain int in PyQt6 and the equality silently failed."""
+        self._launch_vis_dialog()
 
     def _launch_vis_dialog(self):
         """Open the results viewer with an empty run-params dict — the
@@ -112,7 +143,7 @@ class HREBSDWizard(QWizard):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")   # Fusion gives QPalette full control on all platforms
-    app.setFont(QFont("Arial"))
+    app.setFont(QFont("Arial", 13))
     apply_theme(app)
     wiz = HREBSDWizard()
     wiz.show()

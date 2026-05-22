@@ -1910,14 +1910,64 @@ class ReferencePatternPage(QWizardPage):
         self._refine_btn = QPushButton("Refine PC && Euler…")
         self._refine_btn.setToolTip(
             "Open the PC / Euler refinement settings dialog.  From there, "
-            "tune the Nelder-Mead controls (restarts, σ, symmetry, sim "
-            "preprocessing overrides) and click Run Refinement."
+            "tune the Nelder-Mead controls (restarts, σ, symmetry) and "
+            "click Run Refinement."
         )
         self._refine_btn.clicked.connect(self._open_refine_settings)
         sim_layout.addRow("", self._refine_btn)
 
         # The Nelder-Mead controls used to live inline here; they now live
         # in a dedicated dialog built in _build_refine_settings_dialog().
+
+        # ── Simulated-pattern preprocessing overrides ───────────────────────
+        # Per-sim values that override the Step 3 real-pattern preprocessing
+        # at refinement time.  Lives here (not in the refine dialog) so the
+        # overrides apply to any sim generation path that reads them.
+        sim_pre_group = QGroupBox("Simulated Pattern Preprocessing Overrides")
+        sim_pre_form  = QFormLayout()
+        sim_pre_form.addRow(_note(
+            "Set each to 0 to inherit from the Step 3 real-pattern value.\n"
+            "Raise high-pass to strip sim background; lower gamma to reduce contrast."
+        ))
+
+        self._refine_sim_hp_sigma = QDoubleSpinBox()
+        self._refine_sim_hp_sigma.setRange(0.0, 200.0)
+        self._refine_sim_hp_sigma.setDecimals(1)
+        self._refine_sim_hp_sigma.setSingleStep(5.0)
+        self._refine_sim_hp_sigma.setValue(0.0)
+        self._refine_sim_hp_sigma.setSpecialValueText("Same as real")
+        self._refine_sim_hp_sigma.setToolTip(
+            "High-pass sigma for the simulated pattern only.\n"
+            "0 = use the Step 3 high-pass sigma unchanged."
+        )
+        sim_pre_form.addRow("Sim high-pass σ:", self._refine_sim_hp_sigma)
+
+        self._refine_sim_lp_sigma = QDoubleSpinBox()
+        self._refine_sim_lp_sigma.setRange(0.0, 20.0)
+        self._refine_sim_lp_sigma.setDecimals(2)
+        self._refine_sim_lp_sigma.setSingleStep(0.5)
+        self._refine_sim_lp_sigma.setValue(0.0)
+        self._refine_sim_lp_sigma.setSpecialValueText("Same as real")
+        self._refine_sim_lp_sigma.setToolTip(
+            "Low-pass (smoothing) sigma for the simulated pattern only.\n"
+            "0 = use the Step 3 low-pass sigma unchanged."
+        )
+        sim_pre_form.addRow("Sim low-pass σ:", self._refine_sim_lp_sigma)
+
+        self._refine_sim_gamma = QDoubleSpinBox()
+        self._refine_sim_gamma.setRange(0.0, 3.0)
+        self._refine_sim_gamma.setDecimals(3)
+        self._refine_sim_gamma.setSingleStep(0.05)
+        self._refine_sim_gamma.setValue(0.0)
+        self._refine_sim_gamma.setSpecialValueText("Same as real")
+        self._refine_sim_gamma.setToolTip(
+            "Gamma correction for the simulated pattern only.\n"
+            "0 = use the Step 3 gamma unchanged."
+        )
+        sim_pre_form.addRow("Sim gamma:", self._refine_sim_gamma)
+
+        sim_pre_group.setLayout(sim_pre_form)
+        sim_layout.addRow(sim_pre_group)
 
         # ── Pipeline-side reference-pattern tweaks (moved from Step 3) ──────
         # These three controls used to live on the Step 3 "Reference Pattern
@@ -2641,47 +2691,8 @@ class ReferencePatternPage(QWizardPage):
         )
         form.addRow("Laue group:", self._refine_laue_group)
 
-        form.addRow(_note("── Simulated pattern preprocessing overrides ──"))
-        form.addRow(_note(
-            "Set each to 0 to inherit from the Step 3 real-pattern value.\n"
-            "Raise high-pass to strip sim background; lower gamma to reduce contrast."
-        ))
-
-        self._refine_sim_hp_sigma = QDoubleSpinBox()
-        self._refine_sim_hp_sigma.setRange(0.0, 200.0)
-        self._refine_sim_hp_sigma.setDecimals(1)
-        self._refine_sim_hp_sigma.setSingleStep(5.0)
-        self._refine_sim_hp_sigma.setValue(0.0)
-        self._refine_sim_hp_sigma.setSpecialValueText("Same as real")
-        self._refine_sim_hp_sigma.setToolTip(
-            "High-pass sigma for the simulated pattern only.\n"
-            "0 = use the Step 3 high-pass sigma unchanged."
-        )
-        form.addRow("Sim high-pass σ:", self._refine_sim_hp_sigma)
-
-        self._refine_sim_lp_sigma = QDoubleSpinBox()
-        self._refine_sim_lp_sigma.setRange(0.0, 20.0)
-        self._refine_sim_lp_sigma.setDecimals(2)
-        self._refine_sim_lp_sigma.setSingleStep(0.5)
-        self._refine_sim_lp_sigma.setValue(0.0)
-        self._refine_sim_lp_sigma.setSpecialValueText("Same as real")
-        self._refine_sim_lp_sigma.setToolTip(
-            "Low-pass (smoothing) sigma for the simulated pattern only.\n"
-            "0 = use the Step 3 low-pass sigma unchanged."
-        )
-        form.addRow("Sim low-pass σ:", self._refine_sim_lp_sigma)
-
-        self._refine_sim_gamma = QDoubleSpinBox()
-        self._refine_sim_gamma.setRange(0.0, 3.0)
-        self._refine_sim_gamma.setDecimals(3)
-        self._refine_sim_gamma.setSingleStep(0.05)
-        self._refine_sim_gamma.setValue(0.0)
-        self._refine_sim_gamma.setSpecialValueText("Same as real")
-        self._refine_sim_gamma.setToolTip(
-            "Gamma correction for the simulated pattern only.\n"
-            "0 = use the Step 3 gamma unchanged."
-        )
-        form.addRow("Sim gamma:", self._refine_sim_gamma)
+        # Simulated-pattern preprocessing overrides used to live here; they
+        # now sit in their own sub-group in the Simulated-Reference dialog.
 
         self._refine_status = QLabel("")
         self._refine_status.setStyleSheet("color: gray; font-size: 11px;")
@@ -3614,9 +3625,16 @@ class OptimizationRunPage(QWizardPage):
         self.max_iter.setRange(1, 1000)
         self.max_iter.setValue(150)
 
+        # Detect the number of logical CPUs (threads) on this machine and
+        # cap the spinbox so the user can't oversubscribe.
+        _n_cpu = os.cpu_count() or 1
         self.n_jobs = QSpinBox()
-        self.n_jobs.setRange(-1, 64)
-        self.n_jobs.setValue(8)
+        self.n_jobs.setRange(1, _n_cpu)
+        self.n_jobs.setValue(min(8, _n_cpu))
+        self.n_jobs.setToolTip(
+            f"Number of CPU threads the pipeline can use in parallel.\n"
+            f"This machine reports {_n_cpu} logical CPU{'s' if _n_cpu != 1 else ''}."
+        )
 
         self.init_type = QComboBox()
         self.init_type.addItems(["none", "partial", "full"])
@@ -3641,7 +3659,7 @@ class OptimizationRunPage(QWizardPage):
         )
 
         opt_layout.addRow("Max iterations:", self.max_iter)
-        opt_layout.addRow("n_jobs:", self.n_jobs)
+        opt_layout.addRow("CPU threads:", self.n_jobs)
         opt_layout.addRow("Init type:", self.init_type)
         opt_layout.addRow("Optimizer:", self.optimizer_method)
         opt_group.setLayout(opt_layout)

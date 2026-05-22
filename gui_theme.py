@@ -130,6 +130,7 @@ def apply_theme(app) -> None:
             border-radius: 6px;
             margin-top: 10px;
             padding: 8px 6px 6px 6px;
+            font-size: 15px;
             font-weight: bold;
             color: {t["text"]};
         }}
@@ -139,6 +140,7 @@ def apply_theme(app) -> None:
             left: 10px;
             padding: 0 4px;
             color: {t["text"]};
+            font-weight: bold;
         }}
         QLabel {{
             color: {t["text"]};
