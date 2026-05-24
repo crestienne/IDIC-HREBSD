@@ -1094,9 +1094,9 @@ def bu2qu_emsoft(bu: Tensor) -> Tensor:
     """
     Bunge (ZXZ) Euler angles → quaternion, EMsoft P=+1 canonical form.
 
-    Matches the project's rotations.eu2qu (and ebsdtorch's bu2qu) so the
-    resulting quaternion is consistent with the rest of the DIC-HREBSD
-    pipeline (IPF maps, .ang reader, Results_plotting, etc.).
+    Matches the project's rotations.eu2qu so the resulting quaternion is
+    consistent with the rest of the DIC-HREBSD pipeline (IPF maps,
+    .ang reader, Results_plotting, etc.).
 
     NOTE: this is NOT the same as eu2qu(bu, "ZXZ") in this file — that
     chains through om2qu(eu2om(...)) and produces the conjugate (inverse
