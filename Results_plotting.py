@@ -268,37 +268,44 @@ def plot_all_results(results: dict, params: dict):
     def _sp(name):
         return os.path.join(save, name) if save else None
 
-    # ── Homography components ─────────────────────────────────────────────────
-    plot_component_grid(
-        [
-            {"data": h11, "label": r"$h_{11}$"}, {"data": h12, "label": r"$h_{12}$"},
-            {"data": h13, "label": r"$h_{13}$"}, {"data": h21, "label": r"$h_{21}$"},
-            {"data": h22, "label": r"$h_{22}$"}, {"data": h23, "label": r"$h_{23}$"},
-            {"data": h31, "label": r"$h_{31}$"}, {"data": h32, "label": r"$h_{32}$"},
-        ],
-        cmap="coolwarm",
-        title="Homography Components",
-        save_path=_sp("Homography_Components.png"),
-        fontsize=16,
-        fontweight="bold",
-    )
+    # The visualization dialog drives which optional plots run; the only
+    # figure that is *always* rendered is the post-TFBC strain & rotation
+    # grid further down.  Everything else is gated by params["plot_options"].
+    plot_opts = params.get("plot_options", {}) or {}
 
-    # ── Strain + rotation (coolwarm) — shown but saved only after TFBC ────────
-    plot_component_grid(
-        [
-            {"data": e11, "label": r"$\epsilon_{11}$",   "vmin": -sv, "vmax": sv},
-            {"data": e12, "label": r"$\epsilon_{12}$",   "vmin": -sv, "vmax": sv},
-            {"data": e13, "label": r"$\epsilon_{13}$",   "vmin": -sv, "vmax": sv},
-            {"data": w21, "label": r"$\omega_{21}$ (°)", "vmin": -rv, "vmax": rv},
-            {"data": e22, "label": r"$\epsilon_{22}$",   "vmin": -sv, "vmax": sv},
-            {"data": e23, "label": r"$\epsilon_{23}$",   "vmin": -sv, "vmax": sv},
-            {"data": w13, "label": r"$\omega_{13}$ (°)", "vmin": -rv, "vmax": rv},
-            {"data": w32, "label": r"$\omega_{32}$ (°)", "vmin": -rv, "vmax": rv},
-        ],
-        cmap="coolwarm",
-        title="Strain and Rotation Components (relative)",
-        save_path=None,   # not saved — TFBC-corrected version is saved below
-    )
+    # ── Homography components ─────────────────────────────────────────────────
+    if plot_opts.get("plot_homography_grid", False):
+        plot_component_grid(
+            [
+                {"data": h11, "label": r"$h_{11}$"}, {"data": h12, "label": r"$h_{12}$"},
+                {"data": h13, "label": r"$h_{13}$"}, {"data": h21, "label": r"$h_{21}$"},
+                {"data": h22, "label": r"$h_{22}$"}, {"data": h23, "label": r"$h_{23}$"},
+                {"data": h31, "label": r"$h_{31}$"}, {"data": h32, "label": r"$h_{32}$"},
+            ],
+            cmap="coolwarm",
+            title="Homography Components",
+            save_path=_sp("Homography_Components.png"),
+            fontsize=16,
+            fontweight="bold",
+        )
+
+    # ── Strain + rotation (coolwarm) — pre-TFBC ───────────────────────────────
+    if plot_opts.get("plot_relative_strain_grid", False):
+        plot_component_grid(
+            [
+                {"data": e11, "label": r"$\epsilon_{11}$",   "vmin": -sv, "vmax": sv},
+                {"data": e12, "label": r"$\epsilon_{12}$",   "vmin": -sv, "vmax": sv},
+                {"data": e13, "label": r"$\epsilon_{13}$",   "vmin": -sv, "vmax": sv},
+                {"data": w21, "label": r"$\omega_{21}$ (°)", "vmin": -rv, "vmax": rv},
+                {"data": e22, "label": r"$\epsilon_{22}$",   "vmin": -sv, "vmax": sv},
+                {"data": e23, "label": r"$\epsilon_{23}$",   "vmin": -sv, "vmax": sv},
+                {"data": w13, "label": r"$\omega_{13}$ (°)", "vmin": -rv, "vmax": rv},
+                {"data": w32, "label": r"$\omega_{32}$ (°)", "vmin": -rv, "vmax": rv},
+            ],
+            cmap="coolwarm",
+            title="Strain and Rotation Components (relative)",
+            save_path=None,
+        )
 
     # Euler-angle plotting (relative and absolute) was removed from the
     # results viewer — the fields are still saved in the .npy result file
@@ -321,62 +328,63 @@ def plot_all_results(results: dict, params: dict):
         fmt.set_powerlimits((-3, -3))
         ax.yaxis.set_major_formatter(fmt)
 
-    fig_lm, axes_lm = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+    if plot_opts.get("plot_strain_lines_before_tfbc", False):
+        fig_lm, axes_lm = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
 
-    normal_strains = [
-        (e11[r], r"$\epsilon_{11}$", "tab:blue"),
-        (e22[r], r"$\epsilon_{22}$", "tab:orange"),
-        (e33[r], r"$\epsilon_{33}$", "tab:green"),
-    ]
-    shear_strains = [
-        (e12[r], r"$\epsilon_{12}$", "tab:red"),
-        (e13[r], r"$\epsilon_{13}$", "tab:purple"),
-        (e23[r], r"$\epsilon_{23}$", "tab:brown"),
-    ]
-    rot_lines = [
-        (w13[r], r"$\omega_{13}$ (°)", "tab:blue"),
-        (w21[r], r"$\omega_{21}$ (°)", "tab:orange"),
-        (w32[r], r"$\omega_{32}$ (°)", "tab:green"),
-    ]
+        normal_strains = [
+            (e11[r], r"$\epsilon_{11}$", "tab:blue"),
+            (e22[r], r"$\epsilon_{22}$", "tab:orange"),
+            (e33[r], r"$\epsilon_{33}$", "tab:green"),
+        ]
+        shear_strains = [
+            (e12[r], r"$\epsilon_{12}$", "tab:red"),
+            (e13[r], r"$\epsilon_{13}$", "tab:purple"),
+            (e23[r], r"$\epsilon_{23}$", "tab:brown"),
+        ]
+        rot_lines = [
+            (w13[r], r"$\omega_{13}$ (°)", "tab:blue"),
+            (w21[r], r"$\omega_{21}$ (°)", "tab:orange"),
+            (w32[r], r"$\omega_{32}$ (°)", "tab:green"),
+        ]
 
-    for data, label, color in normal_strains:
-        axes_lm[0].plot(x_pos, data, label=label, linewidth=1.5, color=color)
-    axes_lm[0].set_ylim(-20e-3, 20e-3)
-    _sci_fmt(axes_lm[0])
-    axes_lm[0].set_ylabel("Strain")
-    axes_lm[0].set_title(f"Normal strains — sample frame, deviatoric (before TFBC) — row {r}")
-    axes_lm[0].axhline(0, color="k", linewidth=0.6, linestyle="--")
-    axes_lm[0].legend(fontsize=11)
-    axes_lm[0].grid(True, linestyle="--", alpha=0.4)
+        for data, label, color in normal_strains:
+            axes_lm[0].plot(x_pos, data, label=label, linewidth=1.5, color=color)
+        axes_lm[0].set_ylim(-20e-3, 20e-3)
+        _sci_fmt(axes_lm[0])
+        axes_lm[0].set_ylabel("Strain")
+        axes_lm[0].set_title(f"Normal strains — sample frame, deviatoric (before TFBC) — row {r}")
+        axes_lm[0].axhline(0, color="k", linewidth=0.6, linestyle="--")
+        axes_lm[0].legend(fontsize=11)
+        axes_lm[0].grid(True, linestyle="--", alpha=0.4)
 
-    for data, label, color in shear_strains:
-        axes_lm[1].plot(x_pos, data, label=label, linewidth=1.5, color=color)
-    axes_lm[1].set_ylim(-20e-3, 20e-3)
-    _sci_fmt(axes_lm[1])
-    axes_lm[1].set_ylabel("Shear strain")
-    axes_lm[1].set_title(f"Shear strains — sample frame, deviatoric (before TFBC) — row {r}")
-    axes_lm[1].axhline(0, color="k", linewidth=0.6, linestyle="--")
-    axes_lm[1].legend(fontsize=11)
-    axes_lm[1].grid(True, linestyle="--", alpha=0.4)
+        for data, label, color in shear_strains:
+            axes_lm[1].plot(x_pos, data, label=label, linewidth=1.5, color=color)
+        axes_lm[1].set_ylim(-20e-3, 20e-3)
+        _sci_fmt(axes_lm[1])
+        axes_lm[1].set_ylabel("Shear strain")
+        axes_lm[1].set_title(f"Shear strains — sample frame, deviatoric (before TFBC) — row {r}")
+        axes_lm[1].axhline(0, color="k", linewidth=0.6, linestyle="--")
+        axes_lm[1].legend(fontsize=11)
+        axes_lm[1].grid(True, linestyle="--", alpha=0.4)
 
-    for data, label, color in rot_lines:
-        axes_lm[2].plot(x_pos, data, label=label, linewidth=1.5, color=color)
-    axes_lm[2].set_ylabel("Rotation (°)")
-    axes_lm[2].set_xlabel(x_axis_label)
-    axes_lm[2].set_title(f"Lattice rotations — sample frame — row {r}")
-    axes_lm[2].axhline(0, color="k", linewidth=0.6, linestyle="--")
-    axes_lm[2].legend(fontsize=11)
-    axes_lm[2].grid(True, linestyle="--", alpha=0.4)
+        for data, label, color in rot_lines:
+            axes_lm[2].plot(x_pos, data, label=label, linewidth=1.5, color=color)
+        axes_lm[2].set_ylabel("Rotation (°)")
+        axes_lm[2].set_xlabel(x_axis_label)
+        axes_lm[2].set_title(f"Lattice rotations — sample frame — row {r}")
+        axes_lm[2].axhline(0, color="k", linewidth=0.6, linestyle="--")
+        axes_lm[2].legend(fontsize=11)
+        axes_lm[2].grid(True, linestyle="--", alpha=0.4)
 
-    fig_lm.suptitle(
-        f"Strain line scan — sample frame, deviatoric (before TFBC) — row {r}",
-        fontsize=13, fontweight="bold",
-    )
-    plt.tight_layout()
-    sp = _sp("Strain_linemap.png")
-    if sp:
-        plt.savefig(sp, dpi=200, bbox_inches="tight")
-    plt.show(block=False)
+        fig_lm.suptitle(
+            f"Strain line scan — sample frame, deviatoric (before TFBC) — row {r}",
+            fontsize=13, fontweight="bold",
+        )
+        plt.tight_layout()
+        sp = _sp("Strain_linemap.png")
+        if sp:
+            plt.savefig(sp, dpi=200, bbox_inches="tight")
+        plt.show(block=False)
 
     # ── Detector-frame line scan (always shown, before any other processing) ─
     # Recompute ε / ω in the detector frame *directly* from the saved
@@ -434,58 +442,59 @@ def plot_all_results(results: dict, params: dict):
     e_det_row, omega_det_row_rad = _conv.F2strain(F_row)             # both (cols, 3, 3)
     omega_det_row                = np.degrees(omega_det_row_rad)     # to degrees for display
 
-    fig_pre, axes_pre = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+    if plot_opts.get("plot_detector_frame_lines", False):
+        fig_pre, axes_pre = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
 
-    for arr, lbl, color in [
-        (e_det_row[:, 0, 0], r"$\epsilon_{11}^{det}$", "tab:blue"),
-        (e_det_row[:, 1, 1], r"$\epsilon_{22}^{det}$", "tab:orange"),
-        (e_det_row[:, 2, 2], r"$\epsilon_{33}^{det}$", "tab:green"),
-    ]:
-        axes_pre[0].plot(x_pos, arr, label=lbl, linewidth=1.5, color=color)
-    axes_pre[0].set_ylim(-20e-3, 20e-3)
-    _sci_fmt(axes_pre[0])
-    axes_pre[0].set_ylabel("Strain")
-    axes_pre[0].set_title(f"Normal strains — detector frame (from h2F·F2strain, no rotation) — row {r}")
-    axes_pre[0].axhline(0, color="k", linewidth=0.6, linestyle="--")
-    axes_pre[0].legend(fontsize=11)
-    axes_pre[0].grid(True, linestyle="--", alpha=0.4)
+        for arr, lbl, color in [
+            (e_det_row[:, 0, 0], r"$\epsilon_{11}^{det}$", "tab:blue"),
+            (e_det_row[:, 1, 1], r"$\epsilon_{22}^{det}$", "tab:orange"),
+            (e_det_row[:, 2, 2], r"$\epsilon_{33}^{det}$", "tab:green"),
+        ]:
+            axes_pre[0].plot(x_pos, arr, label=lbl, linewidth=1.5, color=color)
+        axes_pre[0].set_ylim(-20e-3, 20e-3)
+        _sci_fmt(axes_pre[0])
+        axes_pre[0].set_ylabel("Strain")
+        axes_pre[0].set_title(f"Normal strains — detector frame (from h2F·F2strain, no rotation) — row {r}")
+        axes_pre[0].axhline(0, color="k", linewidth=0.6, linestyle="--")
+        axes_pre[0].legend(fontsize=11)
+        axes_pre[0].grid(True, linestyle="--", alpha=0.4)
 
-    for arr, lbl, color in [
-        (e_det_row[:, 0, 1], r"$\epsilon_{12}^{det}$", "tab:red"),
-        (e_det_row[:, 0, 2], r"$\epsilon_{13}^{det}$", "tab:purple"),
-        (e_det_row[:, 1, 2], r"$\epsilon_{23}^{det}$", "tab:brown"),
-    ]:
-        axes_pre[1].plot(x_pos, arr, label=lbl, linewidth=1.5, color=color)
-    axes_pre[1].set_ylim(-20e-3, 20e-3)
-    _sci_fmt(axes_pre[1])
-    axes_pre[1].set_ylabel("Shear strain")
-    axes_pre[1].set_title(f"Shear strains — detector frame (from h2F·F2strain, no rotation) — row {r}")
-    axes_pre[1].axhline(0, color="k", linewidth=0.6, linestyle="--")
-    axes_pre[1].legend(fontsize=11)
-    axes_pre[1].grid(True, linestyle="--", alpha=0.4)
+        for arr, lbl, color in [
+            (e_det_row[:, 0, 1], r"$\epsilon_{12}^{det}$", "tab:red"),
+            (e_det_row[:, 0, 2], r"$\epsilon_{13}^{det}$", "tab:purple"),
+            (e_det_row[:, 1, 2], r"$\epsilon_{23}^{det}$", "tab:brown"),
+        ]:
+            axes_pre[1].plot(x_pos, arr, label=lbl, linewidth=1.5, color=color)
+        axes_pre[1].set_ylim(-20e-3, 20e-3)
+        _sci_fmt(axes_pre[1])
+        axes_pre[1].set_ylabel("Shear strain")
+        axes_pre[1].set_title(f"Shear strains — detector frame (from h2F·F2strain, no rotation) — row {r}")
+        axes_pre[1].axhline(0, color="k", linewidth=0.6, linestyle="--")
+        axes_pre[1].legend(fontsize=11)
+        axes_pre[1].grid(True, linestyle="--", alpha=0.4)
 
-    for arr, lbl, color in [
-        (omega_det_row[:, 0, 2], r"$\omega_{13}^{det}$ (°)", "tab:blue"),
-        (omega_det_row[:, 1, 0], r"$\omega_{21}^{det}$ (°)", "tab:orange"),
-        (omega_det_row[:, 2, 1], r"$\omega_{32}^{det}$ (°)", "tab:green"),
-    ]:
-        axes_pre[2].plot(x_pos, arr, label=lbl, linewidth=1.5, color=color)
-    axes_pre[2].set_ylabel("Rotation (°)")
-    axes_pre[2].set_xlabel(x_axis_label)
-    axes_pre[2].set_title(f"Lattice rotations — detector frame (from h2F·F2strain, no rotation) — row {r}")
-    axes_pre[2].axhline(0, color="k", linewidth=0.6, linestyle="--")
-    axes_pre[2].legend(fontsize=11)
-    axes_pre[2].grid(True, linestyle="--", alpha=0.4)
+        for arr, lbl, color in [
+            (omega_det_row[:, 0, 2], r"$\omega_{13}^{det}$ (°)", "tab:blue"),
+            (omega_det_row[:, 1, 0], r"$\omega_{21}^{det}$ (°)", "tab:orange"),
+            (omega_det_row[:, 2, 1], r"$\omega_{32}^{det}$ (°)", "tab:green"),
+        ]:
+            axes_pre[2].plot(x_pos, arr, label=lbl, linewidth=1.5, color=color)
+        axes_pre[2].set_ylabel("Rotation (°)")
+        axes_pre[2].set_xlabel(x_axis_label)
+        axes_pre[2].set_title(f"Lattice rotations — detector frame (from h2F·F2strain, no rotation) — row {r}")
+        axes_pre[2].axhline(0, color="k", linewidth=0.6, linestyle="--")
+        axes_pre[2].legend(fontsize=11)
+        axes_pre[2].grid(True, linestyle="--", alpha=0.4)
 
-    fig_pre.suptitle(
-        f"Strain line scan — DETECTOR FRAME (from h2F·F2strain, no rotation applied) — row {r}",
-        fontsize=13, fontweight="bold",
-    )
-    plt.tight_layout()
-    sp_pre = _sp("Strain_linemap_detector_frame_raw.png")
-    if sp_pre:
-        plt.savefig(sp_pre, dpi=200, bbox_inches="tight")
-    plt.show(block=False)
+        fig_pre.suptitle(
+            f"Strain line scan — DETECTOR FRAME (from h2F·F2strain, no rotation applied) — row {r}",
+            fontsize=13, fontweight="bold",
+        )
+        plt.tight_layout()
+        sp_pre = _sp("Strain_linemap_detector_frame_raw.png")
+        if sp_pre:
+            plt.savefig(sp_pre, dpi=200, bbox_inches="tight")
+        plt.show(block=False)
 
     # ── Initial-guess strain line scan (FMT-FCC h_guess, pre-IC-GN refine) ───
     # Same h2F → F2strain pipeline as the detector-frame line scan above, but
@@ -495,7 +504,7 @@ def plot_all_results(results: dict, params: dict):
     # into it.  If h_guess is unavailable (run without init guess, or older
     # results.npy file), this section is skipped silently.
     h_guess_2d = results.get("h_guess", None)
-    if h_guess_2d is not None:
+    if h_guess_2d is not None and plot_opts.get("plot_initial_guess_lines", False):
         h_guess_row = h_guess_2d[r].reshape(-1, 8).astype(np.float64)   # (cols, 8)
         F_guess_row                          = _conv.h2F(h_guess_row, xo_pre)
         e_guess_row, omega_guess_row_rad     = _conv.F2strain(F_guess_row)
@@ -635,26 +644,27 @@ def plot_all_results(results: dict, params: dict):
         # Tetragonal strain map: ε_T = ε_33 − (ε_11 + ε_22)/2 (centered on 0)
         et_mean = float(tetragonal_strain.mean())
         et_std  = float(tetragonal_strain.std())
-        et_lim  = float(np.nanpercentile(np.abs(tetragonal_strain), 98))
-        if et_lim == 0:
-            et_lim = 1e-6
-        fig_et, ax_et = plt.subplots(figsize=(8, 4))
-        im_et = ax_et.imshow(tetragonal_strain, cmap="RdBu_r",
-                             vmin=-et_lim, vmax=+et_lim)
-        cb_et = fig_et.colorbar(im_et, ax=ax_et, fraction=0.03, pad=0.04)
-        cb_et.set_label(r"$\varepsilon_T$", fontsize=13)
-        ax_et.set_title(
-            r"Tetragonal strain  $\varepsilon_T = \varepsilon_{33} - "
-            r"\frac{\varepsilon_{11} + \varepsilon_{22}}{2}$"
-            f"   mean={et_mean:+.4e}, std={et_std:.4e}",
-            fontsize=12,
-        )
-        ax_et.axis("off")
-        plt.tight_layout()
-        sp_et = _sp("Tetragonal_strain.png")
-        if sp_et:
-            plt.savefig(sp_et, dpi=200, bbox_inches="tight")
-        plt.show(block=False)
+        if plot_opts.get("plot_tetragonal_strain", False):
+            et_lim = float(np.nanpercentile(np.abs(tetragonal_strain), 98))
+            if et_lim == 0:
+                et_lim = 1e-6
+            fig_et, ax_et = plt.subplots(figsize=(8, 4))
+            im_et = ax_et.imshow(tetragonal_strain, cmap="RdBu_r",
+                                 vmin=-et_lim, vmax=+et_lim)
+            cb_et = fig_et.colorbar(im_et, ax=ax_et, fraction=0.03, pad=0.04)
+            cb_et.set_label(r"$\varepsilon_T$", fontsize=13)
+            ax_et.set_title(
+                r"Tetragonal strain  $\varepsilon_T = \varepsilon_{33} - "
+                r"\frac{\varepsilon_{11} + \varepsilon_{22}}{2}$"
+                f"   mean={et_mean:+.4e}, std={et_std:.4e}",
+                fontsize=12,
+            )
+            ax_et.axis("off")
+            plt.tight_layout()
+            sp_et = _sp("Tetragonal_strain.png")
+            if sp_et:
+                plt.savefig(sp_et, dpi=200, bbox_inches="tight")
+            plt.show(block=False)
 
         # ── Hydrostatic + Von Mises strain ───────────────────────────────────
         # Wrapped in try/except so any numerical/matplotlib hiccup here can't
@@ -675,22 +685,23 @@ def plot_all_results(results: dict, params: dict):
                 v = float(np.percentile(np.abs(vals), pct))
                 return fallback if v == 0.0 else v
 
-            h_lim = _safe_pct(eps_hydro, 98)
-            fig_h, ax_h = plt.subplots(figsize=(8, 4))
-            im_h = ax_h.imshow(eps_hydro, cmap="RdBu_r", vmin=-h_lim, vmax=h_lim)
-            cb_h = fig_h.colorbar(im_h, ax=ax_h, fraction=0.03, pad=0.04)
-            cb_h.set_label(r"$\epsilon_h$", fontsize=13)
-            ax_h.set_title(
-                r"Hydrostatic strain  $\epsilon_h = (\epsilon_{11}+\epsilon_{22}+\epsilon_{33}) / 3$  "
-                r"(sample frame, after TFBC)",
-                fontsize=12,
-            )
-            ax_h.axis("off")
-            plt.tight_layout()
-            sp_h = _sp("Hydrostatic_strain.png")
-            if sp_h:
-                plt.savefig(sp_h, dpi=200, bbox_inches="tight")
-            plt.show(block=False)
+            if plot_opts.get("plot_hydrostatic_strain", False):
+                h_lim = _safe_pct(eps_hydro, 98)
+                fig_h, ax_h = plt.subplots(figsize=(8, 4))
+                im_h = ax_h.imshow(eps_hydro, cmap="RdBu_r", vmin=-h_lim, vmax=h_lim)
+                cb_h = fig_h.colorbar(im_h, ax=ax_h, fraction=0.03, pad=0.04)
+                cb_h.set_label(r"$\epsilon_h$", fontsize=13)
+                ax_h.set_title(
+                    r"Hydrostatic strain  $\epsilon_h = (\epsilon_{11}+\epsilon_{22}+\epsilon_{33}) / 3$  "
+                    r"(sample frame, after TFBC)",
+                    fontsize=12,
+                )
+                ax_h.axis("off")
+                plt.tight_layout()
+                sp_h = _sp("Hydrostatic_strain.png")
+                if sp_h:
+                    plt.savefig(sp_h, dpi=200, bbox_inches="tight")
+                plt.show(block=False)
 
             # Von Mises  ε_VM = √( (2/3) · ε'_ij · ε'_ij ),  ε'_ij = ε_ij − ε_h δ_ij.
             # Use distinct names (e12_arr etc.) to avoid shadowing the e12/e13/e23
@@ -708,78 +719,80 @@ def plot_all_results(results: dict, params: dict):
                 ),
                 0.0,
             ))
-            vm_lim = _safe_pct(eps_vm, 98)
-            fig_vm, ax_vm = plt.subplots(figsize=(8, 4))
-            im_vm = ax_vm.imshow(eps_vm, cmap="magma", vmin=0.0, vmax=vm_lim)
-            cb_vm = fig_vm.colorbar(im_vm, ax=ax_vm, fraction=0.03, pad=0.04)
-            cb_vm.set_label(r"$\epsilon_{VM}$", fontsize=13)
-            ax_vm.set_title(
-                r"Von Mises equivalent strain  "
-                r"$\epsilon_{VM} = \sqrt{\frac{2}{3}\epsilon'_{ij}\epsilon'_{ij}}$  "
-                r"(sample frame, after TFBC)",
-                fontsize=12,
-            )
-            ax_vm.axis("off")
-            plt.tight_layout()
-            sp_vm = _sp("VonMises_strain.png")
-            if sp_vm:
-                plt.savefig(sp_vm, dpi=200, bbox_inches="tight")
-            plt.show(block=False)
+            if plot_opts.get("plot_von_mises", False):
+                vm_lim = _safe_pct(eps_vm, 98)
+                fig_vm, ax_vm = plt.subplots(figsize=(8, 4))
+                im_vm = ax_vm.imshow(eps_vm, cmap="magma", vmin=0.0, vmax=vm_lim)
+                cb_vm = fig_vm.colorbar(im_vm, ax=ax_vm, fraction=0.03, pad=0.04)
+                cb_vm.set_label(r"$\epsilon_{VM}$", fontsize=13)
+                ax_vm.set_title(
+                    r"Von Mises equivalent strain  "
+                    r"$\epsilon_{VM} = \sqrt{\frac{2}{3}\epsilon'_{ij}\epsilon'_{ij}}$  "
+                    r"(sample frame, after TFBC)",
+                    fontsize=12,
+                )
+                ax_vm.axis("off")
+                plt.tight_layout()
+                sp_vm = _sp("VonMises_strain.png")
+                if sp_vm:
+                    plt.savefig(sp_vm, dpi=200, bbox_inches="tight")
+                plt.show(block=False)
         except Exception as exc:
             print(f"[plot_all_results] Hydrostatic/Von-Mises figures skipped: {exc}")
 
         # TFBC line maps (normal strains + tetragonal strain ε_T + c/a along chosen row)
-        fig_tf, axes_tf = plt.subplots(3, 1, figsize=(12, 11), sharex=True)
-        # Reuse the µm/column choice from the main line scan above
-        x_pos_tf = x_pos.copy()
+        if plot_opts.get("plot_tfbc_lines", False):
+            fig_tf, axes_tf = plt.subplots(3, 1, figsize=(12, 11), sharex=True)
+            # Reuse the µm/column choice from the main line scan above
+            x_pos_tf = x_pos.copy()
 
-        for data, label, color in [
-            (e11_abs[r], r"$\epsilon_{11}^{\mathrm{abs}}$", "tab:blue"),
-            (e22_abs[r], r"$\epsilon_{22}^{\mathrm{abs}}$", "tab:orange"),
-            (e33_abs[r], r"$\epsilon_{33}^{\mathrm{abs}}$ (TF BC)", "tab:green"),
-        ]:
-            axes_tf[0].plot(x_pos_tf, data, label=label, linewidth=1.5, color=color)
-        axes_tf[0].set_ylim(-20e-3, 20e-3)
-        fmt_tf = ticker.ScalarFormatter(useMathText=True)
-        fmt_tf.set_scientific(True); fmt_tf.set_powerlimits((-3, -3))
-        axes_tf[0].yaxis.set_major_formatter(fmt_tf)
-        axes_tf[0].set_ylabel("Absolute strain")
-        axes_tf[0].set_title(f"Absolute normal strains — sample frame, after TFBC — row {r}")
-        axes_tf[0].axhline(0, color="k", linewidth=0.6, linestyle="--")
-        axes_tf[0].legend(fontsize=11)
-        axes_tf[0].grid(True, linestyle="--", alpha=0.4)
+            for data, label, color in [
+                (e11_abs[r], r"$\epsilon_{11}^{\mathrm{abs}}$", "tab:blue"),
+                (e22_abs[r], r"$\epsilon_{22}^{\mathrm{abs}}$", "tab:orange"),
+                (e33_abs[r], r"$\epsilon_{33}^{\mathrm{abs}}$ (TF BC)", "tab:green"),
+            ]:
+                axes_tf[0].plot(x_pos_tf, data, label=label, linewidth=1.5, color=color)
+            axes_tf[0].set_ylim(-20e-3, 20e-3)
+            fmt_tf = ticker.ScalarFormatter(useMathText=True)
+            fmt_tf.set_scientific(True); fmt_tf.set_powerlimits((-3, -3))
+            axes_tf[0].yaxis.set_major_formatter(fmt_tf)
+            axes_tf[0].set_ylabel("Absolute strain")
+            axes_tf[0].set_title(f"Absolute normal strains — sample frame, after TFBC — row {r}")
+            axes_tf[0].axhline(0, color="k", linewidth=0.6, linestyle="--")
+            axes_tf[0].legend(fontsize=11)
+            axes_tf[0].grid(True, linestyle="--", alpha=0.4)
 
-        axes_tf[1].plot(x_pos_tf, tetragonal_strain[r], color="tab:red", linewidth=1.5,
-                        label=r"$\varepsilon_T = \varepsilon_{33} - (\varepsilon_{11}+\varepsilon_{22})/2$")
-        axes_tf[1].axhline(0, color="k", linewidth=0.6, linestyle="--")
-        axes_tf[1].axhline(et_mean, color="tab:gray", linewidth=0.8, linestyle=":",
-                           label=f"mean = {et_mean:+.4e}")
-        axes_tf[1].set_ylabel(r"$\varepsilon_T$")
-        axes_tf[1].set_title(f"Tetragonal strain ε_T — sample frame, after TFBC — row {r}")
-        axes_tf[1].legend(fontsize=10)
-        axes_tf[1].grid(True, linestyle="--", alpha=0.4)
+            axes_tf[1].plot(x_pos_tf, tetragonal_strain[r], color="tab:red", linewidth=1.5,
+                            label=r"$\varepsilon_T = \varepsilon_{33} - (\varepsilon_{11}+\varepsilon_{22})/2$")
+            axes_tf[1].axhline(0, color="k", linewidth=0.6, linestyle="--")
+            axes_tf[1].axhline(et_mean, color="tab:gray", linewidth=0.8, linestyle=":",
+                               label=f"mean = {et_mean:+.4e}")
+            axes_tf[1].set_ylabel(r"$\varepsilon_T$")
+            axes_tf[1].set_title(f"Tetragonal strain ε_T — sample frame, after TFBC — row {r}")
+            axes_tf[1].legend(fontsize=10)
+            axes_tf[1].grid(True, linestyle="--", alpha=0.4)
 
-        ca_mean = float(tetragonality_ca.mean())
-        axes_tf[2].plot(x_pos_tf, tetragonality_ca[r], color="tab:purple", linewidth=1.5,
-                        label=r"$c/a = (1+\varepsilon_{33}) / (1+(\varepsilon_{11}+\varepsilon_{22})/2)$")
-        axes_tf[2].axhline(1.0, color="k", linewidth=0.6, linestyle="--")
-        axes_tf[2].axhline(ca_mean, color="tab:gray", linewidth=0.8, linestyle=":",
-                           label=f"mean = {ca_mean:.6f}")
-        axes_tf[2].set_ylabel(r"$c/a$")
-        axes_tf[2].set_xlabel(x_axis_label)
-        axes_tf[2].set_title(f"Lattice tetragonality c/a — sample frame, after TFBC — row {r}")
-        axes_tf[2].legend(fontsize=10)
-        axes_tf[2].grid(True, linestyle="--", alpha=0.4)
+            ca_mean = float(tetragonality_ca.mean())
+            axes_tf[2].plot(x_pos_tf, tetragonality_ca[r], color="tab:purple", linewidth=1.5,
+                            label=r"$c/a = (1+\varepsilon_{33}) / (1+(\varepsilon_{11}+\varepsilon_{22})/2)$")
+            axes_tf[2].axhline(1.0, color="k", linewidth=0.6, linestyle="--")
+            axes_tf[2].axhline(ca_mean, color="tab:gray", linewidth=0.8, linestyle=":",
+                               label=f"mean = {ca_mean:.6f}")
+            axes_tf[2].set_ylabel(r"$c/a$")
+            axes_tf[2].set_xlabel(x_axis_label)
+            axes_tf[2].set_title(f"Lattice tetragonality c/a — sample frame, after TFBC — row {r}")
+            axes_tf[2].legend(fontsize=10)
+            axes_tf[2].grid(True, linestyle="--", alpha=0.4)
 
-        fig_tf.suptitle(
-            f"Strain line scan — sample frame, AFTER TFBC (absolute) — row {r}",
-            fontsize=13, fontweight="bold",
-        )
-        plt.tight_layout()
-        sp_tf = _sp("TFBC_linemap.png")
-        if sp_tf:
-            plt.savefig(sp_tf, dpi=200, bbox_inches="tight")
-        plt.show(block=False)
+            fig_tf.suptitle(
+                f"Strain line scan — sample frame, AFTER TFBC (absolute) — row {r}",
+                fontsize=13, fontweight="bold",
+            )
+            plt.tight_layout()
+            sp_tf = _sp("TFBC_linemap.png")
+            if sp_tf:
+                plt.savefig(sp_tf, dpi=200, bbox_inches="tight")
+            plt.show(block=False)
 
         # ── Post-TFBC summary table (console + LaTeX) ─────────────────────────
         # Statistics on |component|.  Normal strains use absolute values
