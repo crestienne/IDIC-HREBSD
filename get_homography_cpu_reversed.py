@@ -368,13 +368,27 @@ def optimize_reversed(
         perspective_regularization=perspective_regularization,
     )
 
-    if verbose:
-        with tqdm_joblib(tqdm(total=N, desc="Patterns optimized (reversed)")) as _:
-            results = Parallel(n_jobs=n_jobs)(
-                delayed(_process_single_pattern_reversed)(idx, **worker_kwargs)
-                for idx in idx_list
-            )
-    else:
+    # tqdm subclass that pipes per-pattern progress to a callback — used by
+    # the Qt GUI to drive a progress bar.  Mirrors get_homography_cpu.
+    class _ProgressTqdm(tqdm):
+        def __init__(self, *args, progress_cb=None, total=None, **kwargs):
+            super().__init__(*args, total=total, **kwargs)
+            self._progress_cb = progress_cb
+            self._cb_total    = total
+        def update(self, n=1):
+            r = super().update(n)
+            if self._progress_cb is not None and self._cb_total:
+                try:
+                    self._progress_cb(int(self.n), int(self._cb_total))
+                except Exception:
+                    pass
+            return r
+
+    with tqdm_joblib(_ProgressTqdm(
+            total=N, desc="Patterns optimized (reversed)",
+            progress_cb=progress_callback,
+            disable=not verbose,
+    )) as _:
         results = Parallel(n_jobs=n_jobs)(
             delayed(_process_single_pattern_reversed)(idx, **worker_kwargs)
             for idx in idx_list
@@ -392,8 +406,8 @@ def optimize_reversed(
         iterations[idx] = num_iter
         residuals[idx] = float(residual)
         dp_norms[idx] = float(dpn)
-        if progress_callback is not None:
-            progress_callback(idx + 1, N)
+        # progress_callback fires inside _ProgressTqdm.update() during the
+        # joblib loop — no second emission needed after aggregation.
 
     homographies = homographies.reshape(out_shape + (8,))
     homographies_guess = homographies_guess.reshape(out_shape + (8,))

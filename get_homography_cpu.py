@@ -628,9 +628,34 @@ def optimize(
         r_fft = np.fft.fftshift(np.fft.fft2(r_init))
         r_fmt, _ = FMT(r_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
     idx_list = roi_indices if roi_indices is not None else range(N)
+
+    # tqdm subclass that also emits a callback on every update — used to
+    # surface per-pattern progress to the Qt GUI while joblib's Parallel
+    # is running.  Falls back to vanilla tqdm if no callback is wired.
+    class _ProgressTqdm(tqdm):
+        def __init__(self, *args, progress_cb=None, total=None, **kwargs):
+            super().__init__(*args, total=total, **kwargs)
+            self._progress_cb = progress_cb
+            self._cb_total    = total
+        def update(self, n=1):
+            r = super().update(n)
+            if self._progress_cb is not None and self._cb_total:
+                try:
+                    self._progress_cb(int(self.n), int(self._cb_total))
+                except Exception:
+                    pass
+            return r
+
     ### Run the optimization in parallel ###
-    if verbose:
-        with tqdm_joblib(tqdm(total=N, desc="Patterns optimized")) as progress_bar:
+    # Always wrap with tqdm_joblib so the progress_callback fires for the
+    # GUI even in non-verbose runs; the on-screen tqdm bar is disabled
+    # when verbose=False.
+    if True:
+        with tqdm_joblib(_ProgressTqdm(
+                total=N, desc="Patterns optimized",
+                progress_cb=progress_callback,
+                disable=not verbose,
+        )) as progress_bar:
             results = Parallel(n_jobs=n_jobs)(
                 delayed(_process_single_pattern)(
                     idx,
@@ -655,31 +680,6 @@ def optimize(
                 )
                 for idx in idx_list
             )
-    else:
-        results = Parallel(n_jobs=n_jobs)(
-            delayed(_process_single_pattern)(
-                idx,
-                get_pat,
-                init_type,
-                init_guess_subset_slice if init_type is not InitType.NONE else None,
-                r_init if init_type is not InitType.NONE else None,
-                r_fmt if init_type is not InitType.NONE else None,
-                X_fmt if init_type is not InitType.NONE else None,
-                Y_fmt if init_type is not InitType.NONE else None,
-                x_fmt if init_type is not InitType.NONE else None,
-                y_fmt if init_type is not InitType.NONE else None,
-                r,
-                r_zmsv,
-                xi,
-                NablaR_dot_Jac,
-                cho_params,
-                h0,
-                max_iter,
-                conv_tol,
-                pc_xo,
-            )
-            for idx in idx_list
-        )
 
     # Unpack results
     homographies = np.zeros((N, 8), dtype=float)
@@ -694,8 +694,8 @@ def optimize(
         iterations[idx] = num_iter
         residuals[idx] = float(residual)
         dp_norms[idx] = float(dp_norm)
-        if progress_callback is not None:
-            progress_callback(idx + 1, N)
+        # progress_callback now fires inside _ProgressTqdm.update() during
+        # the joblib loop — no need to call it again post-aggregation.
 
     # Reshape the results to match the input pattern shape
     homographies = homographies.reshape(out_shape + (8,))
