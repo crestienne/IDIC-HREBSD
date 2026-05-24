@@ -353,7 +353,7 @@ def pc_plane_fit(
         small to accommodate the requested padding.
     scan_strategy : str
         Scan grid convention — must match Step 2's "Scan strategy" setting
-        (e.g. "lower_left", "upper_left", "standard").  Controls which
+        (e.g. "standard", "lower_left", "lower_right", "upper_right").  Controls which
         corner of the array is the physical (0, 0) and which way x/y point
         on the sample.  Forwarded verbatim to `make_scan_grid`.
     plane_order : 'linear' or 'bilinear'

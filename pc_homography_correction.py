@@ -65,10 +65,10 @@ class ScanGrid:
 
 _CONVENTIONS = {
     #                          x_sign  y_sign  z_sign   description
-    "lower_right":     dict(x_sign=-1, y_sign=-1, z_sign=+1),  # origin lower-right, x←, y↑
-    "lower_left":      dict(x_sign=+1, y_sign=-1, z_sign=+1),  # origin lower-left,  x→, y↑
-    "direct_electron": dict(x_sign=-1, y_sign=+1, z_sign=+1),  # origin upper-right, x←, y↓
-    "standard":        dict(x_sign=+1, y_sign=+1, z_sign=+1),  # origin upper-left,  x→, y↓
+    "upper_right":     dict(x_sign=-1, y_sign=-1, z_sign=+1),  # origin upper-right, x←, y↑
+    "standard":      dict(x_sign=+1, y_sign=-1, z_sign=+1),  # origin upper-left,  x→, y↑
+    "lower_right":     dict(x_sign=-1, y_sign=+1, z_sign=+1),  # origin lower-right, x←, y↓
+    "lower_left":      dict(x_sign=+1, y_sign=+1, z_sign=+1),  # origin lower-left,  x→, y↓
 }
 
 
@@ -84,21 +84,14 @@ def make_scan_grid(scan_shape, step_size_um, convention="standard"):
     The convention string controls what that origin corner is and which
     direction each axis points.
 
-    Supported conventions
-    ---------------------
-    "standard"
-        Origin : lower-right corner.  x increases leftward, y increases upward.
-        grid[0,  0] = (0, 0)                               lower-right  ← origin
-        grid[0, -1] = ((n_cols-1)*step, 0)                 lower-left
-        grid[-1, 0] = (0, (n_rows-1)*step)                 upper-right
-        grid[-1,-1] = ((n_cols-1)*step, (n_rows-1)*step)   upper-left
+    Supported conventions  (names match the sign-convention table in
+    _CONVENTIONS — labels were renamed so each key advertises the actual
+    origin / axis directions):
 
-    "direct_electron"
-        Origin : upper-right corner.  x increases leftward, y increases downward.
-        grid[0,  0] = (0, 0)                               upper-right  ← origin
-        grid[0, -1] = ((n_cols-1)*step, 0)                 upper-left
-        grid[-1, 0] = (0, (n_rows-1)*step)                 lower-right
-        grid[-1,-1] = ((n_cols-1)*step, (n_rows-1)*step)   lower-left
+        "standard"     — origin: upper-left,  x →,  y ↑
+        "lower_left"   — origin: lower-left,  x →,  y ↓
+        "lower_right"  — origin: lower-right, x ←,  y ↓
+        "upper_right"  — origin: upper-right, x ←,  y ↑
 
     Parameters
     ----------
@@ -351,20 +344,31 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
     #   (a) anchor mismatch  → Δpc at ref_position != 0
     #   (b) magnitude wrong  → corner Δpc orders-of-magnitude off
     #   (c) sign wrong       → drift direction opposite of expected
+    # All Δpc / pc_ref values are reported in DETECTOR PIXELS:
+    #   Δx_px = Δxstar * pat_w     (offset on detector x-axis)
+    #   Δy_px = Δystar * pat_h     (offset on detector y-axis)
+    #   Δz_px = Δzstar * pat_w     (change in detector-to-sample distance,
+    #                               scaled by pattern width)
+    pat_h, pat_w = patshape
     print("─" * 68)
     print("[PC correction debug]")
     print(f"  scan_shape          : {scan_shape}")
     print(f"  step_size_um        : {step_size_um}")
-    print(f"  pc_ref              : ({pc_ref[0]:.6f}, {pc_ref[1]:.6f}, {pc_ref[2]:.6f})")
-    print(f"  ref_position        : ({ref_row}, {ref_col})")
     print(f"  patshape (H, W) px  : {patshape}")
     print(f"  pixel_size_um       : {pixel_size_um}")
     print(f"  sample / det tilt   : {sample_tilt_deg}° / {detector_tilt_deg}°")
     print(f"  override supplied?  : {pc_grid_override is not None}")
+    print(f"  pc_ref (px)         : "
+          f"(x={pc_ref[0] * pat_w:8.2f}, "
+          f"y={pc_ref[1] * pat_h:8.2f}, "
+          f"DD={pc_ref[2] * pat_w:8.2f})")
+    print(f"  ref_position        : ({ref_row}, {ref_col})")
 
-    Δpc_ref     = Δpc[ref_row, ref_col]
-    print(f"  Δpc @ ref_position  : ({Δpc_ref[0]:+.3e}, "
-          f"{Δpc_ref[1]:+.3e}, {Δpc_ref[2]:+.3e})  (expected ~0)")
+    Δpc_ref = Δpc[ref_row, ref_col]
+    print(f"  Δpc @ ref_position (px) : "
+          f"(Δx={Δpc_ref[0] * pat_w:+8.3f}, "
+          f"Δy={Δpc_ref[1] * pat_h:+8.3f}, "
+          f"ΔDD={Δpc_ref[2] * pat_w:+8.3f})  (expected ~0)")
 
     corners = {
         "(0, 0)"                              : Δpc[0, 0],
@@ -372,17 +376,19 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
         f"({n_rows - 1}, 0)"                  : Δpc[n_rows - 1, 0],
         f"({n_rows - 1}, {n_cols - 1})"       : Δpc[n_rows - 1, n_cols - 1],
     }
-    print("  Δpc at scan corners (xstar, ystar, zstar):")
+    print("  Δpc at scan corners (px) — Δx, Δy, ΔDD:")
     for label, d in corners.items():
         print(f"    {label:>14s} : "
-              f"({d[0]:+.3e}, {d[1]:+.3e}, {d[2]:+.3e})")
+              f"({d[0] * pat_w:+8.3f}, "
+              f"{d[1] * pat_h:+8.3f}, "
+              f"{d[2] * pat_w:+8.3f})")
 
     Δpc_abs = np.abs(Δpc)
-    print(f"  Δpc magnitudes (per-axis max across scan):")
-    print(f"    |Δxstar|max = {Δpc_abs[..., 0].max():.3e}  "
-          f"|Δystar|max = {Δpc_abs[..., 1].max():.3e}  "
-          f"|Δzstar|max = {Δpc_abs[..., 2].max():.3e}")
-    print("    (typical for SEM scans: 1e-4 .. 1e-3 of detector size)")
+    print(f"  Δpc magnitudes (per-axis max across scan, px):")
+    print(f"    |Δx|max  = {Δpc_abs[..., 0].max() * pat_w:8.3f} px   "
+          f"|Δy|max  = {Δpc_abs[..., 1].max() * pat_h:8.3f} px   "
+          f"|ΔDD|max = {Δpc_abs[..., 2].max() * pat_w:8.3f} px")
+    print("    (typical for SEM scans: 0.1 – 5 px on a 480-px detector)")
 
     print(f"  TS_inv at ref_position [{ref_row}, {ref_col}] "
           f"(expected: 3×3 identity):")
@@ -478,7 +484,7 @@ if __name__ == "__main__":
 
     # ── build both scan grids and their PC shifts ─────────────────────────────
     grid_std = make_scan_grid(scan_shape, step_size_um, convention="standard")
-    grid_de  = make_scan_grid(scan_shape, step_size_um, convention="direct_electron")
+    grid_de  = make_scan_grid(scan_shape, step_size_um, convention="upper_right")
 
     pc_std = scan_grid_to_pc_grid(grid_std, pc_ref, patshape, pixel_size_um,
                                    sample_tilt_deg, detector_tilt_deg)
