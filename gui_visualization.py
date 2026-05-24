@@ -230,6 +230,39 @@ class VisualizationDialog(QDialog):
         plot_group.setLayout(plot_layout)
         right_col.addWidget(plot_group)
 
+        # ── Optional plots ────────────────────────────────────────────────────
+        # The post-TFBC strain & rotation grid is always rendered.  Every
+        # other figure is opt-in via these checkboxes — the flags are
+        # forwarded to plot_all_results through _pending_params.
+        opt_group  = QGroupBox("Optional Plots")
+        opt_layout = QVBoxLayout()
+        opt_layout.addWidget(_note(
+            "The post-TFBC strain & rotation grid is always shown. "
+            "Tick boxes below to add extra figures."
+        ))
+
+        # (param key, display label)
+        self._optional_plot_specs = [
+            ("plot_homography_grid",         "Homography component grid"),
+            ("plot_relative_strain_grid",    "Relative strain / rotation grid (pre-TFBC)"),
+            ("plot_strain_lines_before_tfbc","Strain line scan — deviatoric (before TFBC)"),
+            ("plot_detector_frame_lines",    "Strain line scan — detector frame (h2F·F2strain)"),
+            ("plot_initial_guess_lines",     "Strain line scan — initial guess (FMT-FCC)"),
+            ("plot_tetragonal_strain",       "Tetragonal strain map (ε_T)"),
+            ("plot_hydrostatic_strain",      "Hydrostatic strain map (ε_h)"),
+            ("plot_von_mises",                "Von Mises equivalent strain map (ε_VM)"),
+            ("plot_tfbc_lines",               "TFBC strain line scan (ε_abs / ε_T / c/a)"),
+        ]
+        self._optional_plot_checks: dict[str, "QCheckBox"] = {}
+        for key, label in self._optional_plot_specs:
+            chk = QCheckBox(label)
+            chk.setChecked(False)
+            opt_layout.addWidget(chk)
+            self._optional_plot_checks[key] = chk
+
+        opt_group.setLayout(opt_layout)
+        right_col.addWidget(opt_group)
+
         # ── Elastic constants (used for automatic TFBC when .ang is provided) ──
         ec_group  = QGroupBox("Elastic Constants")
         ec_layout = QFormLayout()
@@ -402,7 +435,12 @@ class VisualizationDialog(QDialog):
         self._struct_lbl.setText(preset.get("structure", "cubic"))
 
     def _gather(self) -> dict:
+        plot_options = {
+            key: chk.isChecked()
+            for key, chk in self._optional_plot_checks.items()
+        }
         return {
+            "plot_options":      plot_options,
             "npz_path":          self._npz_edit.text(),
             "npy_path":          self._npy_edit.text(),
             "ang_path":          self._ang_edit.text(),

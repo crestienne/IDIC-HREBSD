@@ -25,6 +25,7 @@ THEME = {
     "window_bg":    "#102B3F",   # outer window
     "surface_bg":   "#163146",   # group-box interiors, text areas
     "input_bg":     "#829cbc",   # spin boxes, line edits, combo boxes
+    "input_text":   "#1d2530",   # foreground text inside the light-blue inputs
 
     # ── Text ──────────────────────────────────────────────────────────────────
     "text":         "#eef0f2",   # primary text
@@ -93,7 +94,7 @@ def apply_theme(app) -> None:
     pal.setColor(QPalette.ColorRole.AlternateBase,   c("surface_bg"))
     pal.setColor(QPalette.ColorRole.ToolTipBase,     c("surface_bg"))
     pal.setColor(QPalette.ColorRole.ToolTipText,     c("text"))
-    pal.setColor(QPalette.ColorRole.Text,            c("text"))
+    pal.setColor(QPalette.ColorRole.Text,            c("input_text"))
     pal.setColor(QPalette.ColorRole.Button,          c("accent"))
     pal.setColor(QPalette.ColorRole.ButtonText,      c("accent_text"))
     pal.setColor(QPalette.ColorRole.BrightText,      c("accent_hover"))
@@ -148,7 +149,7 @@ def apply_theme(app) -> None:
         }}
         QLineEdit, QTextEdit, QPlainTextEdit {{
             background-color: {t["input_bg"]};
-            color: {t["text"]};
+            color: {t["input_text"]};
             border: 1px solid {t["border"]};
             border-radius: 4px;
             padding: 3px 5px;
@@ -157,14 +158,14 @@ def apply_theme(app) -> None:
         }}
         QSpinBox, QDoubleSpinBox {{
             background-color: {t["input_bg"]};
-            color: {t["text"]};
+            color: {t["input_text"]};
             border: 1px solid {t["border"]};
             border-radius: 4px;
             padding: 2px 4px;
         }}
         QComboBox {{
             background-color: {t["input_bg"]};
-            color: {t["text"]};
+            color: {t["input_text"]};
             border: 1px solid {t["border"]};
             border-radius: 4px;
             padding: 2px 6px;

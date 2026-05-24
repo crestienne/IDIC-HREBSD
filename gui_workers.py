@@ -117,8 +117,9 @@ class AngLoaderWorker(QThread):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PipelineWorker(QThread):
-    log_signal  = pyqtSignal(str)
-    done_signal = pyqtSignal(bool, str)
+    log_signal      = pyqtSignal(str)
+    done_signal     = pyqtSignal(bool, str)
+    progress_signal = pyqtSignal(int, int)   # (patterns_done, patterns_total)
 
     def __init__(self, params: dict):
         super().__init__()
@@ -488,6 +489,7 @@ class PipelineWorker(QThread):
             rotate_patterns_90=p.get("rotate_patterns_90", False),
             debug_gradients=False,
             subset_shape_kind=("circle" if p.get("mask_type") == "circular" else "rect"),
+            progress_callback=lambda i, n: self.progress_signal.emit(int(i), int(n)),
         )
 
         # Drop ref_pat_override if it's None to avoid passing it to optimizers
@@ -600,6 +602,7 @@ class PipelineWorker(QThread):
             rotate_patterns_90   = p.get("rotate_patterns_90", False),
             debug_gradients      = False,
             subset_shape_kind    = ("circle" if p.get("mask_type") == "circular" else "rect"),
+            progress_callback    = lambda i, n: self.progress_signal.emit(int(i), int(n)),
         )
 
         self.log_signal.emit("Starting optimization with simulated reference…")
@@ -688,6 +691,7 @@ class PipelineWorker(QThread):
             rotate_patterns_90=p.get("rotate_patterns_90", False),
             debug_gradients=False,
             subset_shape_kind=("circle" if p.get("mask_type") == "circular" else "rect"),
+            progress_callback=lambda i, n: self.progress_signal.emit(int(i), int(n)),
         )
 
         t_total = time.perf_counter()
