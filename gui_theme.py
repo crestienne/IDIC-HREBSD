@@ -18,41 +18,78 @@ from PyQt6.QtGui import QColor, QPalette
 # Colour theme  ← edit this dict to restyle the whole GUI
 # ─────────────────────────────────────────────────────────────────────────────
 
-THEME = {
+DARK_THEME = {
     # ── Backgrounds ──────────────────────────────────────────────────────────
-    #colors generated via coolers website
-
-    "window_bg":    "#102B3F",   # outer window
-    "surface_bg":   "#163146",   # group-box interiors, text areas
-    "input_bg":     "#829cbc",   # spin boxes, line edits, combo boxes
-    "input_text":   "#1d2530",   # foreground text inside the light-blue inputs
+    "window_bg":    "#102B3F",
+    "surface_bg":   "#163146",
+    "input_bg":     "#829cbc",
+    "input_text":   "#eef0f2",
 
     # ── Text ──────────────────────────────────────────────────────────────────
-    "text":         "#eef0f2",   # primary text
-    "text_disabled":"#585b70",   # greyed-out labels / inactive widgets
-    "text_hint":    "#6c7086",   # small helper labels (_note())
+    "text":         "#eef0f2",
+    "text_disabled":"#585b70",
+    "text_hint":    "#6c7086",
 
     # ── Accent / interactive ──────────────────────────────────────────────────
-    "accent":       "#fdca40",   # button faces, selected items, focus ring
-    "accent_hover": "#efc143",   # button hover
-    "accent_text":  "#050505",   # text ON accent-coloured buttons
+    "accent":       "#fdca40",
+    "accent_hover": "#efc143",
+    "accent_text":  "#050505",
 
     # ── Borders ───────────────────────────────────────────────────────────────
-    "border":       "#45475a",   # group-box frames, separators
+    "border":       "#45475a",
 
     # ── Status colours ────────────────────────────────────────────────────────
-    "success":      "#a6e3a1",   # "Done" messages
-    "error":        "#f38ba8",   # error messages
-    "warning":      "#fab387",   # warnings / in-progress
+    "success":      "#a6e3a1",
+    "error":        "#f38ba8",
+    "warning":      "#fab387",
 
-    # ── Wizard header bar (title + subtitle strip at the top) ────────────────
-    "header_bg":    "#21295c",   # background of the step-title banner
-    "header_text":  "#eef0f2",   # title and subtitle text colour
+    # ── Wizard header bar ─────────────────────────────────────────────────────
+    "header_bg":    "#21295c",
+    "header_text":  "#eef0f2",
 
     # ── Special widgets ───────────────────────────────────────────────────────
-    "run_btn_bg":   "#2e7d32",   # Run Pipeline button background
+    "run_btn_bg":   "#2e7d32",
     "run_btn_text": "#ffffff",
 }
+
+LIGHT_THEME = {
+    "window_bg":    "#F5E8AA",
+    "surface_bg":   "#F5E8AA",
+    "input_bg":     "#ffffff",
+    "input_text":   "#1a1a1a",
+
+    "text":         "#1a1a1a",
+    "text_disabled":"#a0a0a0",
+    "text_hint":    "#5c6470",
+
+    "accent":       "#102B3F",
+    "accent_hover": "#163146",
+    "accent_text":  "#ffffff",
+
+    "border":       "#cfd4dc",
+
+    "success":      "#2e7d32",
+    "error":        "#c62828",
+    "warning":      "#ed6c02",
+
+    "header_bg":    "#e3eaf2",
+    "header_text":  "#1a1a1a",
+
+    "run_btn_bg":   "#2e7d32",
+    "run_btn_text": "#ffffff",
+}
+
+# THEME is the LIVE palette consulted by every other module.  We mutate it
+# in place (clear + update) when the user switches modes so existing
+# `from gui_theme import THEME` references stay valid without reloading.
+THEME = dict(DARK_THEME)
+
+
+def set_theme_mode(mode: str) -> None:
+    """Swap THEME's contents to dark or light in place."""
+    target = LIGHT_THEME if mode == "light" else DARK_THEME
+    THEME.clear()
+    THEME.update(target)
 
 
 _CHECKMARK_SVG = (

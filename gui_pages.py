@@ -2436,34 +2436,86 @@ class ReferencePatternPage(QWizardPage):
         sim_layout.addRow("Euler (Bunge):", self._sim_euler_lbl)
         sim_layout.addRow(_note("Click the IPF map to update from scan orientation."))
 
-        self._sim_gen_btn = QPushButton("Compare Simulated and Experimental Patterns")
-        self._sim_gen_btn.clicked.connect(self._on_compare_clicked)
-        sim_layout.addRow("", self._sim_gen_btn)
+        # ── Simulated Reference Procedure (action buttons) ───────────────────
+        sim_proc_group  = QGroupBox("Simulated Reference Procedure")
+        sim_proc_layout = QVBoxLayout()
 
-        self._sim_tuner_btn = QPushButton("Open Live Tuner…")
+        self._sim_gen_btn = QPushButton("1.  Compare Simulated and Experimental Patterns")
+        self._sim_gen_btn.clicked.connect(self._on_compare_clicked)
+        sim_proc_layout.addWidget(self._sim_gen_btn)
+
+        self._sim_tuner_btn = QPushButton("2.  Manually Refine Parameters")
         self._sim_tuner_btn.setToolTip(
             "Open an interactive window where you can adjust Euler angles "
             "and PC values and see the simulated pattern update in real time."
         )
         self._sim_tuner_btn.clicked.connect(self._open_sim_tuner)
-        sim_layout.addRow("", self._sim_tuner_btn)
+        sim_proc_layout.addWidget(self._sim_tuner_btn)
 
-        self._refine_btn = QPushButton("Refine PC && Euler…")
+        self._refine_btn = QPushButton("3.  Automatically Refine PC && Euler")
         self._refine_btn.setToolTip(
             "Open the PC / Euler refinement settings dialog.  From there, "
-            "tune the Nelder-Mead controls (restarts, σ, symmetry) and "
-            "click Run Refinement."
+            "tune the Nelder-Mead controls (restarts, σ) and click Run "
+            "Refinement."
         )
         self._refine_btn.clicked.connect(self._open_refine_settings)
-        sim_layout.addRow("", self._refine_btn)
+        sim_proc_layout.addWidget(self._refine_btn)
 
-        # The Nelder-Mead controls used to live inline here; they now live
-        # in a dedicated dialog built in _build_refine_settings_dialog().
+        sim_proc_group.setLayout(sim_proc_layout)
+        sim_layout.addRow(sim_proc_group)
 
-        # ── Simulated-pattern preprocessing overrides ───────────────────────
-        # Per-sim values that override the Step 3 real-pattern preprocessing
-        # at refinement time.  Lives here (not in the refine dialog) so the
-        # overrides apply to any sim generation path that reads them.
+        # The Nelder-Mead controls live in a dedicated dialog built in
+        # _build_refine_settings_dialog().
+
+        # ── Gradient Processing Parameters (only used in simulated mode) ─────
+        # Defaults are ON because simulated references benefit from spectral
+        # matching + Tikhonov regularization out-of-the-box.  get_params()
+        # only forwards these to the pipeline when ref_mode == "simulated"
+        # so they have no effect on real-reference runs.
+        grad_group  = QGroupBox("Gradient Processing Parameters")
+        grad_layout = QFormLayout()
+
+        self._spectral_match_ref = QCheckBox(
+            "Spectral-match reference to experimental patterns"
+        )
+        self._spectral_match_ref.setChecked(True)
+        grad_layout.addRow(self._spectral_match_ref)
+
+        self._tikhonov_perspective = QCheckBox(
+            "Tikhonov-regularize perspective (h_31, h_32) in IC-GN"
+        )
+        self._tikhonov_perspective.setChecked(True)
+
+        self._tikhonov_lambda = QDoubleSpinBox()
+        self._tikhonov_lambda.setRange(0.0, 1000.0)
+        self._tikhonov_lambda.setSingleStep(0.1)
+        self._tikhonov_lambda.setDecimals(3)
+        self._tikhonov_lambda.setValue(0.5)
+
+        def _toggle_tikhonov(enabled: bool):
+            self._tikhonov_lambda.setEnabled(enabled)
+        self._tikhonov_perspective.toggled.connect(_toggle_tikhonov)
+        _toggle_tikhonov(self._tikhonov_perspective.isChecked())
+
+        grad_layout.addRow(self._tikhonov_perspective)
+        grad_layout.addRow("Tikhonov λ multiplier:", self._tikhonov_lambda)
+
+        grad_layout.addRow(_note(
+            "These parameters are only applied when a simulated reference "
+            "pattern is in use."
+        ))
+
+        grad_group.setLayout(grad_layout)
+        sim_layout.addRow(grad_group)
+
+        # `_rotate_patterns_90` was removed from the UI but keep the
+        # attribute as a stub (always False) so downstream get_params /
+        # PipelineWorker code doesn't need to special-case its absence.
+        self._rotate_patterns_90 = QCheckBox()
+        self._rotate_patterns_90.setChecked(False)
+        self._rotate_patterns_90.setVisible(False)
+
+        # ── Simulated Pattern Preprocessing Overrides (bottom) ──────────────
         sim_pre_group = QGroupBox("Simulated Pattern Preprocessing Overrides")
         sim_pre_form  = QFormLayout()
         sim_pre_form.addRow(_note(
@@ -2510,45 +2562,6 @@ class ReferencePatternPage(QWizardPage):
         sim_pre_group.setLayout(sim_pre_form)
         sim_layout.addRow(sim_pre_group)
 
-        # ── Pipeline-side reference-pattern tweaks (moved from Step 3) ──────
-        # These three controls used to live on the Step 3 "Reference Pattern
-        # Preprocessing (override)" group.  They've been migrated here so all
-        # simulated-reference-related settings sit in one place.  The
-        # per-component overrides + the master-toggle + the preview checkbox
-        # from that group were dropped as redundant.
-        sim_layout.addRow(_note("── Advanced (applied during IC-GN run) ──"))
-
-        self._spectral_match_ref = QCheckBox(
-            "Spectral-match reference to experimental patterns"
-        )
-        self._spectral_match_ref.setChecked(False)
-        sim_layout.addRow(self._spectral_match_ref)
-
-        self._tikhonov_perspective = QCheckBox(
-            "Tikhonov-regularize perspective (h_31, h_32) in IC-GN"
-        )
-        self._tikhonov_perspective.setChecked(False)
-
-        self._tikhonov_lambda = QDoubleSpinBox()
-        self._tikhonov_lambda.setRange(0.0, 1000.0)
-        self._tikhonov_lambda.setSingleStep(0.1)
-        self._tikhonov_lambda.setDecimals(3)
-        self._tikhonov_lambda.setValue(0.5)
-
-        def _toggle_tikhonov(enabled: bool):
-            self._tikhonov_lambda.setEnabled(enabled)
-        self._tikhonov_perspective.toggled.connect(_toggle_tikhonov)
-        _toggle_tikhonov(self._tikhonov_perspective.isChecked())
-
-        sim_layout.addRow(self._tikhonov_perspective)
-        sim_layout.addRow("Tikhonov λ multiplier:", self._tikhonov_lambda)
-
-        self._rotate_patterns_90 = QCheckBox(
-            "Rotate patterns 90° CCW before optimization (diagnostic)"
-        )
-        self._rotate_patterns_90.setChecked(False)
-        sim_layout.addRow(self._rotate_patterns_90)
-
         self._sim_status = QLabel("")
         self._sim_status.setStyleSheet("color: gray; font-size: 11px;")
         self._sim_status.setWordWrap(True)
@@ -2561,10 +2574,28 @@ class ReferencePatternPage(QWizardPage):
         self._sim_settings_dialog = QDialog(self)
         self._sim_settings_dialog.setWindowTitle("Simulated Reference — Parameters")
         self._sim_settings_dialog.setModal(False)
-        self._sim_settings_dialog.resize(700, 720)
-        _ssd_outer = QHBoxLayout(self._sim_settings_dialog)
+        self._sim_settings_dialog.resize(700, 780)
+        _ssd_outer = QVBoxLayout(self._sim_settings_dialog)
         _ssd_outer.setContentsMargins(12, 12, 12, 12)
         _ssd_outer.addWidget(self._sim_group, stretch=1)
+
+        # ── Finish & Apply / Cancel row ─────────────────────────────────────
+        # Sits at the very bottom of the simulated-reference parameters dialog.
+        _ssd_btn_row = QHBoxLayout()
+        _ssd_btn_row.addStretch(1)
+        self._sim_apply_btn = QPushButton("Finish && Apply")
+        self._sim_apply_btn.setToolTip(
+            "Keep the current simulated-reference settings and close the dialog."
+        )
+        self._sim_apply_btn.clicked.connect(self._sim_settings_dialog.hide)
+        self._sim_cancel_btn = QPushButton("Cancel")
+        self._sim_cancel_btn.setToolTip(
+            "Discard any unsaved changes made in this dialog and close it."
+        )
+        self._sim_cancel_btn.clicked.connect(self._on_sim_settings_cancel)
+        _ssd_btn_row.addWidget(self._sim_apply_btn)
+        _ssd_btn_row.addWidget(self._sim_cancel_btn)
+        _ssd_outer.addLayout(_ssd_btn_row)
 
         # NOTE: the sim-settings dialog used to embed its own clickable IPF
         # map.  It was removed — the main GUI's IPF on Step 4 is now the
@@ -3385,6 +3416,21 @@ class ReferencePatternPage(QWizardPage):
         if mp_path and os.path.exists(mp_path):
             self._generate_sim_pattern()
 
+    def _on_sim_settings_cancel(self):
+        """Cancel button on the simulated-reference parameters dialog —
+        warn the user that the changes won't be applied, and only hide
+        the dialog if they confirm."""
+        btn = QMessageBox.warning(
+            self._sim_settings_dialog,
+            "Cancel simulated-reference settings",
+            "None of the changes made in this dialog will be applied.\n\n"
+            "Are you sure you want to cancel?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if btn == QMessageBox.StandardButton.Yes:
+            self._sim_settings_dialog.hide()
+
     def _on_compare_clicked(self):
         """Explicit user click on the Compare button — set the gate so
         _on_sim_done pops the sim-vs-exp comparison dialog, then trigger
@@ -3438,8 +3484,8 @@ class ReferencePatternPage(QWizardPage):
         self._refine_restart_rotvec_std = QDoubleSpinBox()
         self._refine_restart_rotvec_std.setRange(0.0, 30.0)
         self._refine_restart_rotvec_std.setDecimals(2)
-        self._refine_restart_rotvec_std.setSingleStep(0.5)
-        self._refine_restart_rotvec_std.setValue(3.0)
+        self._refine_restart_rotvec_std.setSingleStep(0.25)
+        self._refine_restart_rotvec_std.setValue(1.0)
         self._refine_restart_rotvec_std.setSuffix(" °")
         self._refine_restart_rotvec_std.setToolTip(
             "Standard deviation of the random rotation-vector seed used for "
@@ -3452,7 +3498,7 @@ class ReferencePatternPage(QWizardPage):
         self._refine_restart_pc_std.setRange(0.0, 0.5)
         self._refine_restart_pc_std.setDecimals(4)
         self._refine_restart_pc_std.setSingleStep(0.005)
-        self._refine_restart_pc_std.setValue(0.01)
+        self._refine_restart_pc_std.setValue(0.02)
         self._refine_restart_pc_std.setToolTip(
             "Standard deviation of the random PC seed used for restarts 2..N "
             "(Bruker units).  0.01 ≈ 1% of the detector size."
@@ -3468,19 +3514,13 @@ class ReferencePatternPage(QWizardPage):
         )
         form.addRow("Restart RNG seed:", self._refine_restart_seed)
 
-        self._refine_symmetry_restarts = QCheckBox(
-            "Symmetry-informed restarts (one per Laue group element)"
-        )
+        # Symmetry-informed restarts + Laue group widgets were removed from
+        # the UI per user request.  Stub attributes are kept so the existing
+        # `_run_pc_euler_refine` plumbing (which reads .isChecked() and
+        # .currentIndex()) doesn't need to special-case their absence.
+        self._refine_symmetry_restarts = QCheckBox()
         self._refine_symmetry_restarts.setChecked(False)
-        self._refine_symmetry_restarts.setToolTip(
-            "When ticked, after the N random restarts run one additional "
-            "Nelder-Mead from each non-identity element of the crystal's "
-            "Laue group.  Defends against converging to the wrong symmetry-"
-            "equivalent of the true orientation.\n\n"
-            "Cost: adds (|Laue group| − 1) restarts on top of the N random "
-            "ones (e.g. +23 runs for cubic m-3m)."
-        )
-        form.addRow(self._refine_symmetry_restarts)
+        self._refine_symmetry_restarts.setVisible(False)
 
         self._refine_laue_group = QComboBox()
         self._refine_laue_group.addItems([
@@ -3497,11 +3537,7 @@ class ReferencePatternPage(QWizardPage):
             "11: O (cubic-high, m-3m)",
         ])
         self._refine_laue_group.setCurrentIndex(10)
-        self._refine_laue_group.setToolTip(
-            "Crystal Laue group used to enumerate symmetry-equivalent "
-            "orientations.  Cubic m-3m (11) covers most metals."
-        )
-        form.addRow("Laue group:", self._refine_laue_group)
+        self._refine_laue_group.setVisible(False)
 
         # Simulated-pattern preprocessing overrides used to live here; they
         # now sit in their own sub-group in the Simulated-Reference dialog.
@@ -4009,15 +4045,19 @@ class ReferencePatternPage(QWizardPage):
 
     def get_params(self) -> dict:
         # small_strain now lives on Step 2 (ScanGeometryPage); nothing to add here.
-        # Advanced sim-reference tweaks (spectral match, Tikhonov, rotate-90)
-        # moved from Step 3 into Step 4's simulated section — surface them
-        # for the pipeline regardless of which ref_mode is active so the
-        # toggles still take effect for the experimental-reference path too.
+        # Gradient-processing parameters (spectral match, Tikhonov) are only
+        # forwarded to the pipeline when ref_mode == "simulated"; for real
+        # references they're silently zeroed so the toggles in the dialog
+        # have no effect on those runs.  rotate_patterns_90 was removed from
+        # the UI but the key is retained at its default False.
+        is_sim = self._sim_radio.isChecked()
         common = {
-            "spectral_match_ref":         self._spectral_match_ref.isChecked(),
+            "spectral_match_ref":         (
+                self._spectral_match_ref.isChecked() if is_sim else False
+            ),
             "perspective_regularization": (
                 float(self._tikhonov_lambda.value())
-                if self._tikhonov_perspective.isChecked() else 0.0
+                if (is_sim and self._tikhonov_perspective.isChecked()) else 0.0
             ),
             "rotate_patterns_90":         self._rotate_patterns_90.isChecked(),
         }
