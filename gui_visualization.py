@@ -41,6 +41,8 @@ class VisualizationDialog(QDialog):
         self._roi_slice  = run_params.get("roi_slice", None)
         self._full_rows  = run_params.get("full_rows", run_params.get("rows", 1))
         self._full_cols  = run_params.get("full_cols", run_params.get("cols", 1))
+        # Carry through pipeline-level params not exposed in the viz UI
+        self._run_params = dict(run_params)
 
         outer     = QVBoxLayout()
         outer.setSpacing(10)
@@ -52,6 +54,20 @@ class VisualizationDialog(QDialog):
         # ── Data paths ────────────────────────────────────────────────────────
         data_group  = QGroupBox("Data")
         data_layout = QFormLayout()
+
+        # Convenience: pick a single results folder and auto-populate the
+        # results / homographies / params / save / .ang fields below.
+        self._folder_edit = QLineEdit(run_params.get("results_folder", ""))
+        self._folder_edit.setPlaceholderText(
+            "Pick a run folder to auto-fill the fields below…"
+        )
+        # textChanged fires for both manual edits and Browse-button setText,
+        # so picking a folder via the dialog also triggers auto-population.
+        self._folder_edit.textChanged.connect(self._on_folder_text_changed)
+        data_layout.addRow(
+            "Results folder:",
+            _make_browse_dir(self, self._folder_edit),
+        )
 
         self._npz_edit = QLineEdit(run_params.get("npz_path", ""))
         self._npz_edit.setPlaceholderText("Pre-computed results .npy (preferred)…")
@@ -214,6 +230,39 @@ class VisualizationDialog(QDialog):
         plot_group.setLayout(plot_layout)
         right_col.addWidget(plot_group)
 
+        # ── Optional plots ────────────────────────────────────────────────────
+        # The post-TFBC strain & rotation grid is always rendered.  Every
+        # other figure is opt-in via these checkboxes — the flags are
+        # forwarded to plot_all_results through _pending_params.
+        opt_group  = QGroupBox("Optional Plots")
+        opt_layout = QVBoxLayout()
+        opt_layout.addWidget(_note(
+            "The post-TFBC strain & rotation grid is always shown. "
+            "Tick boxes below to add extra figures."
+        ))
+
+        # (param key, display label)
+        self._optional_plot_specs = [
+            ("plot_homography_grid",         "Homography component grid"),
+            ("plot_relative_strain_grid",    "Relative strain / rotation grid (pre-TFBC)"),
+            ("plot_strain_lines_before_tfbc","Strain line scan — deviatoric (before TFBC)"),
+            ("plot_detector_frame_lines",    "Strain line scan — detector frame (h2F·F2strain)"),
+            ("plot_initial_guess_lines",     "Strain line scan — initial guess (FMT-FCC)"),
+            ("plot_tetragonal_strain",       "Tetragonal strain map (ε_T)"),
+            ("plot_hydrostatic_strain",      "Hydrostatic strain map (ε_h)"),
+            ("plot_von_mises",                "Von Mises equivalent strain map (ε_VM)"),
+            ("plot_tfbc_lines",               "TFBC strain line scan (ε_abs / ε_T / c/a)"),
+        ]
+        self._optional_plot_checks: dict[str, "QCheckBox"] = {}
+        for key, label in self._optional_plot_specs:
+            chk = QCheckBox(label)
+            chk.setChecked(False)
+            opt_layout.addWidget(chk)
+            self._optional_plot_checks[key] = chk
+
+        opt_group.setLayout(opt_layout)
+        right_col.addWidget(opt_group)
+
         # ── Elastic constants (used for automatic TFBC when .ang is provided) ──
         ec_group  = QGroupBox("Elastic Constants")
         ec_layout = QFormLayout()
@@ -275,6 +324,105 @@ class VisualizationDialog(QDialog):
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
+    def _on_folder_text_changed(self, text: str):
+        """Trigger auto-population only when the path is an existing dir."""
+        text = (text or "").strip()
+        if text and os.path.isdir(text):
+            self._autopopulate_from_folder(text)
+
+    def _autopopulate_from_folder(self, folder: str):
+        """Fill the data-path fields + scan/physical fields from a run folder.
+
+        Files written by PipelineWorker follow `{comp}_{kind}_{date}.{ext}`:
+            *_results_*.npy        → npz_path     (preferred fast path)
+            *_homographies_*.npy   → npy_path     (legacy fallback)
+            *_params_*.txt         → parsed and folded into form fields
+            *.ang (anywhere)       → ang_path     (only if currently empty)
+        The folder itself becomes `save_folder`.  Most-recent file wins when
+        multiple candidates match.
+        """
+        import glob
+        from gui_workers import _parse_params_txt
+
+        def _latest(pattern: str):
+            matches = glob.glob(os.path.join(folder, pattern))
+            if not matches:
+                return None
+            return max(matches, key=os.path.getmtime)
+
+        results_npy  = _latest("*_results_*.npy")
+        homog_npy    = _latest("*_homographies_*.npy")
+        params_txt   = _latest("*_params_*.txt")
+        ang_file     = _latest("*.ang")
+
+        # ── file paths ────────────────────────────────────────────────────────
+        if results_npy:
+            self._npz_edit.setText(results_npy)
+        if homog_npy:
+            self._npy_edit.setText(homog_npy)
+        if ang_file and not self._ang_edit.text().strip():
+            self._ang_edit.setText(ang_file)
+        self._save_edit.setText(folder)
+
+        # ── parse params .txt and apply to form fields ───────────────────────
+        if not params_txt:
+            self._status.setText(
+                f"Auto-filled file paths from folder.  "
+                f"(no *_params_*.txt found — geometry fields left as-is)"
+            )
+            self._status.setStyleSheet("color: gray; font-style: italic;")
+            return
+
+        params = _parse_params_txt(params_txt)
+        self._apply_parsed_params(params)
+        self._status.setText(
+            f"Auto-filled file paths + parsed {os.path.basename(params_txt)} "
+            f"({sum(1 for _ in params)} keys)."
+        )
+        self._status.setStyleSheet("color: gray; font-style: italic;")
+
+    def _apply_parsed_params(self, p: dict):
+        """Fold parsed run-time params into the visible form fields.
+
+        Silently skips keys that aren't present.  Numeric setters defer to the
+        underlying QSpinBox / QDoubleSpinBox to clamp out-of-range values.
+        """
+        if "rows"     in p: self._rows.setValue(int(p["rows"]))
+        if "cols"     in p: self._cols.setValue(int(p["cols"]))
+        if "pat_h"    in p: self._pat_h.setValue(int(p["pat_h"]))
+        if "pat_w"    in p: self._pat_w.setValue(int(p["pat_w"]))
+        if "tilt"     in p: self._tilt.setValue(float(p["tilt"]))
+        if "det_tilt" in p: self._det_tilt.setValue(float(p["det_tilt"]))
+
+        # pc_edax may have been stored as the tuple itself or as the per-element
+        # keys pc_x/pc_y/pc_z — handle both.
+        pc = p.get("pc_edax")
+        if isinstance(pc, (tuple, list)) and len(pc) >= 3:
+            self._pc_x.setValue(float(pc[0]))
+            self._pc_y.setValue(float(pc[1]))
+            self._pc_z.setValue(float(pc[2]))
+
+        if "step_size"     in p: self._step_size.setValue(float(p["step_size"]))
+        if "pixel_size"    in p: self._pixel_size.setValue(float(p["pixel_size"]))
+        if "scan_strategy" in p:
+            idx = self._scan_strategy.findText(str(p["scan_strategy"]))
+            if idx >= 0:
+                self._scan_strategy.setCurrentIndex(idx)
+        if "apply_pc_correction" in p:
+            self._apply_pc_correction.setChecked(bool(p["apply_pc_correction"]))
+
+        if "crystal_C11" in p: self._C11.setValue(float(p["crystal_C11"]))
+        if "crystal_C12" in p: self._C12.setValue(float(p["crystal_C12"]))
+        if "crystal_C44" in p: self._C44.setValue(float(p["crystal_C44"]))
+        if "crystal_structure" in p:
+            self._struct_lbl.setText(str(p["crystal_structure"]))
+
+        # Stash params we don't have widgets for so _gather can pass them through.
+        for key in ("roi_slice", "full_rows", "full_cols",
+                    "tfbc_use_single_euler", "tfbc_euler_deg", "small_strain"):
+            if key in p:
+                self._run_params[key] = p[key]
+
     def _apply_preset(self, index: int):
         """Auto-fill elastic constant fields when a crystal preset is selected."""
         preset = self._preset_combo.itemData(index)
@@ -287,7 +435,12 @@ class VisualizationDialog(QDialog):
         self._struct_lbl.setText(preset.get("structure", "cubic"))
 
     def _gather(self) -> dict:
+        plot_options = {
+            key: chk.isChecked()
+            for key, chk in self._optional_plot_checks.items()
+        }
         return {
+            "plot_options":      plot_options,
             "npz_path":          self._npz_edit.text(),
             "npy_path":          self._npy_edit.text(),
             "ang_path":          self._ang_edit.text(),
@@ -306,6 +459,9 @@ class VisualizationDialog(QDialog):
             "strain_lim":        self._strain_lim.value(),
             "rot_lim":           self._rot_lim.value(),
             "linemap_row":       self._linemap_row.value(),
+            "tfbc_use_single_euler": self._run_params.get("tfbc_use_single_euler", False),
+            "tfbc_euler_deg":        self._run_params.get("tfbc_euler_deg", (0.0, 0.0, 0.0)),
+            "small_strain":          self._run_params.get("small_strain", False),
             "crystal_C11":         self._C11.value(),
             "crystal_C12":         self._C12.value(),
             "crystal_C44":         self._C44.value(),

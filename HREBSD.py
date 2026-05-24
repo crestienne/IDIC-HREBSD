@@ -23,7 +23,7 @@ ro: Rodrigues vector
 For neo-Eulerian representations these are the functions of rotation angle w:
 
 ax: w
-cu: 
+cu:
 ho: [(3 / 4) * (w - sin(w))]^(1/3)
 ro: tan(w / 2)
 
@@ -115,7 +115,7 @@ def quaternion_raw_multiply(a: Tensor, b: Tensor) -> Tensor:
 def quaternion_multiply(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two quaternions representing rotations, returning the quaternion
-    representing their composition, i.e. the versor with nonnegative real part.
+    representing their composition, i.e. the versor with nonnegative real part.
     Usual torch rules for broadcasting apply.
 
     Args:
@@ -330,7 +330,7 @@ def octonion_raw_multiply(a: Tensor, b: Tensor) -> Tensor:
 def octonion_multiply(a: Tensor, b: Tensor) -> Tensor:
     """
     Multiply two octonions representing rotations, returning the octonion
-    representing their composition, i.e. the versor with nonnegative real part.
+    representing their composition, i.e. the versor with nonnegative real part.
     Usual torch rules for broadcasting apply.
 
     Args:
@@ -1089,36 +1089,40 @@ def qu2zh(quaternions: Tensor) -> Tensor:
     return om2zh(qu2om(quaternions))
 
 
-# need to define the following functions via other conversions
-# om2ro,
-# om2cu,
-# om2ho,
-# qu2cu,
-# qu2ho,
-# qu2eu,
-# ax2om,
-# ax2cu,
-# ax2ho,
-# ax2eu,
-# ro2qu,
-# ro2om,
-# ro2cu,
-# ro2ho,
-# ro2eu,
-# cu2ax,
-# cu2qu,
-# cu2om,
-# cu2ro,
-# cu2eu,
-# ho2qu,
-# ho2om,
-# ho2ro,
-# ho2eu,
-# eu2ax,
-# eu2qu,
-# eu2ro,
-# eu2cu,
-# eu2ho,
+@torch.jit.script
+def bu2qu_emsoft(bu: Tensor) -> Tensor:
+    """
+    Bunge (ZXZ) Euler angles → quaternion, EMsoft P=+1 canonical form.
+
+    Matches the project's rotations.eu2qu so the resulting quaternion is
+    consistent with the rest of the DIC-HREBSD pipeline (IPF maps,
+    .ang reader, Results_plotting, etc.).
+
+    NOTE: this is NOT the same as eu2qu(bu, "ZXZ") in this file — that
+    chains through om2qu(eu2om(...)) and produces the conjugate (inverse
+    rotation).  Use this function for any Bunge angles that came from
+    or will be compared to the .ang file's orientations.
+
+    Args:
+        bu (Tensor): shape (..., 3) Bunge ZXZ Euler angles in radians.
+
+    Returns:
+        Tensor of quaternions (w, x, y, z), shape (..., 4), with w ≥ 0.
+    """
+    sigma = 0.5 * (bu[..., 0] + bu[..., 2])
+    delta = 0.5 * (bu[..., 0] - bu[..., 2])
+    c = torch.cos(0.5 * bu[..., 1])
+    s = torch.sin(0.5 * bu[..., 1])
+
+    qu = torch.empty(bu.shape[:-1] + (4,), dtype=bu.dtype, device=bu.device)
+    qu[..., 0] =  c * torch.cos(sigma)
+    qu[..., 1] = -s * torch.cos(delta)
+    qu[..., 2] = -s * torch.sin(delta)
+    qu[..., 3] = -c * torch.sin(sigma)
+
+    # Force the scalar part non-negative for canonical form.
+    sign = torch.where(qu[..., 0:1] < 0, -1.0, 1.0)
+    return qu * sign
 
 
 @torch.jit.script
@@ -1205,20 +1209,6 @@ def ax2cu(ax: Tensor) -> Tensor:
         Cubochoric vectors as tensor of shape (..., 3).
     """
     return qu2cu(ax2qu(ax))
-
-
-@torch.jit.script
-def ax2ho(ax: Tensor) -> Tensor:
-    """
-    Converts axis-angle representation to homochoric vector representation.
-
-    Args:
-        ax: Axis-angle representation as tensor of shape (..., 4).
-
-    Returns:
-        Homochoric vectors as tensor of shape (..., 3).
-    """
-    return qu2ho(ax2qu(ax))
 
 
 @torch.jit.script
@@ -1500,7 +1490,7 @@ def eu2cu(euler_angles: Tensor, convention: str) -> Tensor:
     Returns:
         Cubochoric vectors as tensor of shape (..., 3).
     """
-    return ax2cu(eu2ax(euler_angles, convention))
+    return qu2cu(eu2qu(euler_angles, convention))
 
 
 @torch.jit.script
@@ -1518,38 +1508,6 @@ def qu2eu(quaternions: Tensor, convention: str) -> Tensor:
         Euler angles in radians as tensor of shape (..., 3).
     """
     return om2eu(qu2om(quaternions), convention)
-
-
-@torch.jit.script
-def eu2qu(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to quaternions.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        quaternions with real part first, as tensor of shape (..., 4).
-    """
-    return om2qu(eu2om(euler_angles, convention))
-
-
-@torch.jit.script
-def eu2cu(euler_angles: Tensor, convention: str) -> Tensor:
-    """
-    Convert rotations given as Euler angles in radians to cubochoric vectors.
-
-    Args:
-        euler_angles: Euler angles in radians as tensor of shape (..., 3).
-        convention: Convention string of three uppercase letters from
-            {"X", "Y", and "Z"}.
-
-    Returns:
-        Cubochoric vectors as tensor of shape (..., 3).
-    """
-    return qu2cu(eu2qu(euler_angles, convention))
 
 
 @torch.jit.script
@@ -1596,731 +1554,6 @@ def om2cu(matrix: Tensor) -> Tensor:
 
 
 @torch.jit.script
-def s2_fibonacci_lattice(
-    n: int, device: torch.device, mode: str = "avg"
-) -> torch.Tensor:
-    """
-    Sample n points on the unit sphere using the Fibonacci spiral method.
-    :param n: number of points to sample
-    :return: torch tensor of shape (n, 3) containing the points
-
-    References:
-    https://extremelearning.com.au/how-to-evenly-distribute-points-on-a-sphere-more-effectively-than-the-canonical-fibonacci-lattice/
-
-
-    """
-    # initialize the golden ratio
-    phi = (1 + 5**0.5) / 2
-    # initialize the epsilon parameter
-    if mode == "avg":
-        epsilon = 0.36
-    elif mode == "max":
-        if n >= 600000:
-            epsilon = 214.0
-        elif n >= 400000:
-            epsilon = 75.0
-        elif n >= 11000:
-            epsilon = 27.0
-        elif n >= 890:
-            epsilon = 10.0
-        elif n >= 177:
-            epsilon = 3.33
-        elif n >= 24:
-            epsilon = 1.33
-        else:
-            epsilon = 0.33
-    else:
-        raise ValueError('mode must be either "avg" or "max"')
-    # generate the points (they must be doubles for large numbers of points)
-    indices = torch.arange(n, dtype=torch.float64, device=device)
-    theta = 2 * torch.pi * indices / phi
-    phi = torch.acos(1 - 2 * (indices + epsilon) / (n - 1 + 2 * epsilon))
-    points = theta_phi_to_xyz(theta, phi)
-    return points
-
-
-@torch.jit.script
-def halton_sequence(size: int, base: int, device: torch.device) -> torch.Tensor:
-    """Generate the Halton sequence of given size and base using torch."""
-    digits = (
-        int(
-            torch.log10(torch.tensor(float(size * base), device=device))
-            / torch.log10(torch.tensor(float(base), device=device))
-        )
-        + 1
-    )
-    indices = torch.arange(1, size + 1, device=device).reshape(-1, 1)
-    digits_array = base ** torch.arange(digits, device=device, dtype=torch.float32)
-    divisors = base ** (torch.arange(digits, device=device, dtype=torch.float32) + 1)
-    coefficients = (indices // digits_array) % base
-    radical_inverse_values = coefficients.mv(1.0 / divisors)
-    return radical_inverse_values
-
-
-@torch.jit.script
-def halton_sequence_id(
-    id_start: int, id_stop: int, base: int, device: torch.device
-) -> torch.Tensor:
-    """Generate the Halton sequence of given size and base using torch."""
-    if id_start > 1e15 or id_stop > 1e15:
-        raise ValueError("id_start and id_stop must be less than 999999999999999")
-    size = id_stop - id_start
-    digits = (
-        int(
-            torch.log10(torch.tensor(float(size * base), device=device))
-            / torch.log10(torch.tensor(float(base), device=device))
-        )
-        + 1
-    )
-    indices = torch.arange(id_start, id_stop + 1, device=device).reshape(-1, 1)
-    digits_array = base ** torch.arange(digits, device=device, dtype=torch.float64)
-    divisors = base ** (torch.arange(digits, device=device, dtype=torch.float64) + 1)
-    coefficients = (indices // digits_array) % base
-    radical_inverse_values = coefficients.mv(1.0 / divisors)
-    return radical_inverse_values
-
-
-@torch.jit.script
-def halton_id_3d(id_start: int, id_stop: int, device: torch.device) -> torch.Tensor:
-    """Generate a 3D Halton sequence given the start and stop indices"""
-    return torch.stack(
-        [
-            halton_sequence_id(id_start, id_stop, 2, device),
-            halton_sequence_id(id_start, id_stop, 3, device),
-            halton_sequence_id(id_start, id_stop, 5, device),
-        ],
-        dim=1,
-    )
-
-
-@torch.jit.script
-def so3_halton_cubochoric(id_start: int, id_stop: int, device: torch.device):
-    """
-    Generate a 3D Halton sequence in the cubochoric mapping of SO(3). Orientations
-    are returned as unit quaternions with positive scalar part (w, x, y, z)
-    """
-    cu = halton_id_3d(id_start, id_stop, device=device) * torch.pi ** (
-        2 / 3
-    ) - 0.5 * torch.pi ** (2 / 3)
-    ho = cu2ho(cu)
-    qu = ho2qu(ho)
-    qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
-    return qu
-
-
-@torch.jit.script
-def so3_cubochoric_rand(n: int, device: torch.device) -> torch.Tensor:
-    box_sampling = torch.rand(n, 3, device=device) * torch.pi ** (
-        2.0 / 3.0
-    ) - 0.5 * torch.pi ** (2.0 / 3.0)
-    ho = cu2ho(box_sampling)
-    qu = ho2qu(ho)
-    qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
-    return qu
-
-
-@torch.jit.script
-def so3_cubochoric_grid(edge_length: int, device: torch.device):
-    """
-    Generate a 3D grid in cubochoric coordinates. Orientations
-    are returned as unit quaternions with positive scalar part (w, x, y, z)
-    """
-    cu = torch.linspace(
-        -0.5 * torch.pi ** (2 / 3),
-        0.5 * torch.pi ** (2 / 3),
-        edge_length,
-        device=device,
-    )
-    cu = torch.stack(torch.meshgrid(cu, cu, cu, indexing="ij"), dim=-1).reshape(-1, 3)
-    ho = cu2ho(cu)
-    qu = ho2qu(ho)
-    qu = standardize_quaternion(qu / torch.norm(qu, dim=-1, keepdim=True))
-    return qu
-
-
-@torch.jit.script
-def get_laue_mult(laue_group: int) -> int:
-    """
-    This function returns the multiplicity of the Laue group specified by the
-    laue_group parameter. The ordering of the Laue groups is as follows:
-
-    1. C1
-    2. C2
-    3. C3
-    4. C4
-    5. C6
-    6. D2
-    7. D3
-    8. D4
-    9. D6
-    10. T
-    11. O
-
-    Args:
-        laue_group: integer between 1 and 11 inclusive
-
-    Returns:
-        integer containing the multiplicity of the Laue group
-
-    """
-
-    LAUE_MULTS = [
-        2,
-        4,
-        6,
-        8,
-        12,
-        8,
-        12,
-        16,
-        24,
-        24,
-        48,
-    ]
-
-    return LAUE_MULTS[laue_group - 1]
-
-
-@torch.jit.script
-def laue_elements(laue_id: int) -> Tensor:
-    """
-    This function returns the elements of the Laue group specified by the
-    laue_id parameter. The elements are returned as a tensor of shape
-    (cardinality, 4) where the first element is always the identity.
-
-    Args:
-        laue_id: integer between inclusive [1, 11]
-
-    1. C1
-    2. C2
-    3. C3
-    4. C4
-    5. C6
-    6. D2
-    7. D3
-    8. D4
-    9. D6
-    10. T
-    11. O
-
-    Returns:
-        torch tensor of shape (cardinality, 4) containing the elements of the
-
-    """
-
-    # sqrt(2) / 2 and sqrt(3) / 2
-    R2 = 0.7071067811865475244008443621048490392848359376884740365883398689
-    R3 = 0.8660254037844386467637231707529361834714026269051903140279034897
-    # 7 subsets of O Laue groups (O, T, D4, D2, C4, C2, C1)
-    LAUE_O = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [R2, 0.0, 0.0, R2],
-            [R2, 0.0, 0.0, -R2],
-            [0.0, R2, R2, 0.0],
-            [0.0, -R2, R2, 0.0],
-            [0.5, 0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5, -0.5],
-            [0.5, 0.5, -0.5, -0.5],
-            [0.5, -0.5, -0.5, -0.5],
-            [0.5, -0.5, 0.5, 0.5],
-            [0.5, -0.5, 0.5, -0.5],
-            [0.5, -0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5, 0.5],
-            [R2, R2, 0.0, 0.0],
-            [R2, -R2, 0.0, 0.0],
-            [R2, 0.0, R2, 0.0],
-            [R2, 0.0, -R2, 0.0],
-            [0.0, R2, 0.0, R2],
-            [0.0, -R2, 0.0, R2],
-            [0.0, 0.0, R2, R2],
-            [0.0, 0.0, -R2, R2],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_T = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.5, 0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5, -0.5],
-            [0.5, 0.5, -0.5, -0.5],
-            [0.5, -0.5, -0.5, -0.5],
-            [0.5, -0.5, 0.5, 0.5],
-            [0.5, -0.5, 0.5, -0.5],
-            [0.5, -0.5, -0.5, 0.5],
-            [0.5, 0.5, 0.5, 0.5],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_D4 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [R2, 0.0, 0.0, R2],
-            [R2, 0.0, 0.0, -R2],
-            [0.0, R2, R2, 0.0],
-            [0.0, -R2, R2, 0.0],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_D2 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_C4 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-            [R2, 0.0, 0.0, R2],
-            [R2, 0.0, 0.0, -R2],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_C2 = torch.tensor(
-        [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]], dtype=torch.float64
-    )
-    LAUE_C1 = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float64)
-
-    # subsets of D6 Laue groups (D6, D3, C6, C3) - C1 was already defined above
-    LAUE_D6 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.5, 0.0, 0.0, R3],
-            [0.5, 0.0, 0.0, -R3],
-            [0.0, 0.0, 0.0, 1.0],
-            [R3, 0.0, 0.0, 0.5],
-            [R3, 0.0, 0.0, -0.5],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, -0.5, R3, 0.0],
-            [0.0, 0.5, R3, 0.0],
-            [0.0, R3, 0.5, 0.0],
-            [0.0, -R3, 0.5, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_D3 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.5, 0.0, 0.0, R3],
-            [0.5, 0.0, 0.0, -R3],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, -0.5, R3, 0.0],
-            [0.0, 0.5, R3, 0.0],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_C6 = torch.tensor(
-        [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.5, 0.0, 0.0, R3],
-            [0.5, 0.0, 0.0, -R3],
-            [0.0, 0.0, 0.0, 1.0],
-            [R3, 0.0, 0.0, 0.5],
-            [R3, 0.0, 0.0, -0.5],
-        ],
-        dtype=torch.float64,
-    )
-    LAUE_C3 = torch.tensor(
-        [[1.0, 0.0, 0.0, 0.0], [0.5, 0.0, 0.0, R3], [0.5, 0.0, 0.0, -R3]],
-        dtype=torch.float64,
-    )
-    LAUE_GROUPS = [
-        LAUE_C1,
-        LAUE_C2,
-        LAUE_C3,
-        LAUE_C4,
-        LAUE_C6,
-        LAUE_D2,
-        LAUE_D3,
-        LAUE_D4,
-        LAUE_D6,
-        LAUE_T,
-        LAUE_O,
-    ]
-
-    return LAUE_GROUPS[laue_id - 1]
-
-
-@torch.jit.script
-def so3_to_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
-    """
-    This function moves the given quaternions to the fundamental zone of the
-    given Laue group. The space of a single orientations is different than that
-    of two relative orientations. This function moves the quaternions to the
-    fundamental zone of the space of single orientations.
-
-    Args:
-        quats: quaternions to move to fundamental zone of shape (..., 4)
-        laue_id: laue group of quaternions to move to fundamental zone
-
-    Returns:
-        orientations in fundamental zone of shape (..., 4)
-
-    Notes:
-
-    Imagine orienting a cube. The description of the orientation of the cube is
-    different than the description of the relative orientation of the cube with
-    respect to another cube, as there are two entities with its symmetry. This
-    has been called the "exchange symmetry" of misorientation space.
-
-    """
-    # get the important shapes
-    data_shape = quats.shape
-    N = torch.prod(torch.tensor(data_shape[:-1]))
-    card = get_laue_mult(laue_id) // 2
-    laue_group = laue_elements(laue_id).to(quats.device).to(quats.dtype)
-
-    # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_quaternions_real = quaternion_real_of_prod(
-        quats.reshape(N, 1, 4), laue_group.reshape(card, 4)
-    ).abs()
-
-    # find the quaternion with the largest w value
-    row_maximum_indices = torch.argmax(equivalent_quaternions_real, dim=-1)
-
-    # gather the equivalent quaternions with the largest w value for each equivalent quaternion set
-    output = quaternion_multiply(quats.reshape(N, 4), laue_group[row_maximum_indices])
-
-    return output.reshape(data_shape)
-
-
-@torch.jit.script
-def so3_in_fz_laue(quats: Tensor, laue_id: int) -> Tensor:
-    """
-    Determine if the given quaternions are in the fundamental zone of the given
-    Laue group. This computes the orientation fundamental zone, not the
-    misorientation fundamental zone.
-
-
-    Args:
-        quats: quaternions to move to fundamental zone of shape (..., 4)
-        laue_id: laue group of quaternions to move to fundamental zone
-
-    Returns:
-        mask of quaternions in fundamental zone of shape (...,)
-
-
-    """
-    # get the important shapes
-    data_shape = quats.shape
-    N = torch.prod(torch.tensor(data_shape[:-1]))
-    card = get_laue_mult(laue_id) // 2
-    laue_group = laue_elements(laue_id).to(quats.device).to(quats.dtype)
-
-    # reshape so that quaternions is (N, 1, 4) and laue_group is (1, card, 4) then use broadcasting
-    equiv_quats_real_part = quaternion_real_of_prod(
-        quats.reshape(N, 1, 4), laue_group.reshape(card, 4)
-    ).abs()
-
-    # find the quaternion with the largest w value
-    row_maximum_indices = torch.argmax(equiv_quats_real_part, dim=-1)
-
-    # first element is always the identity for the enumerations of the Laue operators
-    # so if its index is 0, then a given orientation was already in the fundamental zone
-    return (row_maximum_indices == 0).reshape(data_shape[:-1])
-
-
-@torch.jit.script
-def disori_angle(quats1: Tensor, quats2: Tensor, laue_id: int) -> Tensor:
-    """
-
-    Return the disorientation angle in radians between the given quaternions.
-
-    Args:
-        quats1: quaternions of shape (..., 4)
-        quats2: quaternions of shape (..., 4)
-
-    Returns:
-        disorientation angle in radians of shape (...)
-
-    """
-    # multiply without symmetry
-    misori_quats = quaternion_multiply(quats1, quaternion_invert(quats2))
-
-    # move the misorientation quaternions to the fundamental zone (disorientation)
-    disori_quats_fz = so3_to_fz_laue(misori_quats, laue_id)
-
-    # find the disorientation angle
-    return misorientation_angle(norm_standard_quaternion(disori_quats_fz))
-
-
-@torch.jit.script
-def s2_in_fz_laue(points: Tensor, laue_id: int) -> Tensor:
-    """
-    Determine if the given 3D points are in the fundamental zone of the given
-    Laue group. This computes the sphere fundamental zone, not the misorientation
-    nor orientation fundamental zone. The 2-spherical fundamental zone is also
-    called the fundamental sector.
-
-    """
-    # define some constants
-    PI_2 = torch.pi / 2.0
-    PI_3 = torch.pi / 3.0
-    PI_4 = torch.pi / 4.0
-    PI_6 = torch.pi / 6.0
-    PI_n23 = -2.0 * torch.pi / 3.0
-
-    # set epsilon
-    EPS = 1e-12
-
-    # use rules to find the equivalent points in the fundamental zone
-    x, y, z = points[..., 0], points[..., 1], points[..., 2]
-
-    eta = torch.atan2(y, x)
-    chi = torch.acos(z)
-
-    if laue_id == 1 or laue_id == 2:  # triclinic, monoclinic
-        cond = eta.ge(0.0) & eta.le(torch.pi + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 3 or laue_id == 4:  # orthorhombic, tetragonal-low
-        cond = eta.ge(0.0) & eta.le(PI_2 + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 5:  # tetragonal-high
-        cond = eta.ge(0.0) & eta.le(PI_4 + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 6:  # trigonal-low
-        cond = eta.ge(PI_n23) & (eta.le(0.0 + EPS)) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 7:  # trigonal-high
-        cond = eta.ge(-PI_2) & eta.le(-PI_6 + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 8:  # hexagonal-low
-        cond = eta.ge(0.0) & eta.le(PI_3 + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 9:  # hexagonal-high
-        cond = eta.ge(0.0) & eta.le(PI_6 + EPS) & chi.ge(0.0) & chi.le(PI_2 + EPS)
-    elif laue_id == 10:  # cubic-low
-        # where eta is over 45 degrees, subtract from 90 degrees
-        cond = (
-            torch.where(
-                eta.ge(PI_4),
-                chi
-                <= torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(PI_2 - eta) ** 2)))
-                + EPS,
-                chi <= torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(eta) ** 2))) + EPS,
-            )
-            & eta.ge(0.0)
-            & eta.le(PI_2 + EPS)
-            & chi.ge(0.0)
-        )
-
-    elif laue_id == 11:  # cubic-high
-        # where eta is over 45 degrees, subtract from 90 degrees
-        cond = (
-            torch.where(
-                eta.ge(PI_4),
-                chi
-                <= torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(PI_2 - eta) ** 2)))
-                + EPS,
-                chi <= torch.acos(torch.sqrt(1.0 / (2.0 + torch.tan(eta) ** 2))) + EPS,
-            )
-            & eta.ge(0.0)
-            & eta.le(PI_4 + EPS)
-            & chi.ge(0.0)
-        )
-    else:
-        raise ValueError(f"Laue id {laue_id} not in [1, 11]")
-
-    return cond
-
-
-@torch.jit.script
-def s2_to_fz_laue(points: Tensor, laue_group: Tensor, laue_id: int) -> Tensor:
-    """
-    Move the given 3D points to the fundamental zone of the given Laue group. This
-    computes the sphere fundamental zone, not the misorientation nor orientation
-    fundamental zone. The 2-spherical fundamental zone is also called the
-    fundamental sector.
-
-    Args:
-        points: points to move to fundamental zone of shape (..., 3)
-        laue_group: laue group of points to move to fundamental zone
-        laue_id: laue group of points to move to fundamental zone
-
-    Returns:
-        points in fundamental zone of shape (..., 3)
-
-    """
-
-    # get the important shapes
-    data_shape = points.shape
-    N = torch.prod(torch.tensor(data_shape[:-1]))
-
-    # reshape so that points is (N, 1, 3) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_points = quaternion_apply(
-        laue_group.reshape(-1, 4), points.view(N, 1, 3)
-    )
-
-    # concatenate all of the points with their inverted coordinates
-    equivalent_points = torch.cat([equivalent_points, -equivalent_points], dim=1)
-
-    # find the points that are in the s2 fundamental zone
-    cond = s2_in_fz_laue(equivalent_points, laue_id)
-
-    return equivalent_points[cond].reshape(data_shape)
-
-
-@torch.jit.script
-def s2_equiv_laue(points: Tensor, laue_id: int) -> Tensor:
-    """
-    Return the equivalent points in the 2-spherical fundamental zone of
-    the given Laue group.
-
-    Args:
-        points: points to move to fundamental zone of shape (..., 3)
-        laue_id: laue group of points to move to fundamental zone
-
-    Returns:
-        points in fundamental zone of shape (..., |laue_group|, 3)
-
-    """
-
-    # get the important shapes
-    data_shape = points.shape
-    N = torch.prod(torch.tensor(data_shape[:-1]))
-    laue_group = laue_elements(laue_id).to(points.device).to(points.dtype)
-
-    # reshape so that points is (N, 1, 3) and laue_group is (1, card, 4) then use broadcasting
-    equivalent_points = quaternion_apply(
-        laue_group.reshape(-1, 4), points.view(N, 1, 3)
-    )
-
-    # concatenate all of the points with their inverted coordinates
-    equivalent_points = torch.cat([equivalent_points, -equivalent_points], dim=1)
-
-    return equivalent_points.reshape(data_shape[:-1] + (len(laue_group), 3))
-
-
-@torch.jit.script
-def so3_sample_fz_laue(
-    laue_id: int,
-    target_n_samples: int,
-    device: torch.device,
-) -> Tensor:
-    """
-
-    A function to sample the fundamental zone of SO(3) for a given Laue group.
-    This function uses the cubochoric grid sampling method, although other methods
-    could be used. A slight oversampling is used to ensure that the number of
-    samples closest to the target number of samples is used, as rejection sampling
-    is used here.
-
-    Args:
-        laue_id: integer between 1 and 11 inclusive
-        target_n_samples: number of samples to use on the fundamental sector of SO(3)
-        device: torch device to use
-
-    Returns:
-        torch tensor of shape (n_samples, 4) containing the sampled orientations
-
-    """
-    # get the multiplicity of the laue group
-    laue_mult = get_laue_mult(laue_id)
-
-    # multiply by half the Laue multiplicity (inversion is not included in the operators)
-    required_oversampling = target_n_samples * 0.5 * laue_mult
-
-    # take the cube root to get the edge length
-    edge_length = int(required_oversampling ** (1.0 / 3.0))
-    so3_samples = so3_cubochoric_grid(edge_length, device=device)
-
-    # reject the points that are not in the fundamental zone
-    so3_samples_fz = so3_samples[so3_in_fz_laue(so3_samples, laue_id)]
-
-    # randomly permute the samples
-    so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
-
-    return so3_samples_fz
-
-
-@torch.jit.script
-def so3_sample_fz_laue_angle(
-    laue_id: int,
-    target_mean_disorientation: float,
-    device: torch.device,
-    permute: bool = True,
-) -> Tensor:
-    """
-
-    A function to sample the fundamental zone of SO(3) for a given Laue group.
-    This function uses the cubochoric grid sampling method, although other methods
-    could be used. A slight oversampling is used to ensure that the number of
-    samples closest to the target number of samples is used, as rejection sampling
-    is used here.
-
-    Args:
-        laue_id: integer between 1 and 11 inclusive
-        desired_mean_disorientation: desired mean disorientation in degrees
-        device: torch device to use
-
-    Returns:
-        torch tensor of shape (n_samples, 4) containing the sampled orientations
-
-    """
-    # get the multiplicity of the laue group
-    laue_mult = get_laue_mult(laue_id)
-
-    # use empirical fit to get the number of samples
-    n_so3_without_symmetry = (
-        2 * (131.97049) / (target_mean_disorientation - 0.03732) + 1
-    ) ** 3
-    edge_length = int((n_so3_without_symmetry / (0.5 * laue_mult)) ** (1.0 / 3.0) + 1.0)
-    so3_samples = so3_cubochoric_grid(edge_length, device=device)
-
-    # reject the points that are not in the fundamental zone
-    so3_samples_fz = so3_samples[so3_in_fz_laue(so3_samples, laue_id)]
-
-    # randomly permute the samples
-    if permute:
-        so3_samples_fz = so3_samples_fz[torch.randperm(so3_samples_fz.shape[0])]
-
-    return so3_samples_fz
-
-
-@torch.jit.script
-def s2_sample_fz_laue(
-    laue_group: int,
-    target_n_samples: int,
-    device: torch.device,
-) -> Tensor:
-    """
-
-    A function to sample the fundamental zone of S2 for a given Laue group.
-    This function uses the fibonacci lattice sampling method, although other methods
-    could be used. A slight oversampling is used to ensure that the number of
-    samples closest to the target number of samples is used, as rejection sampling
-    is used here.
-
-    Args:
-        laue_group: integer between 1 and 11 inclusive
-        target_n_samples: number of samples to use on the fundamental sector of S2
-        device: torch device to use
-
-    Returns:
-        torch tensor of shape (n_samples, 3) containing the sampled orientations
-
-    """
-
-    laue_mult = get_laue_mult(laue_group)
-
-    # get the sampling locations on the fundamental sector of S2
-    s2_samples = s2_fibonacci_lattice(target_n_samples * laue_mult, device=device)
-
-    # filter out all but the S2 fundamental sector of the laue group
-    s2_samples_fz = s2_samples[s2_in_fz_laue(s2_samples, laue_group)]
-
-    return s2_samples_fz
-
-
-@torch.compile
 def square_lambert(pts: Tensor) -> Tensor:
     """
     Map unit sphere to (-1, 1) X (-1, 1) square via square lambert projection.
@@ -2329,8 +1562,8 @@ def square_lambert(pts: Tensor) -> Tensor:
     """
 
     # constants
-    # TWO_DIV_SQRT8 = 0.7071067811865475  # 2 / sqrt(8)
-    # TWOSQRT2_DIV_PI = 0.9003163161571062  # 2 * sqrt(2) / pi
+    TWO_DIV_SQRT8 = 0.7071067811865475  # 2 / sqrt(8)
+    TWOSQRT2_DIV_PI = 0.9003163161571062  # 2 * sqrt(2) / pi
 
     shape_in = pts.shape[:-1]
 
@@ -2341,36 +1574,34 @@ def square_lambert(pts: Tensor) -> Tensor:
     out = torch.empty((len(x), 2), dtype=pts.dtype, device=pts.device)
 
     # Define conditions and calculations
-    cond = (torch.abs(y) < torch.abs(x))
+    cond = torch.abs(y) <= torch.abs(x)
     factor = torch.sqrt(2.0 * (1.0 - torch.abs(z)))
 
-    # # print out the number of points in each branch
-    # # print("cond: {torch.numel(x[cond]).item()}, ~cond {torch.numel(x[~cond]).item()}")
-    # # same print but no f string
-    # print("cond:", len(x[cond]), "~cond", len(x[~cond]))
-
-    # # print number satisfied by the condition
-    # print("cond:", torch.sum(cond), "~cond", torch.sum(~cond))
-
-    # # f string print x and y with cond mask
-    # print("x[cond]:", x[cond].shape, "y[cond]:", y[cond].shape, "factor[cond]:", factor[cond].shape)
-
     # instead of precalcuating each branch, just use the condition to select the correct branch
-    out[cond, 0] = torch.sign(x[cond]) * factor[cond] * 0.7071067811865475
-    out[cond, 1] = torch.sign(x[cond]) * factor[cond] * torch.atan2(
+    out[cond, 0] = torch.sign(x[cond]) * factor[cond] * TWO_DIV_SQRT8
+    out[cond, 1] = (
+        torch.sign(x[cond])
+        * factor[cond]
+        * torch.atan2(
             y[cond] * torch.sign(x[cond]),
             x[cond] * torch.sign(x[cond]),
-        ) * 0.9003163161571062
-    
-    out[~cond, 0] = torch.sign(y[~cond]) * factor[~cond] * torch.atan2(
+        )
+        * TWOSQRT2_DIV_PI
+    )
+    out[~cond, 0] = (
+        torch.sign(y[~cond])
+        * factor[~cond]
+        * torch.atan2(
             x[~cond] * torch.sign(y[~cond]),
             y[~cond] * torch.sign(y[~cond]),
-        ) * 0.9003163161571062
-    out[~cond, 1] = torch.sign(y[~cond]) * factor[~cond] * 0.7071067811865475
+        )
+        * TWOSQRT2_DIV_PI
+    )
+    out[~cond, 1] = torch.sign(y[~cond]) * factor[~cond] * TWO_DIV_SQRT8
 
-    # # where close to (0, 0, 1), map to (0, 0)
-    # at_pole = torch.abs(z) > 0.99999999
-    # out[at_pole] = 0.0
+    # where close to (0, 0, 1), map to (0, 0)
+    at_pole = torch.abs(z) > 0.99999999
+    out[at_pole] = 0.0
 
     return out.reshape(shape_in + (2,))
 
@@ -2470,8 +1701,13 @@ def detector_coords_to_ksphere_via_pc(
     # Extract pcx, pcy, pcz from the pc tensor
     pcx_bruker, pcy_bruker, pcz_bruker = torch.unbind(pcs, dim=-1)
 
-    # Convert to detector coordinates
-    pcx_ems = n_cols * (0.5 - pcx_bruker)
+    # Convert Bruker (origin top-left, pcx,pcy in [0,1]) → EMsoft detector
+    # coordinates.  Matches kikuchipy / EMsoft GenerateDetector:
+    #     xpc =  Nx · (pcx − 0.5)
+    #     ypc = -Ny · (pcy − 0.5)  ≡  Ny · (0.5 − pcy)
+    # The xpc sign was previously (0.5 − pcx), which mirrored the detector
+    # x-axis and required a post-hoc np.fliplr downstream.
+    pcx_ems = n_cols * (pcx_bruker - 0.5)
     pcy_ems = n_rows * (0.5 - pcy_bruker)
     pcz_ems = n_rows * pcz_bruker
 
@@ -2566,14 +1802,18 @@ def project_pattern_single_geometry(
     output[mask] = torch.nn.functional.grid_sample(
         master_pattern_MSLNH[None, None, ...],
         coords_within_square[mask][None, None, :],
+        mode="bilinear",
         align_corners=True,
+        padding_mode="border",
     ).squeeze()
 
     # where the z component is negative, use the Southern Hemisphere projection
     output[~mask] = torch.nn.functional.grid_sample(
         master_pattern_MSLSH[None, None, ...],
         coords_within_square[~mask][None, None, :],
+        mode="bilinear",
         align_corners=True,
+        padding_mode="border",
     ).squeeze()
 
     return output
@@ -2635,170 +1875,18 @@ def project_pattern_multiple_geometry(
     output[mask] = torch.nn.functional.grid_sample(
         master_pattern_MSLNH[None, None, ...],
         coords_within_square[mask][None, :, None],
+        mode="bilinear",
         align_corners=True,
+        padding_mode="border",
     ).squeeze()
 
     # where the z component is negative, use the Southern Hemisphere projection
     output[~mask] = torch.nn.functional.grid_sample(
         master_pattern_MSLSH[None, None, ...],
         coords_within_square[~mask][None, :, None],
+        mode="bilinear",
         align_corners=True,
-    ).squeeze()
-
-    return output
-
-
-@torch.jit.script
-def detector_coords_to_ksphere_via_pc(
-    pcs: Tensor,
-    n_rows: int,
-    n_cols: int,
-    tilt: float,
-    azimuthal: float,
-    sample_tilt: float,
-    signal_mask: Optional[Tensor] = None,
-) -> Tensor:
-    """
-    Return sets of direction cosines for varying projection centers.
-
-    This should be viewed as a transformation of coordinates specified by n_rows and
-    n_cols in the detector plane to points on the sphere.
-
-    Args:
-        pcs: Projection centers. Shape (n_pcs, 3)
-        n_rows: Number of detector rows.
-        n_cols: Number of detector columns.
-        tilt: Detector tilt from horizontal in degrees.
-        azimuthal: Sample tilt about the sample RD axis in degrees.
-        sample_tilt: Sample tilt from horizontal in degrees.
-        signal_mask: 1D signal mask with ``True`` values for pixels to get direction
-
-    Returns:
-        The direction cosines for each detector pixel for each PC. Shape (n_pcs, n_det_pixels, 3)
-
-    """
-    # Generate row and column coordinates
-    nrows_array = torch.arange(n_rows - 1, -1, -1, device=pcs.device).float()
-    ncols_array = torch.arange(n_cols, device=pcs.device).float()
-
-    # Calculate cosines and sines
-    alpha_rad = torch.tensor(
-        [(torch.pi / 2.0) + (tilt - sample_tilt) * (torch.pi / 180.0)],
-        device=pcs.device,
-    )
-    azimuthal_rad = torch.tensor([azimuthal * (torch.pi / 180.0)], device=pcs.device)
-    cos_alpha = torch.cos(alpha_rad)
-    sin_alpha = torch.sin(alpha_rad)
-    cos_omega = torch.cos(azimuthal_rad)
-    sin_omega = torch.sin(azimuthal_rad)
-
-    # Extract pcx, pcy, pcz from the pc tensor
-    pcx_bruker, pcy_bruker, pcz_bruker = torch.unbind(pcs, dim=-1)
-
-    # Convert to detector coordinates
-    pcx_ems = n_cols * (0.5 - pcx_bruker)
-    pcy_ems = n_rows * (0.5 - pcy_bruker)
-    pcz_ems = n_rows * pcz_bruker
-
-    # det_x is shape (n_pcs, n_cols)
-    det_x = pcx_ems[:, None] + (1 - n_cols) * 0.5 + ncols_array[None, :]
-    det_y = pcy_ems[:, None] - (1 - n_rows) * 0.5 - nrows_array[None, :]
-
-    # Calculate Ls (n_pcs, n_cols)
-    Ls = -sin_omega * det_x + pcz_ems[:, None] * cos_omega
-    # Calculate Lc (n_pcs, n_rows)
-    Lc = cos_omega * det_x + pcz_ems[:, None] * sin_omega
-
-    # Generate 2D grid indices
-    row_indices, col_indices = torch.meshgrid(
-        torch.arange(n_rows, device=pcs.device),
-        torch.arange(n_cols, device=pcs.device),
-        indexing="ij",
-    )
-
-    # Flatten the 2D grid indices to 1D
-    rows_flat = row_indices.flatten()
-    cols_flat = col_indices.flatten()
-
-    # Apply signal mask if it exists
-    if signal_mask is not None:
-        rows = rows_flat[signal_mask]
-        cols = cols_flat[signal_mask]
-    else:
-        rows = rows_flat
-        cols = cols_flat
-
-    # Vectorize the computation
-    r_g_x = det_y[:, rows] * cos_alpha + sin_alpha * Ls[:, cols]
-    r_g_y = Lc[:, cols]
-    r_g_z = -sin_alpha * det_y[:, rows] + cos_alpha * Ls[:, cols]
-
-    # Stack and reshape
-    r_g_array = torch.stack([r_g_x, r_g_y, r_g_z], dim=-1)
-
-    # Normalize
-    r_g_array = r_g_array / torch.linalg.norm(r_g_array, dim=-1, keepdim=True)
-
-    return r_g_array
-
-
-@torch.jit.script
-def project_pattern_single_geometry(
-    master_pattern_MSLNH: Tensor,
-    master_pattern_MSLSH: Tensor,
-    quaternions: Tensor,
-    direction_cosines: Tensor,
-) -> Tensor:
-    """
-    Args:
-        master_pattern_MSLNH: modified Square Lambert projection for the Northern Hemisphere. Shape (H, W)
-        master_pattern_MSLSH: modified Square Lambert projection for the Southern Hemisphere. Shape (H, W)
-        quaternions: Quaternions for each crystalline orientation. Shape (n_orientations, 4)
-        direction_cosines: Direction cosines for each pixel in the detector. Shape (n_det_pixels, 3)
-
-    Returns:
-        The projected master pattern. Shape (n_orientations, n_det_pixels)
-
-    """
-    # sanitize inputs
-    assert master_pattern_MSLNH.ndim == 2
-    assert master_pattern_MSLSH.ndim == 2
-    assert quaternions.ndim == 2
-    assert direction_cosines.ndim == 2
-    assert direction_cosines.shape[-1] == 3
-
-    n_orientations = quaternions.shape[0]
-    n_det_pixels = direction_cosines.shape[0]
-
-    output = torch.empty(
-        (n_orientations, n_det_pixels),
-        dtype=master_pattern_MSLNH.dtype,
-        device=master_pattern_MSLNH.device,
-    )
-
-    # rotate the outgoing vectors on the K-sphere according to the crystal orientations
-    rotated_vectors = quaternion_apply(
-        quaternions[:, None, :], direction_cosines[None, :, :]
-    )
-
-    # mask for positive z component
-    mask = rotated_vectors[..., 2] > 0
-
-    # where the z component is negative, use the Southern Hemisphere projection
-    coords_within_square = square_lambert(rotated_vectors)
-
-    # where the z component is positive, use the Northern Hemisphere projection
-    output[mask] = torch.nn.functional.grid_sample(
-        master_pattern_MSLNH[None, None, ...],
-        coords_within_square[mask][None, None, :],
-        align_corners=True,
-    ).squeeze()
-
-    # where the z component is negative, use the Southern Hemisphere projection
-    output[~mask] = torch.nn.functional.grid_sample(
-        master_pattern_MSLSH[None, None, ...],
-        coords_within_square[~mask][None, None, :],
-        align_corners=True,
+        padding_mode="border",
     ).squeeze()
 
     return output
@@ -2898,9 +1986,6 @@ def project_HREBSD_pattern(
         raise ValueError(
             f"master_pattern_MSLSH must be shape (H, W) but got {master_pattern_MSLSH.shape}"
         )
-    #reshape gradeint deformation tensor from 1 by 9 to 3 by 3 tensors (row major order!!)
-    #deformation_gradients = deformation_gradients.reshape(-1,3,3)
-    #remove this line above if you are passing in a 3 by 3 
 
     # get direction cosines
     direction_cosines = detector_coords_to_ksphere_via_pc(
@@ -2913,11 +1998,11 @@ def project_HREBSD_pattern(
         signal_mask=signal_mask,
     )
 
-    n_deformation_gradients = deformation_gradients.shape[0]
+    n_orientations = quaternions.shape[0]
     n_det_pixels = direction_cosines.shape[1]
 
     output = torch.empty(
-        (n_deformation_gradients, n_det_pixels),
+        (n_orientations, n_det_pixels),
         dtype=master_pattern_MSLNH.dtype,
         device=master_pattern_MSLNH.device,
     )
@@ -2927,7 +2012,7 @@ def project_HREBSD_pattern(
 
     # apply the inverse of the deformation gradients to the rotated vectors
     rotated_vectors = torch.matmul(
-        torch.inverse(deformation_gradients[:, None, :, :]), rotated_vectors[:, :, :, None]
+        torch.inverse(deformation_gradients), rotated_vectors[:, :, :, None]
     ).squeeze(-1)
 
     # renormalize the rotated vectors
@@ -2935,77 +2020,540 @@ def project_HREBSD_pattern(
         rotated_vectors, dim=-1, keepdim=True
     )
 
-    # mask for positive z component (1, n_det_pixels, 3)
+    # mask for positive z component
     mask = rotated_vectors[..., 2] > 0
 
     # get the coordinates within the image square
     coords_within_square = square_lambert(rotated_vectors)
 
-    # where the z component is positive
+    # where the z component is positive, use the Northern Hemisphere projection
     output[mask] = torch.nn.functional.grid_sample(
         master_pattern_MSLNH[None, None, ...],
         coords_within_square[mask][None, None, :],
+        mode="bilinear",
         align_corners=True,
-        mode = 'bicubic'
+        padding_mode="border",
     ).squeeze()
 
     # where the z component is negative, use the Southern Hemisphere projection
     output[~mask] = torch.nn.functional.grid_sample(
         master_pattern_MSLSH[None, None, ...],
         coords_within_square[~mask][None, None, :],
+        mode="bilinear",
         align_corners=True,
-        mode = 'bicubic'
+        padding_mode="border",
     ).squeeze()
 
     return output
 
 
-#import kikuchipy as kp
-#import matplotlib.pyplot as plt
-#import numpy as np
+# ---------------------------------------------------------------------------
+# Energy-weighted EBSD pattern projection (matches EMsoft CalcEBSDPatternSingleFull_)
+#
+#   Per-pixel:  pattern(ii, jj) = Σ_kk  accum_e(kk, ii, jj) * mLPNH/SH(nix, niy, kk)
+#
+# Use these when you need the spatial variation of the Monte-Carlo energy
+# weights across the detector.  For a quick energy-collapsed approximation,
+# use `_1d` variant.
+# ---------------------------------------------------------------------------
 
-#device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-# get the master pattern
-#mp = kp.data.nickel_ebsd_master_pattern_small(projection="lambert", hemisphere="both")
+def accum_e_to_detector(
+    accum_e_mc: Tensor,           # (nE, ns, ns) Monte-Carlo Lambert grid
+    pcs: Tensor,                  # (n_pcs, 3) Bruker PCs — typically n_pcs=1
+    n_rows: int,
+    n_cols: int,
+    tilt: float,
+    azimuthal: float,
+    sample_tilt: float,
+) -> Tensor:
+    """
+    Project Monte-Carlo accum_e from its MC Lambert grid onto the detector
+    grid.  Mirrors EMsoft's GenerateDetector_ — for each detector pixel,
+    take the direction cosine on the K-sphere, project to the square Lambert
+    coordinates, and sample accum_e at that coordinate for every energy bin.
 
-# to torch tensor
-#mLPNH = torch.from_numpy(mp.data[0, :, :]).to(torch.float32)
-#mLPSH = torch.from_numpy(mp.data[1, :, :]).to(torch.float32)
+    This is run separately from the master-pattern lookup because accum_e
+    lives in the sample reference frame (it does not depend on grain
+    orientation), while the master pattern is looked up in the crystal
+    frame (which requires the rotation by `quaternions`).
 
-# normalize each master pattern to 0 to 1pip
-#mLPNH = ((mLPNH - torch.min(mLPNH)) / (torch.max(mLPNH) - torch.min(mLPNH))).to(device)
-#mLPSH = ((mLPSH - torch.min(mLPSH)) / (torch.max(mLPSH) - torch.min(mLPSH))).to(device)
+    Args:
+        accum_e_mc: (nE, ns, ns) Monte-Carlo accum_e in the upper hemisphere
+            of the sample reference frame, in square-Lambert coordinates.
+        pcs, n_rows, n_cols, tilt, azimuthal, sample_tilt: same conventions
+            as `detector_coords_to_ksphere_via_pc`.
 
-# get the signal mask
-#signal_mask = kp.filters.Window("circular", (1080, 1080)).astype(bool).reshape(-1)
-#signal_mask = torch.from_numpy(signal_mask).to(torch.bool)
+    Returns:
+        accum_e_detector: (nE, n_rows, n_cols) with the same energy binning
+            as accum_e_mc.  Only n_pcs=1 is currently supported — multi-PC
+            mode would return (nE, n_pcs, n_rows, n_cols) which downstream
+            functions don't yet consume.
+    """
+    if accum_e_mc.ndim != 3:
+        raise ValueError(f"accum_e_mc must be 3D (nE, ns, ns); got shape {accum_e_mc.shape}")
+    if pcs.ndim == 1:
+        pcs = pcs[None, :]
+    if pcs.shape[0] != 1:
+        raise NotImplementedError(
+            f"accum_e_to_detector currently supports a single PC; got n_pcs={pcs.shape[0]}."
+        )
 
-# get the deformation gradients
-#deformation_gradients = torch.eye(3, dtype=torch.float32).to(device)[None, :, :]
+    import math
 
-# get the quaternions
-#quats = so3_sample_fz_laue_angle(11, 10, device=device)
+    nE = accum_e_mc.shape[0]
+    device = accum_e_mc.device
+    dtype = accum_e_mc.dtype
 
-#pattern_center = torch.tensor([0.4221, 0.2179, 0.4954], device=device)[None, :]
-#detector_height = 1080
-#detector_width = 1080
-#det_shape = (detector_height, detector_width)
-#detector_tilt_deg = 0.0
-#azimuthal_deg = 0.0
-##sample_tilt_deg = 70.0
+    # Direction cosines for each detector pixel, in the sample reference frame.
+    # accum_e is in the same frame — no quaternion rotation needed.
+    direction_cosines = detector_coords_to_ksphere_via_pc(
+        pcs.to(device), n_rows, n_cols, tilt, azimuthal, sample_tilt,
+        signal_mask=None,
+    )  # (1, n_det_pixels, 3)
 
-# get the projected patterns
-#patterns = project_HREBSD_pattern(
-    pattern_center,
-    detector_height,
-    detector_width,
-    detector_tilt_deg,
-    azimuthal_deg,
-    sample_tilt_deg,
-    quats,
-    deformation_gradients,
-    mLPNH,
-    mLPSH,
-    signal_mask=signal_mask,
+    # ── EMsoft GenerateDetector_ geometric weighting ───────────────────────
+    #   alpha  = atan(delta/L/sqrt(pi))
+    #   calpha = cos(alpha)
+    #   dp     = pcvec · dc
+    #   g      = ((calpha^2 + dp^2 - 1)^1.5) / (calpha^3) * 0.25
+    # delta/L (angular size of one pixel) follows from Bruker pcz convention:
+    #   pcz_bruker = L / (n_rows * delta)  ⇒  delta/L = 1 / (pcz_bruker * n_rows)
+    pcz_bruker = float(pcs[0, 2].item())
+    delta_over_L = 1.0 / (pcz_bruker * float(n_rows))
+    alpha_pix = math.atan(delta_over_L / math.sqrt(math.pi))
+    calpha = math.cos(alpha_pix)
 
+    # pcvec in sample frame: at the PC pixel, det_x = det_y = 0, so the
+    # direction cosine from detector_coords_to_ksphere_via_pc reduces to
+    #   (sin(α_geo)·cos(ω), sin(ω), cos(α_geo)·cos(ω))
+    # where α_geo = π/2 + (tilt − sample_tilt)·π/180 and ω = azimuthal·π/180.
+    alpha_geo_rad = (math.pi / 2.0) + (tilt - sample_tilt) * (math.pi / 180.0)
+    omega_rad     = azimuthal * (math.pi / 180.0)
+    pcvec = torch.tensor(
+        [
+            math.sin(alpha_geo_rad) * math.cos(omega_rad),
+            math.sin(omega_rad),
+            math.cos(alpha_geo_rad) * math.cos(omega_rad),
+        ],
+        device=device, dtype=dtype,
+    )
+    pcvec = pcvec / torch.linalg.norm(pcvec)
+
+    # dp = pcvec · dc, broadcast over detector pixels.
+    dp = (direction_cosines.squeeze(0) * pcvec).sum(dim=-1)  # (n_det_pixels,)
+
+    # g factor.  Clamp the cube-root argument to ≥ 0 so floating-point grit
+    # at pixels nearly orthogonal to pcvec doesn't return NaN.
+    calpha_t = torch.tensor(calpha, device=device, dtype=dtype)
+    inside = (calpha_t ** 2 + dp ** 2 - 1.0).clamp(min=0.0)
+    g = inside.pow(1.5) / (calpha_t ** 3) * 0.25       # (n_det_pixels,)
+
+    # ── Lambert lookup of accum_e ──────────────────────────────────────────
+    # square_lambert uses |z|, so upper- and lower-hemisphere rays collapse
+    # to the same 2-D coord — fine here because accum_e is only populated
+    # for the upper hemisphere (the back-scatter direction in EMsoft's MC).
+    coords = square_lambert(direction_cosines).to(dtype=dtype)
+
+    # EMsoft samples accum_e on a Lambert grid that is rotated 90° relative
+    # to the master-pattern Lambert grid.  See EMsoftOO mod_EBSD.f90 ~2466-2470:
+    #     x = ixy(1); ixy(1) = ixy(2); ixy(2) = -x
+    # i.e. (x, y) → (y, -x).  Without this, accum_e is sampled at the wrong
+    # angular position and the per-pixel energy-weighting structure smears
+    # out — visually, the centro-symmetric envelope is intact but the MC
+    # asymmetry projects onto the wrong detector axis.
+    coords = torch.stack([coords[..., 1], -coords[..., 0]], dim=-1)
+
+    grid = coords.unsqueeze(1)                          # (1, 1, n_det_pixels, 2)
+
+    # accum_e_mc here is (nE, ipy, ipx) after the read transpose in
+    # SimPatGen._read_master_pattern_h5.  PyTorch's grid_sample reads the
+    # input as (N, C, H, W) with grid[..., 0] (Lambert x) indexing W and
+    # grid[..., 1] (Lambert y) indexing H, so the existing axis order
+    # already maps ipy → H and ipx → W correctly.  No transpose needed.
+    sampled = torch.nn.functional.grid_sample(
+        accum_e_mc.unsqueeze(0),     # (1, nE, ipy_H, ipx_W)
+        grid,                         # (1, 1, n_det_pixels, 2)
+        mode="bilinear",
+        align_corners=True,
+        padding_mode="border",
+    ).squeeze(0).squeeze(1)           # (nE, n_det_pixels)
+
+    # accum_e is a non-negative count — clamp interpolation negatives
+    # near sharp features so the multiplied output stays physical.
+    sampled = torch.clamp(sampled, min=0.0)
+
+    # Apply the geometric obliquity factor per detector pixel.
+    sampled = sampled * g.unsqueeze(0)
+
+    return sampled.reshape(nE, n_rows, n_cols).contiguous()
+
+
+def project_HREBSD_pattern_energy_weighted(
+    pcs: Tensor,
+    n_rows: int,
+    n_cols: int,
+    tilt: float,
+    azimuthal: float,
+    sample_tilt: float,
+    quaternions: Tensor,
+    deformation_gradients: Tensor,
+    master_pattern_MSLNH: Tensor,   # (nE, H, W)
+    master_pattern_MSLSH: Tensor,   # (nE, H, W)
+    accum_e: Tensor,                # (nE, n_rows, n_cols)
+    e_min_idx: int = 0,
+    e_max_idx: Optional[int] = None,
+    signal_mask: Optional[Tensor] = None,
+    interp_mode: str = "bilinear",
+) -> Tensor:
+    """
+    Energy-resolved EBSD pattern projection, matching EMsoft's
+    CalcEBSDPatternSingleFull_.
+
+    Args:
+        pcs: Projection centers (Bruker convention). Shape (n, 3) or (1, 3).
+        n_rows, n_cols: Detector pixel dimensions.
+        tilt: Detector tilt (theta_c) in degrees.
+        azimuthal: Sample azimuthal (omega) about RD in degrees.
+        sample_tilt: Sample tilt (sigma) in degrees, typically 70.0.
+        quaternions: Crystal orientations, shape (n, 4), real-first.
+        deformation_gradients: F tensors, shape (n, 3, 3). Pass identity for
+            an undeformed pattern.
+        master_pattern_MSLNH: Northern-hemisphere Lambert master pattern with
+            an energy axis. Shape (nE, H, W).
+        master_pattern_MSLSH: Southern-hemisphere counterpart. Shape (nE, H, W).
+        accum_e: Per-detector-pixel energy weights from EMsoft's Monte Carlo
+            (the `accum_e_detector` array). Shape (nE, n_rows, n_cols).
+        e_min_idx: Lowest energy bin index to include (inclusive). Default 0.
+        e_max_idx: Highest energy bin index to include (exclusive, Python slice
+            semantics). Default None means use all bins above e_min_idx.
+        signal_mask: Optional 1D bool mask of length n_rows*n_cols selecting
+            which detector pixels to project. Same convention as the existing
+            HREBSD.py functions.
+        interp_mode: 'bilinear' (matches EMsoft) or 'bicubic'. Default
+            'bilinear'.
+
+    Returns:
+        Energy-integrated patterns. Shape (n_orientations, n_det_pixels) where
+        n_det_pixels = n_rows * n_cols (or `signal_mask.sum()` if a mask was
+        provided). Reshape to (n_rows, n_cols) to view as an image.
+    """
+    # ---- input validation ----
+    if pcs.ndim == 1:
+        pcs = pcs[None, :]
+    if quaternions.ndim == 1:
+        quaternions = quaternions[None, :]
+    if deformation_gradients.ndim == 2:
+        deformation_gradients = deformation_gradients[None, ...]
+
+    if pcs.shape[-1] != 3:
+        raise ValueError(f"pcs must end in shape 3, got {pcs.shape}")
+    if quaternions.shape[-1] != 4:
+        raise ValueError(f"quaternions must end in shape 4, got {quaternions.shape}")
+    if deformation_gradients.shape[-2:] != (3, 3):
+        raise ValueError(
+            f"deformation_gradients must end in (3,3), got {deformation_gradients.shape}"
+        )
+    if master_pattern_MSLNH.ndim != 3 or master_pattern_MSLSH.ndim != 3:
+        raise ValueError(
+            "master_pattern_MSLNH and _MSLSH must be 3D (nE, H, W); "
+            f"got {master_pattern_MSLNH.shape}, {master_pattern_MSLSH.shape}"
+        )
+    if master_pattern_MSLNH.shape != master_pattern_MSLSH.shape:
+        raise ValueError("NH and SH master patterns must have the same shape.")
+    if accum_e.ndim != 3:
+        raise ValueError(f"accum_e must be (nE, n_rows, n_cols), got {accum_e.shape}")
+    if accum_e.shape[0] != master_pattern_MSLNH.shape[0]:
+        raise ValueError(
+            f"accum_e energy axis ({accum_e.shape[0]}) does not match master "
+            f"pattern energy axis ({master_pattern_MSLNH.shape[0]})."
+        )
+    if accum_e.shape[1] != n_rows or accum_e.shape[2] != n_cols:
+        raise ValueError(
+            f"accum_e detector shape {accum_e.shape[1:]} does not match "
+            f"(n_rows, n_cols) = ({n_rows}, {n_cols})."
+        )
+
+    # ---- energy bin slicing (mimics Emin / Emax in the Fortran) ----
+    if e_max_idx is None:
+        e_max_idx = master_pattern_MSLNH.shape[0]
+    e_min_idx = max(0, e_min_idx)
+    e_max_idx = min(master_pattern_MSLNH.shape[0], e_max_idx)
+    if e_max_idx <= e_min_idx:
+        raise ValueError(f"empty energy range: [{e_min_idx}, {e_max_idx})")
+
+    mp_nh = master_pattern_MSLNH[e_min_idx:e_max_idx]   # (nE_sel, H, W)
+    mp_sh = master_pattern_MSLSH[e_min_idx:e_max_idx]
+    accum = accum_e[e_min_idx:e_max_idx]                # (nE_sel, n_rows, n_cols)
+
+    nE_sel = mp_nh.shape[0]
+    device = mp_nh.device
+    dtype = mp_nh.dtype
+
+    # ---- detector direction cosines ----
+    direction_cosines = detector_coords_to_ksphere_via_pc(
+        pcs.to(device),
+        n_rows,
+        n_cols,
+        tilt,
+        azimuthal,
+        sample_tilt,
+        signal_mask=signal_mask,
+    )  # (n_pcs, n_det_pixels, 3)
+
+    n_orientations = quaternions.shape[0]
+    n_det_pixels = direction_cosines.shape[1]
+
+    # ---- rotate by orientation, then apply F^{-1} ----
+    rotated = quaternion_apply(
+        quaternions.to(device)[:, None, :], direction_cosines
+    )  # broadcast: (n_orientations, n_det_pixels, 3)
+
+    F_inv = torch.inverse(deformation_gradients.to(device))
+    rotated = torch.matmul(
+        F_inv[:, None, :, :], rotated[:, :, :, None]
+    ).squeeze(-1)
+    rotated = rotated / torch.linalg.norm(rotated, dim=-1, keepdim=True)
+
+    # ---- hemisphere selection and Lambert square coords ----
+    mask_nh = rotated[..., 2] >= 0                       # (n_orientations, n_det_pixels)
+    coords = square_lambert(rotated)                     # (n_orientations, n_det_pixels, 2)
+
+    # ---- sample master pattern at every energy bin in one shot ----
+    # grid_sample input shape: (1, nE_sel, H, W); grid shape:
+    # (1, n_orientations, n_det_pixels, 2). Output: (1, nE_sel, n_o, n_p).
+    grid = coords.unsqueeze(0).to(dtype=dtype)
+
+    sampled_nh = torch.nn.functional.grid_sample(
+        mp_nh.unsqueeze(0),
+        grid,
+        mode=interp_mode,
+        align_corners=True,
+        padding_mode="border",
+    ).squeeze(0)  # (nE_sel, n_orientations, n_det_pixels)
+
+    sampled_sh = torch.nn.functional.grid_sample(
+        mp_sh.unsqueeze(0),
+        grid,
+        mode=interp_mode,
+        align_corners=True,
+        padding_mode="border",
+    ).squeeze(0)  # (nE_sel, n_orientations, n_det_pixels)
+
+    # Pick hemisphere per pixel. mask_nh broadcasts over the energy axis.
+    sampled = torch.where(mask_nh.unsqueeze(0), sampled_nh, sampled_sh)
+    #   shape: (nE_sel, n_orientations, n_det_pixels)
+
+    # ---- apply per-pixel energy weights and sum over energy ----
+    # accum is (nE_sel, n_rows, n_cols). Flatten the detector to match
+    # the pixel ordering used by detector_coords_to_ksphere_via_pc, then
+    # apply the same signal_mask the geometry code applied.
+    accum_flat = accum.reshape(nE_sel, n_rows * n_cols).to(device=device, dtype=dtype)
+    if signal_mask is not None:
+        accum_flat = accum_flat[:, signal_mask.to(device)]
+
+    # (nE_sel, 1, n_det_pixels) * (nE_sel, n_o, n_det_pixels) -> sum over E
+    pattern = (sampled * accum_flat.unsqueeze(1)).sum(dim=0)
+    #   shape: (n_orientations, n_det_pixels)
+
+    return pattern
+
+
+def project_HREBSD_pattern_energy_weighted_1d(
+    pcs: Tensor,
+    n_rows: int,
+    n_cols: int,
+    tilt: float,
+    azimuthal: float,
+    sample_tilt: float,
+    quaternions: Tensor,
+    deformation_gradients: Tensor,
+    master_pattern_MSLNH: Tensor,   # (nE, H, W)
+    master_pattern_MSLSH: Tensor,   # (nE, H, W)
+    energy_weights: Tensor,         # (nE,)
+    signal_mask: Optional[Tensor] = None,
+    interp_mode: str = "bilinear",
+) -> Tensor:
+    """
+    Approximate energy weighting using a single 1D weight vector. Equivalent
+    to first collapsing the master pattern via
+        mp_2d = sum_k energy_weights[k] * mp_3d[k]
+    and then running the standard projector. Faster and uses less memory,
+    but ignores how `accum_e` varies across the detector (it falls off toward
+    corners). Use this for a quick check; use the per-pixel function above
+    for a real EMsoft match.
+    """
+    if energy_weights.ndim != 1:
+        raise ValueError(f"energy_weights must be 1D, got {energy_weights.shape}")
+    if energy_weights.shape[0] != master_pattern_MSLNH.shape[0]:
+        raise ValueError(
+            f"energy_weights length {energy_weights.shape[0]} does not match "
+            f"master pattern nE = {master_pattern_MSLNH.shape[0]}"
+        )
+
+    w = energy_weights.to(device=master_pattern_MSLNH.device,
+                          dtype=master_pattern_MSLNH.dtype)
+    mp_nh_2d = (master_pattern_MSLNH * w[:, None, None]).sum(dim=0)
+    mp_sh_2d = (master_pattern_MSLSH * w[:, None, None]).sum(dim=0)
+
+    # Build a flat accum_e equivalent so we can reuse the per-pixel function
+    # without duplicating geometry code. Each pixel gets the same energy
+    # weights -> we promote to a (1, ...) energy axis with weight 1.
+    accum_pseudo = torch.ones(
+        (1, n_rows, n_cols),
+        device=mp_nh_2d.device,
+        dtype=mp_nh_2d.dtype,
+    )
+
+    return project_HREBSD_pattern_energy_weighted(
+        pcs=pcs,
+        n_rows=n_rows,
+        n_cols=n_cols,
+        tilt=tilt,
+        azimuthal=azimuthal,
+        sample_tilt=sample_tilt,
+        quaternions=quaternions,
+        deformation_gradients=deformation_gradients,
+        master_pattern_MSLNH=mp_nh_2d.unsqueeze(0),
+        master_pattern_MSLSH=mp_sh_2d.unsqueeze(0),
+        accum_e=accum_pseudo,
+        signal_mask=signal_mask,
+        interp_mode=interp_mode,
+    )
+
+
+def load_emsoft_master_and_accum(h5_path: str, device: str = "cpu",
+                                 return_energies: bool = False):
+    """
+    Read the energy-resolved master patterns and the Monte-Carlo accum_e
+    array out of an EMsoft master-pattern HDF5 file. Field names follow
+    standard EMsoft layout; adjust if your file uses different paths.
+
+    Args:
+        h5_path: Path to the EMsoft master-pattern HDF5.
+        device: Torch device for the returned tensors.
+        return_energies: If True, also return the per-bin energy axis (keV).
+            If False (default), preserves the previous 3-tuple return for
+            backward compatibility.
+
+    Returns:
+        When return_energies is False:
+            (mLPNH, mLPSH, accum_e)
+        When return_energies is True:
+            (mLPNH, mLPSH, accum_e, energies_keV)
+            with energies_keV of shape (nE,) — the bin centers in keV.
+
+    Note: `accum_e` here is the *Monte Carlo grid* version, not the
+    detector-projected `accum_e_detector`.  Pass it through
+    `accum_e_to_detector(...)` to get the per-pixel weights, which
+    HREBSD.project_HREBSD_pattern_energy_weighted then consumes.
+    """
+    import h5py
+    import numpy as np
+
+    with h5py.File(h5_path, "r") as f:
+        mLPNH = np.asarray(f["EMData/EBSDmaster/mLPNH"][...])
+        mLPSH = np.asarray(f["EMData/EBSDmaster/mLPSH"][...])
+        # EMsoft stores mLPNH as (1, nE, H, W) — drop the leading axis if so.
+        if mLPNH.ndim == 4 and mLPNH.shape[0] == 1:
+            mLPNH = mLPNH[0]
+            mLPSH = mLPSH[0]
+        # accum_e is in the MC group of the same file (or in the linked MC file)
+        accum_e = np.asarray(f["EMData/MCOpenCL/accum_e"][...])
+
+        # Energy axis metadata.  EMsoft writes Ehistmin (lower edge), EkeV
+        # (beam energy), and Ebinsize into the NML group.  Fall back to
+        # integer bin indices if the keys aren't present.
+        energies = None
+        if return_energies:
+            try:
+                E_min  = float(f["NMLparameters/MCCLNameList/Ehistmin"][()])
+                E_max  = float(f["NMLparameters/MCCLNameList/EkeV"][()])
+                E_bin  = float(f["NMLparameters/MCCLNameList/Ebinsize"][()])
+                energies = np.arange(E_min, E_max + 0.5 * E_bin, E_bin, dtype=np.float32)
+            except KeyError:
+                energies = np.arange(mLPNH.shape[0], dtype=np.float32)
+
+    nh_t = torch.from_numpy(mLPNH).to(device=device, dtype=torch.float32)
+    sh_t = torch.from_numpy(mLPSH).to(device=device, dtype=torch.float32)
+    ae_t = torch.from_numpy(accum_e).to(device=device, dtype=torch.float32)
+    if return_energies:
+        en_t = torch.from_numpy(energies).to(device=device)
+        return nh_t, sh_t, ae_t, en_t
+    return nh_t, sh_t, ae_t
+
+
+def emsoft_keV_to_bin(energies_keV: Tensor, energy_keV: float) -> int:
+    """Convert an energy in keV to the index of the nearest master-pattern bin.
+
+    Args:
+        energies_keV: 1-D tensor of bin-center energies (shape (nE,)) — get
+            this from `load_emsoft_master_and_accum(..., return_energies=True)`.
+        energy_keV: Target energy in keV.
+
+    Returns:
+        Integer bin index that minimises |energies_keV[i] − energy_keV|.
+    """
+    return int(torch.argmin(torch.abs(energies_keV - energy_keV)).item())
+
+
+# ---------------------------------------------------------------------------
+# Demo / smoke-test (kept guarded so `import HREBSD` doesn't run it)
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import kikuchipy as kp
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+    # get the master pattern
+    mp = kp.data.nickel_ebsd_master_pattern_small(projection="lambert", hemisphere="both")
+
+    # to torch tensor
+    mLPNH = torch.from_numpy(mp.data[0, :, :]).to(torch.float32)
+    mLPSH = torch.from_numpy(mp.data[1, :, :]).to(torch.float32)
+
+    # normalize each master pattern to 0 to 1
+    mLPNH = ((mLPNH - torch.min(mLPNH)) / (torch.max(mLPNH) - torch.min(mLPNH))).to(device)
+    mLPSH = ((mLPSH - torch.min(mLPSH)) / (torch.max(mLPSH) - torch.min(mLPSH))).to(device)
+
+    # get the signal mask
+    signal_mask = kp.filters.Window("circular", (1080, 1080)).astype(bool).reshape(-1)
+    signal_mask = torch.from_numpy(signal_mask).to(torch.bool)
+
+    # get the deformation gradients
+    deformation_gradients = torch.eye(3, dtype=torch.float32).to(device)[None, :, :]
+
+    pattern_center = torch.tensor([0.4221, 0.2179, 0.4954], device=device)[None, :]
+    detector_height = 1080
+    detector_width = 1080
+    det_shape = (detector_height, detector_width)
+    detector_tilt_deg = 0.0
+    azimuthal_deg = 0.0
+    sample_tilt_deg = 70.0
+
+    # demo: identity F vs y-stretch
+    for tag, F in (("identity", torch.eye(3, dtype=torch.float32, device=device)[None, :, :]),
+                   ("ystretch", torch.eye(3, dtype=torch.float32, device=device)[None, :, :].clone())):
+        if tag == "ystretch":
+            F[:, 1, 1] = 1.05
+        from HREBSD import eu2qu  # self-import for the demo
+        quats = eu2qu(torch.zeros(1, 3, device=device), "ZXZ")
+        patterns = project_HREBSD_pattern(
+            pattern_center,
+            detector_height,
+            detector_width,
+            detector_tilt_deg,
+            azimuthal_deg,
+            sample_tilt_deg,
+            quats,
+            F,
+            mLPNH,
+            mLPSH,
+            signal_mask=signal_mask,
+        )
+        canvas = np.zeros(det_shape)
+        canvas[signal_mask.reshape(det_shape)] = patterns[0].cpu().numpy()
+        plt.imshow(canvas, cmap="gray"); plt.axis("off")
+        plt.savefig(f"HREBSD_demo_{tag}.png", bbox_inches="tight"); plt.clf()

@@ -1,0 +1,9 @@
+{
+  "name": "Silicon2",
+  "structure": "cubic",
+  "elastic_constants_GPa": {
+    "C11": 164.8,
+    "C12": 63.5,
+    "C44": 79.0
+  }
+}

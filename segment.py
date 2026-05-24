@@ -54,6 +54,7 @@ def segment_grains(
     threshold: float,
     min_grain_size: int = 1,
     progress: bool = True,
+    progress_callback=None,
 ):
     """
     Segment a 2-D EBSD scan into grains by flood-fill on misorientation.
@@ -88,8 +89,24 @@ def segment_grains(
 
     coords       = np.array(np.meshgrid(np.arange(rows), np.arange(cols))).T.reshape(-1, 2)
     progress_bar = tqdm(total=rows * cols, desc="Segmenting grains", disable=not progress)
+    total_pixels = rows * cols
+    # Throttle GUI updates to ~1% increments so we don't flood the log box.
+    _cb_step  = max(1, total_pixels // 100)
+    _last_emit_pixels = 0
 
+    def _maybe_emit(visited_pixels, grain_count):
+        nonlocal _last_emit_pixels
+        if progress_callback is None:
+            return
+        if visited_pixels - _last_emit_pixels >= _cb_step or visited_pixels == total_pixels:
+            _last_emit_pixels = visited_pixels
+            pct = 100.0 * visited_pixels / total_pixels
+            progress_callback(visited_pixels, total_pixels, grain_count, pct)
+
+    _visited_outer = 0
     for i, j in coords:
+        _visited_outer += 1
+        _maybe_emit(_visited_outer, current_grain_id - 1)
         if grain_ids[i, j] != 0:
             progress_bar.update(1)
             continue

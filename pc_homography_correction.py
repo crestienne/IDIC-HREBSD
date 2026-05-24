@@ -10,13 +10,17 @@ PC / detector frame  (EDAX fractional)
 The sign with which a physical sample step maps onto a PC shift depends on
 the scan convention (which direction x and y point on the sample).  Rather
 than hard-coding signs into the conversion function, each ScanGrid carries
-its own x_sign and y_sign so the conversion is always self-consistent:
+its own x_sign, y_sign, and z_sign so the conversion is always
+self-consistent:
 
-    Δxstar =  x_sign * ΔX / (pattern_width  * pixel_size)
-    Δystar =  y_sign * ΔY * cos(θ) / (pattern_height * pixel_size)
-    Δzstar = -y_sign * ΔY * sin(θ) / (pattern_height * pixel_size)
+    Δxstar =  x_sign           * ΔX / (pattern_width  * pixel_size)
+    Δystar =  y_sign           * ΔY * cos(θ) / (pattern_height * pixel_size)
+    Δzstar = -y_sign * z_sign  * ΔY * sin(θ) / (pattern_height * pixel_size)
 
 where  θ = (90 − sample_tilt) + detector_tilt
+
+z_sign defaults to +1 — flip to -1 if your geometry has zstar drifting the
+opposite way along ΔY than the −y_sign·sin(θ) coupling predicts.
 """
 
 import numpy as np
@@ -38,13 +42,21 @@ class ScanGrid:
     data        : ndarray (n_rows, n_cols, 2)  — [x_um, y_um] at each position
     x_sign      : +1 or -1  — sign for Δxstar  (+1 → positive x increases xstar,
                                                   -1 → positive x decreases xstar)
-    y_sign      : +1 or -1  — sign for Δystar  (same logic, also flips Δzstar)
+    y_sign      : +1 or -1  — sign for Δystar
+    z_sign      : +1 or -1  — extra multiplier on Δzstar so the detector-distance
+                              drift can be flipped independently of y_sign.
+                              Default is +1, which preserves the original
+                              y_sign-coupled formula
+                                  Δzstar = -y_sign · ΔY · sin(θ) / (pat_h · px)
+                              Set to -1 if your geometry's zstar drift goes the
+                              opposite way.
     convention  : str        — human-readable label
     """
     data:       np.ndarray
     x_sign:     int
     y_sign:     int
     convention: str
+    z_sign:     int = +1
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -52,10 +64,11 @@ class ScanGrid:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CONVENTIONS = {
-    #                          x_sign  y_sign   description
-    "lower_right":     dict(x_sign=-1, y_sign=-1),  # origin lower-right, x←, y↑
-    "direct_electron": dict(x_sign=-1, y_sign=+1),  # origin upper-right, x←, y↓
-    "standard":      dict(x_sign=+1, y_sign=+1),  # origin upper-left,  x→, y↓
+    #                          x_sign  y_sign  z_sign   description
+    "upper_right":     dict(x_sign=-1, y_sign=-1, z_sign=+1),  # origin upper-right, x←, y↑
+    "standard":      dict(x_sign=+1, y_sign=-1, z_sign=+1),  # origin upper-left,  x→, y↑
+    "lower_right":     dict(x_sign=-1, y_sign=+1, z_sign=+1),  # origin lower-right, x←, y↓
+    "lower_left":      dict(x_sign=+1, y_sign=+1, z_sign=+1),  # origin lower-left,  x→, y↓
 }
 
 
@@ -71,21 +84,14 @@ def make_scan_grid(scan_shape, step_size_um, convention="standard"):
     The convention string controls what that origin corner is and which
     direction each axis points.
 
-    Supported conventions
-    ---------------------
-    "standard"
-        Origin : lower-right corner.  x increases leftward, y increases upward.
-        grid[0,  0] = (0, 0)                               lower-right  ← origin
-        grid[0, -1] = ((n_cols-1)*step, 0)                 lower-left
-        grid[-1, 0] = (0, (n_rows-1)*step)                 upper-right
-        grid[-1,-1] = ((n_cols-1)*step, (n_rows-1)*step)   upper-left
+    Supported conventions  (names match the sign-convention table in
+    _CONVENTIONS — labels were renamed so each key advertises the actual
+    origin / axis directions):
 
-    "direct_electron"
-        Origin : upper-right corner.  x increases leftward, y increases downward.
-        grid[0,  0] = (0, 0)                               upper-right  ← origin
-        grid[0, -1] = ((n_cols-1)*step, 0)                 upper-left
-        grid[-1, 0] = (0, (n_rows-1)*step)                 lower-right
-        grid[-1,-1] = ((n_cols-1)*step, (n_rows-1)*step)   lower-left
+        "standard"     — origin: upper-left,  x →,  y ↑
+        "lower_left"   — origin: lower-left,  x →,  y ↓
+        "lower_right"  — origin: lower-right, x ←,  y ↓
+        "upper_right"  — origin: upper-right, x ←,  y ↑
 
     Parameters
     ----------
@@ -153,14 +159,14 @@ def scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
         pc_grid[r, c] = (xstar, ystar, zstar) at scan position (r, c)
     """
     pat_h, pat_w = patshape
-    θ = np.radians((90 - sample_tilt_deg) + detector_tilt_deg)
+    θ = np.deg2rad((90 - sample_tilt_deg) + detector_tilt_deg)
 
     ΔX = scan_grid.data[..., 0]
     ΔY = scan_grid.data[..., 1]
 
     Δxstar =  scan_grid.x_sign * ΔX / (pat_w * pixel_size_um)
     Δystar =  scan_grid.y_sign * ΔY * np.cos(θ) / (pat_h * pixel_size_um)
-    Δzstar =  -scan_grid.y_sign * ΔY * np.sin(θ) / (pat_h * pixel_size_um)
+    Δzstar =  scan_grid.y_sign * scan_grid.z_sign * ΔY * np.sin(θ) / (pat_h * pixel_size_um)
 
     xstar = pc_ref[0] + Δxstar
     ystar = pc_ref[1] + Δystar
@@ -231,7 +237,8 @@ def warp_to_h(W):
 
 def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
                          pixel_size_um, sample_tilt_deg, detector_tilt_deg,
-                         convention="standard"):
+                         convention="standard", ref_position=(0, 0),
+                         pc_grid_override=None):
     """
     Correct an array of homographies for pattern-centre drift across the scan.
 
@@ -242,66 +249,158 @@ def correct_homographies(h, scan_shape, step_size_um, pc_ref, patshape,
 
         W_corrected = TS_inv @ W_measured
 
+    The "zero PC drift" anchor is at the scan position ``ref_position``
+    (default (0, 0) preserves the original behaviour).  Setting it to the
+    actual IC-GN reference (row, col) ensures the correction's zero matches
+    the physical reference pattern, so the corrected homographies represent
+    the true strain measured against that reference (no spurious geometric
+    offset across the scan).
+
     Pipeline
     --------
-    1. h (N, 8) → W (n_rows, n_cols, 3, 3)        h_to_warp
-    2. Build physical scan grid                     make_scan_grid
-    3. Compute per-position PC                      scan_grid_to_pc_grid
-    4. Δpc = pc_grid − pc_ref
-    5. Build TS_inv matrices                        delta_pc_to_TS
-    6. W_corrected = TS_inv @ W                     einsum
-    7. W_corrected → h_corrected (N, 8)             warp_to_h
+    1. h (N, 8) → W (n_rows, n_cols, 3, 3)         h_to_warp
+    2. Build physical scan grid                      make_scan_grid
+    3. Re-anchor scan_grid.data so (0, 0) physical
+       sits at ref_position
+    4. Compute per-position PC                       scan_grid_to_pc_grid
+    5. Δpc = pc_grid − pc_ref           (= 0 at ref_position by construction)
+    6. Build TS_inv matrices                         delta_pc_to_TS
+    7. W_corrected = TS_inv @ W                      einsum
+    8. W_corrected → h_corrected (N, 8)              warp_to_h
 
     Parameters
     ----------
     h                 : ndarray (N, 8)        measured homographies, row-major
     scan_shape        : (int, int)            (n_rows, n_cols)
     step_size_um      : float                 scan step size in microns
-    pc_ref            : array-like (3,)       (xstar, ystar, zstar) at origin [0,0]
+    pc_ref            : array-like (3,)       (xstar, ystar, zstar) at the scan
+                                              position given by ``ref_position``
     patshape          : (int, int)            (pattern_height_px, pattern_width_px)
     pixel_size_um     : float                 detector pixel size in microns
     sample_tilt_deg   : float                 sample tilt from horizontal (e.g. 70)
     detector_tilt_deg : float                 detector tilt from vertical  (e.g. 10)
     convention        : str                   scan grid convention (default "standard")
+    ref_position      : (int, int)            (row, col) of the IC-GN reference
+                                              pattern in the (eff_rows, eff_cols)
+                                              array passed via ``scan_shape``.
+                                              Default (0, 0) reproduces the
+                                              legacy "anchor at array origin"
+                                              behaviour.
 
     Returns
     -------
     h_corrected : ndarray (N, 8)
     TS_inv      : ndarray (n_rows, n_cols, 3, 3)
         The per-position correction matrices applied to each warp.
-        At the scan origin [0,0] this is the 3×3 identity.
+        At ``ref_position`` this is the 3×3 identity.
     """
     n_rows, n_cols = scan_shape
     N = n_rows * n_cols
 
+    ref_row, ref_col = int(ref_position[0]), int(ref_position[1])
+    if not (0 <= ref_row < n_rows and 0 <= ref_col < n_cols):
+        raise ValueError(
+            f"ref_position={ref_position} out of bounds for scan_shape "
+            f"{scan_shape}.  ref_row must be in [0, {n_rows-1}], "
+            f"ref_col must be in [0, {n_cols-1}]."
+        )
+
     # 1. h → W, reshaped to (n_rows, n_cols, 3, 3)
     W = h_to_warp(h).reshape(n_rows, n_cols, 3, 3)
 
-    # 2-4. scan grid → per-position PC shifts
+    # 2. Build physical scan grid (origin is at array[0, 0] by construction)
     scan_grid = make_scan_grid(scan_shape, step_size_um, convention=convention)
-    pc_grid   = scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
-                                     sample_tilt_deg, detector_tilt_deg)
+
+    # 3. Re-anchor: subtract the physical position at ref_position from every
+    #    grid point so the new physical origin sits at ref_position.  After
+    #    this, scan_grid.data[ref_row, ref_col] = (0, 0), and the resulting
+    #    pc_grid[ref_row, ref_col] = pc_ref (no drift at the reference point).
+    scan_grid.data = scan_grid.data - scan_grid.data[ref_row, ref_col]
+
+    # 4-5. per-position PC and Δpc relative to the reference.
+    # If a pc_grid_override has been supplied (e.g. from a PC plane fit), use
+    # it verbatim instead of computing the geometric grid.  The override
+    # MUST be shape (n_rows, n_cols, 3) and must already be anchored such
+    # that the ref_position equals pc_ref (so Δpc at ref_position is 0).
+    if pc_grid_override is not None:
+        pc_grid = np.asarray(pc_grid_override, dtype=np.float64)
+        if pc_grid.shape != (n_rows, n_cols, 3):
+            raise ValueError(
+                f"pc_grid_override has shape {pc_grid.shape}; "
+                f"expected ({n_rows}, {n_cols}, 3)."
+            )
+        print(f"PC correction using pc_grid_override (plane fit) — "
+              f"skipping geometric scan_grid_to_pc_grid.")
+    else:
+        pc_grid = scan_grid_to_pc_grid(scan_grid, pc_ref, patshape, pixel_size_um,
+                                       sample_tilt_deg, detector_tilt_deg)
     Δpc = pc_grid - np.array(pc_ref)
 
-    # 5. TS_inv per position
+    # 6. TS_inv per position
     TS_inv = delta_pc_to_TS(Δpc, pc_ref, patshape)   # (n_rows, n_cols, 3, 3)
 
-    # ── sanity check: at the origin [0,0] Δpc=0 so TS_inv must be identity ──
-    print("TS_inv at origin [0,0]:")
-    print(np.round(TS_inv[0, 0], 6))
-    print("(expected: 3×3 identity)")
+    # ── debug block ────────────────────────────────────────────────────────
+    # Three classes of bug to make visible:
+    #   (a) anchor mismatch  → Δpc at ref_position != 0
+    #   (b) magnitude wrong  → corner Δpc orders-of-magnitude off
+    #   (c) sign wrong       → drift direction opposite of expected
+    # All Δpc / pc_ref values are reported in DETECTOR PIXELS:
+    #   Δx_px = Δxstar * pat_w     (offset on detector x-axis)
+    #   Δy_px = Δystar * pat_h     (offset on detector y-axis)
+    #   Δz_px = Δzstar * pat_w     (change in detector-to-sample distance,
+    #                               scaled by pattern width)
+    pat_h, pat_w = patshape
+    print("─" * 68)
+    print("[PC correction debug]")
+    print(f"  scan_shape          : {scan_shape}")
+    print(f"  step_size_um        : {step_size_um}")
+    print(f"  patshape (H, W) px  : {patshape}")
+    print(f"  pixel_size_um       : {pixel_size_um}")
+    print(f"  sample / det tilt   : {sample_tilt_deg}° / {detector_tilt_deg}°")
+    print(f"  override supplied?  : {pc_grid_override is not None}")
+    print(f"  pc_ref (px)         : "
+          f"(x={pc_ref[0] * pat_w:8.2f}, "
+          f"y={pc_ref[1] * pat_h:8.2f}, "
+          f"DD={pc_ref[2] * pat_w:8.2f})")
+    print(f"  ref_position        : ({ref_row}, {ref_col})")
 
-    #print an example TS_inv matrix to check --- IGNORE ---
-    print("Example TS_inv matrix at [2,2]:")
-    print(np.round(TS_inv[1, 130], 6))
+    Δpc_ref = Δpc[ref_row, ref_col]
+    print(f"  Δpc @ ref_position (px) : "
+          f"(Δx={Δpc_ref[0] * pat_w:+8.3f}, "
+          f"Δy={Δpc_ref[1] * pat_h:+8.3f}, "
+          f"ΔDD={Δpc_ref[2] * pat_w:+8.3f})  (expected ~0)")
+
+    corners = {
+        "(0, 0)"                              : Δpc[0, 0],
+        f"(0, {n_cols - 1})"                  : Δpc[0, n_cols - 1],
+        f"({n_rows - 1}, 0)"                  : Δpc[n_rows - 1, 0],
+        f"({n_rows - 1}, {n_cols - 1})"       : Δpc[n_rows - 1, n_cols - 1],
+    }
+    print("  Δpc at scan corners (px) — Δx, Δy, ΔDD:")
+    for label, d in corners.items():
+        print(f"    {label:>14s} : "
+              f"({d[0] * pat_w:+8.3f}, "
+              f"{d[1] * pat_h:+8.3f}, "
+              f"{d[2] * pat_w:+8.3f})")
+
+    Δpc_abs = np.abs(Δpc)
+    print(f"  Δpc magnitudes (per-axis max across scan, px):")
+    print(f"    |Δx|max  = {Δpc_abs[..., 0].max() * pat_w:8.3f} px   "
+          f"|Δy|max  = {Δpc_abs[..., 1].max() * pat_h:8.3f} px   "
+          f"|ΔDD|max = {Δpc_abs[..., 2].max() * pat_w:8.3f} px")
+    print("    (typical for SEM scans: 0.1 – 5 px on a 480-px detector)")
+
+    print(f"  TS_inv at ref_position [{ref_row}, {ref_col}] "
+          f"(expected: 3×3 identity):")
+    print(np.round(TS_inv[ref_row, ref_col], 6))
+    print("─" * 68)
 
     W_corrected = TS_inv @ W
-   #W_corrected = np.einsum('...ij,...jk->...ik', TS_inv, W)
 
-    # 7. back to (N, 8)
+    # 8. back to (N, 8)
     h_corrected = warp_to_h(W_corrected).reshape(N, 8)
     print(f"PC correction applied — convention: '{convention}'  "
-          f"scan: {n_rows}×{n_cols}")
+          f"scan: {n_rows}×{n_cols}  ref_position: ({ref_row}, {ref_col})")
     return h_corrected, TS_inv
 
 
@@ -339,7 +438,7 @@ def delta_pc_to_TS(Δpc, pc_ref, patshape):
 
     # Scale factor: ratio of new detector distance to reference (dimensionless, ≈ 1)
     # Δzstar is fractional, pc_ref[2] is fractional → pure ratio, no unit issue
-    alpha = (pc_ref[2] + Δzstar) / pc_ref[2]
+    alpha = (pc_ref[2] - Δzstar) / pc_ref[2]
 
     # Build the translation matrix T (n_rows, n_cols, 3, 3)
     n_rows, n_cols = Δpc.shape[:2]
@@ -385,7 +484,7 @@ if __name__ == "__main__":
 
     # ── build both scan grids and their PC shifts ─────────────────────────────
     grid_std = make_scan_grid(scan_shape, step_size_um, convention="standard")
-    grid_de  = make_scan_grid(scan_shape, step_size_um, convention="direct_electron")
+    grid_de  = make_scan_grid(scan_shape, step_size_um, convention="upper_right")
 
     pc_std = scan_grid_to_pc_grid(grid_std, pc_ref, patshape, pixel_size_um,
                                    sample_tilt_deg, detector_tilt_deg)
