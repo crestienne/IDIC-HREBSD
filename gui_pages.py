@@ -2432,7 +2432,7 @@ class ReferencePatternPage(QWizardPage):
         # results overwrite the stored tuple and refresh the label.
         self._sim_euler_deg = (0.0, 0.0, 0.0)
         self._sim_euler_lbl = QLabel("φ₁ = —   Φ = —   φ₂ = —")
-        self._sim_euler_lbl.setStyleSheet("font-family: monospace;")
+        self._sim_euler_lbl.setStyleSheet('font-family: Menlo, "Courier New", monospace;')
         sim_layout.addRow("Euler (Bunge):", self._sim_euler_lbl)
         sim_layout.addRow(_note("Click the IPF map to update from scan orientation."))
 
@@ -3561,7 +3561,7 @@ class ReferencePatternPage(QWizardPage):
         # can watch refinement output without juggling two windows.
         self._refine_log_box = QTextEdit()
         self._refine_log_box.setReadOnly(True)
-        self._refine_log_box.setStyleSheet("font-family: monospace; font-size: 11px;")
+        self._refine_log_box.setStyleSheet('font-family: Menlo, "Courier New", monospace; font-size: 11px;')
         self._refine_log_box.setMinimumHeight(180)
         outer.addWidget(self._refine_log_box, stretch=1)
 
@@ -4553,7 +4553,7 @@ class OptimizationRunPage(QWizardPage):
         self._summary = QTextEdit()
         self._summary.setReadOnly(True)
         self._summary.setFixedHeight(160)
-        self._summary.setStyleSheet("font-family: monospace; font-size: 11px;")
+        self._summary.setStyleSheet('font-family: Menlo, "Courier New", monospace; font-size: 11px;')
         layout.addWidget(self._summary)
 
         # ── Run button ────────────────────────────────────────────────────────
@@ -4602,7 +4602,7 @@ class OptimizationRunPage(QWizardPage):
         # connections (append, clear, traceback dump) keep working unchanged.
         self._log = QTextEdit()
         self._log.setReadOnly(True)
-        self._log.setStyleSheet("font-family: monospace; font-size: 11px;")
+        self._log.setStyleSheet('font-family: Menlo, "Courier New", monospace; font-size: 11px;')
 
         self._debug_dialog = QDialog(self)
         self._debug_dialog.setWindowTitle("DIC-HREBSD — Debug Log")
