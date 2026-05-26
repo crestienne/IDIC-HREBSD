@@ -140,7 +140,6 @@ class UP2:
         self.unsharp_sigma = unsharp_sigma
         self.unsharp_strength = unsharp_strength
         self.gamma = gamma
-        print(f"Set UP2 pattern processing: low_pass_sigma={low_pass_sigma}, high_pass_sigma={high_pass_sigma}, truncate_std_scale={truncate_std_scale}, mask_type={mask_type}, clahe_kernel={clahe_kernel}, clahe_clip={clahe_clip}, use_clahe={use_clahe}, flip_x={flip_x}, rescale_to_uint16={rescale_to_uint16}, unsharp_sigma={unsharp_sigma}, unsharp_strength={unsharp_strength}, gamma={gamma}")
 
     def read(self, chunks, i=None):
         """Read the next `chunks` bytes from the file. If `i` is not None, read from the current position."""
