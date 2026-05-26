@@ -742,7 +742,7 @@ class ROISelectionPage(QWizardPage):
 
         self.min_grain_size = QSpinBox()
         self.min_grain_size.setRange(1, 99999)
-        self.min_grain_size.setValue(1)
+        self.min_grain_size.setValue(8)
 
         self._seg_btn = QPushButton("Run Segmentation")
         self._seg_btn.clicked.connect(self._start_segmentation)
@@ -944,6 +944,20 @@ class ROISelectionPage(QWizardPage):
         self._grain_status.setStyleSheet("color: gray;")
         self._grain_status.setWordWrap(True)
 
+        # Short usage hint above the grain map.
+        grain_help = QLabel(
+            "<b>How to select a region of interest:</b><br>"
+            "• Click any grain on the map to tick its checkbox on the right "
+            "(or tick rows directly).  Click the map a second time to keep it "
+            "selected — only the checkbox can untick a grain.<br>"
+            "• Use <i>Select All Grains</i> below if you want everything.<br>"
+            "• When the right-hand list is ticked the way you want, press "
+            "<i>Select Region of Interest</i> — the map + IPF will mask "
+            "everything outside the selected grains."
+        )
+        grain_help.setWordWrap(True)
+        grain_help.setStyleSheet(f"color: {THEME['text']}; font-size: 12px;")
+        grain_vbox.addWidget(grain_help)
         grain_vbox.addWidget(self._grain_toolbar)
         grain_vbox.addWidget(self._grain_canvas)
         grain_vbox.addWidget(self._grain_status)
@@ -957,16 +971,33 @@ class ROISelectionPage(QWizardPage):
         grain_right_layout = QVBoxLayout(grain_right)
         grain_right_layout.setContentsMargins(8, 0, 0, 0)
 
-        grain_right_layout.addWidget(QLabel("<b>Grains (top 10 by size)</b>"))
+        grain_right_layout.addWidget(QLabel("<b>Grains (sorted by size)</b>"))
 
         self._grain_legend_scroll = QScrollArea()
         self._grain_legend_scroll.setWidgetResizable(True)
+        # Let the legend fill the right column — every grain row stays
+        # reachable; the vertical scroll bar only appears when the list
+        # is genuinely taller than the available column height.
+        self._grain_legend_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self._grain_legend_container = QWidget()
         self._grain_legend_vbox = QVBoxLayout(self._grain_legend_container)
         self._grain_legend_vbox.setContentsMargins(2, 2, 2, 2)
         self._grain_legend_vbox.addStretch()
         self._grain_legend_scroll.setWidget(self._grain_legend_container)
         grain_right_layout.addWidget(self._grain_legend_scroll, stretch=1)
+
+        # Bulk toggle: tick/untick every grain in the legend.  Useful for
+        # "give me everything except a couple of stragglers" — tick all
+        # then manually clear the unwanted rows.
+        self._select_all_grains_btn = QPushButton("Select All Grains")
+        self._select_all_grains_btn.setToolTip(
+            "Tick every grain in the legend.  Click again to clear them all."
+        )
+        self._select_all_grains_btn.clicked.connect(self._on_toggle_all_grains)
+        self._select_all_grains_btn.setEnabled(False)
+        grain_right_layout.addWidget(self._select_all_grains_btn)
 
         self._select_roi_btn = QPushButton("Select Region of Interest")
         self._select_roi_btn.setToolTip(
@@ -1168,7 +1199,7 @@ class ROISelectionPage(QWizardPage):
         else:
             self._grain_status.setText(
                 f"(row={row + 1}, col={col + 1}) → Grain {gid}  ({size} px) — "
-                f"not in top-10 legend, can't be selected."
+                f"no legend row found (run segmentation first)."
             )
 
     def _populate_grain_checkbox_legend(self, legend_entries):
@@ -1208,6 +1239,19 @@ class ROISelectionPage(QWizardPage):
             )
 
         self._select_roi_btn.setEnabled(bool(legend_entries))
+        self._select_all_grains_btn.setEnabled(bool(legend_entries))
+
+    def _on_toggle_all_grains(self):
+        """Toggle every checkbox in the legend at once.  If any row is
+        unchecked, the click checks them all; if every row is already
+        checked, the click clears them."""
+        if not self._grain_checkboxes:
+            return
+        all_checked = all(chk.isChecked()
+                          for chk in self._grain_checkboxes.values())
+        new_state = not all_checked
+        for chk in self._grain_checkboxes.values():
+            chk.setChecked(new_state)
 
     def _on_select_roi_clicked(self):
         """Apply the user's grain selection: mask out unchecked grains on
@@ -1491,19 +1535,15 @@ class ROISelectionPage(QWizardPage):
 
 
         # ── Grain legend (Qt side panel with checkboxes) ─────────────────────
-        # Top-N grains by size get a row in the side panel.  Each row =
-        # colour swatch + checkbox.  The matplotlib in-figure legend that
-        # used to sit below the canvas was removed in favour of this
-        # interactive Qt legend.
+        # Every surviving grain gets a row in the side panel (sorted by
+        # size, largest first).  The scroll area in the side panel keeps
+        # ~10 rows visible at a time; the rest are reachable via the
+        # vertical scroll bar.
         legend_entries = [
             (gid, int(sizes[gid]), discrete_colors[(ci - 1) % n_surviving])
             for ci, gid in enumerate(surviving_ids, start=1)
         ]
-
-        MAX_LEGEND = 10
-        if len(legend_entries) > MAX_LEGEND:
-            legend_entries.sort(key=lambda x: -x[1])
-            legend_entries = legend_entries[:MAX_LEGEND]
+        legend_entries.sort(key=lambda x: -x[1])
 
         self._populate_grain_checkbox_legend(legend_entries)
 
