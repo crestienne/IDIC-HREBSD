@@ -11,8 +11,10 @@ import traceback
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLabel, QLineEdit, QPushButton, QComboBox,
-    QSpinBox, QDoubleSpinBox, QCheckBox, QWidget,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QWidget, QScrollArea,
+    QSizePolicy,
 )
+from PyQt6.QtCore import Qt
 
 from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
 from gui_workers import VisWorker
@@ -235,8 +237,8 @@ class VisualizationDialog(QDialog):
         # other figure is opt-in via these checkboxes — the flags are
         # forwarded to plot_all_results through _pending_params.
         opt_group  = QGroupBox("Optional Plots")
-        opt_layout = QVBoxLayout()
-        opt_layout.addWidget(_note(
+        opt_group_layout = QVBoxLayout()
+        opt_group_layout.addWidget(_note(
             "The post-TFBC strain & rotation grid is always shown. "
             "Tick boxes below to add extra figures."
         ))
@@ -253,14 +255,36 @@ class VisualizationDialog(QDialog):
             ("plot_von_mises",                "Von Mises equivalent strain map (ε_VM)"),
             ("plot_tfbc_lines",               "TFBC strain line scan (ε_abs / ε_T / c/a)"),
         ]
+        # Build the checkbox list inside a scrollable container so the
+        # group can be capped at a comfortable height without squeezing
+        # the Elastic Constants group below it.
         self._optional_plot_checks: dict[str, "QCheckBox"] = {}
+        opt_inner = QWidget()
+        opt_inner_layout = QVBoxLayout(opt_inner)
+        opt_inner_layout.setContentsMargins(2, 2, 2, 2)
+        opt_inner_layout.setSpacing(4)
         for key, label in self._optional_plot_specs:
             chk = QCheckBox(label)
             chk.setChecked(False)
-            opt_layout.addWidget(chk)
+            opt_inner_layout.addWidget(chk)
             self._optional_plot_checks[key] = chk
+        opt_inner_layout.addStretch(1)
 
-        opt_group.setLayout(opt_layout)
+        opt_scroll = QScrollArea()
+        opt_scroll.setWidgetResizable(True)
+        opt_scroll.setWidget(opt_inner)
+        opt_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        opt_scroll.setMinimumHeight(110)
+        opt_scroll.setMaximumHeight(150)
+        opt_group_layout.addWidget(opt_scroll)
+
+        opt_group.setLayout(opt_group_layout)
+        # Keep this group from claiming all remaining vertical space —
+        # the scroll area handles overflow, the group itself should sit
+        # at its preferred (capped) height so the Elastic Constants
+        # group below it isn't squeezed.
+        opt_group.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                QSizePolicy.Policy.Fixed)
         right_col.addWidget(opt_group)
 
         # ── Elastic constants (used for automatic TFBC when .ang is provided) ──
@@ -290,6 +314,11 @@ class VisualizationDialog(QDialog):
         ec_layout.addRow("C₄₄:", self._C44)
 
         ec_group.setLayout(ec_layout)
+        # Keep the Elastic Constants block at its natural size — don't
+        # let the Optional Plots scroll area or layout stretchers eat
+        # into it.
+        ec_group.setSizePolicy(QSizePolicy.Policy.Preferred,
+                               QSizePolicy.Policy.Fixed)
         right_col.addWidget(ec_group)
 
         # ── Assemble two-column layout ────────────────────────────────────────

@@ -160,14 +160,137 @@ def segment_grains(
     progress_bar.close()
 
     # ── Minimum grain size filter ─────────────────────────────────────────────
+    # Two-stage filter:
+    #   1) Any too-small grain that is *fully enclosed* by a single other
+    #      grain gets absorbed into that host (relabeled).  Iterate to a
+    #      fixed point so clusters of small grains nested inside one host
+    #      collapse together.
+    #   2) Anything still too-small (touches the image edge, unassigned
+    #      pixels, or multiple host grains) is set to 0 as before.
     if min_grain_size > 1:
         sizes = np.bincount(grain_ids.ravel())          # sizes[label] = pixel count
-        # Find labels (≥1) whose pixel count is below the threshold
-        too_small = np.where(sizes[1:] < min_grain_size)[0] + 1  # back to 1-indexed
-        if len(too_small):
-            mask = np.isin(grain_ids, too_small)
-            grain_ids[mask] = 0
-            average_misorientation[mask] = np.nan
+        too_small_arr = np.where(sizes[1:] < min_grain_size)[0] + 1
+        if len(too_small_arr):
+            too_small_set = {int(t) for t in too_small_arr}
+            rows, cols = grain_ids.shape
+            # Bound the fixed-point loop by the number of small grains.
+            for _ in range(len(too_small_arr) + 1):
+                absorbed_any = False
+                for tid in list(too_small_set):
+                    ys, xs = np.where(grain_ids == tid)
+                    if ys.size == 0:
+                        too_small_set.discard(tid)
+                        continue
+                    touches_edge = False
+                    nbr_labels: set[int] = set()
+                    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                        ny = ys + dy
+                        nx = xs + dx
+                        valid = (ny >= 0) & (ny < rows) & (nx >= 0) & (nx < cols)
+                        if not valid.all():
+                            touches_edge = True
+                        ny = ny[valid]
+                        nx = nx[valid]
+                        lbls = grain_ids[ny, nx]
+                        lbls = lbls[lbls != tid]
+                        nbr_labels.update(int(l) for l in lbls)
+                    touches_zero = 0 in nbr_labels
+                    # Other-still-too-small grains don't disqualify enclosure
+                    # — they may get absorbed on a later iteration, and we
+                    # only need a single non-too-small host to call it
+                    # "fully enclosed."
+                    real_nbrs = {l for l in nbr_labels
+                                 if l > 0 and l not in too_small_set}
+                    if (not touches_edge and not touches_zero
+                            and len(real_nbrs) == 1):
+                        host = real_nbrs.pop()
+                        m = (grain_ids == tid)
+                        grain_ids[m] = host
+                        too_small_set.discard(tid)
+                        absorbed_any = True
+                if not absorbed_any:
+                    break
+            # Anything left is a small grain that genuinely touches multiple
+            # hosts or the image boundary — drop those pixels.
+            if too_small_set:
+                m = np.isin(grain_ids, list(too_small_set))
+                grain_ids[m] = 0
+                average_misorientation[m] = np.nan
+
+    # ── Dead-pixel infill ─────────────────────────────────────────────────────
+    # Two-stage cleanup of pixels still labelled 0 (dead / unassigned):
+    #   Stage A — strong majority: assign to a neighbour grain if at least
+    #             NEIGHBOUR_MAJORITY of the 8 neighbours share a single ID.
+    #             Iterated to a fixed point so freshly-assigned pixels feed
+    #             back into the next sweep.
+    #   Stage B — fallback: any dead pixel that still has at least one
+    #             non-zero neighbour is absorbed into whichever neighbouring
+    #             grain is currently the largest by pixel count.  Also
+    #             iterated, so dead pixels initially deep in a void get
+    #             reached after their neighbours have themselves been
+    #             absorbed in a prior sweep.
+    NEIGHBOUR_MAJORITY = 5
+    H, W = grain_ids.shape
+
+    def _neighbour_counts(label_match):
+        cnt = np.zeros_like(label_match, dtype=np.int32)
+        cnt[1:,   :]   += label_match[:-1,  :]
+        cnt[:-1,  :]   += label_match[1:,   :]
+        cnt[:,  1:]    += label_match[:,  :-1]
+        cnt[:,  :-1]   += label_match[:,   1:]
+        cnt[1:,  1:]   += label_match[:-1, :-1]
+        cnt[1:,  :-1]  += label_match[:-1, 1:]
+        cnt[:-1, 1:]   += label_match[1:,  :-1]
+        cnt[:-1, :-1]  += label_match[1:,   1:]
+        return cnt
+
+    # Stage A: strong-majority assignment.
+    for _ in range(50):
+        dead = (grain_ids == 0)
+        if not dead.any():
+            break
+        unique_labels = np.unique(grain_ids)
+        unique_labels = unique_labels[unique_labels > 0]
+        if unique_labels.size == 0:
+            break
+        best_count = np.zeros((H, W), dtype=np.int32)
+        best_label = np.zeros((H, W), dtype=grain_ids.dtype)
+        for lbl in unique_labels:
+            cnt = _neighbour_counts((grain_ids == lbl).astype(np.int32))
+            better = cnt > best_count
+            best_count[better] = cnt[better]
+            best_label[better] = lbl
+        qualify = dead & (best_count >= NEIGHBOUR_MAJORITY)
+        if not qualify.any():
+            break
+        grain_ids[qualify] = best_label[qualify]
+
+    # Stage B: largest-neighbour fallback so dead pixels touching ANY grain
+    # are never discarded — they're absorbed into the largest neighbouring
+    # grain (ties broken by the smaller label, deterministically).
+    for _ in range(50):
+        dead = (grain_ids == 0)
+        if not dead.any():
+            break
+        sizes = np.bincount(grain_ids.ravel())
+        unique_labels = np.where(sizes > 0)[0]
+        unique_labels = unique_labels[unique_labels > 0]
+        if unique_labels.size == 0:
+            break
+        # Process labels largest-first so the first label to mark a dead
+        # pixel as "touching" wins; smaller-label tiebreak comes from later
+        # labels not overwriting an already-set bigger label.
+        order = np.argsort(-sizes[unique_labels])
+        ordered_labels = unique_labels[order]
+        best_label = np.zeros((H, W), dtype=grain_ids.dtype)
+        for lbl in ordered_labels:
+            touches = _neighbour_counts((grain_ids == lbl).astype(np.int32)) > 0
+            update = touches & (best_label == 0)
+            best_label[update] = lbl
+        qualify = dead & (best_label > 0)
+        if not qualify.any():
+            break
+        grain_ids[qualify] = best_label[qualify]
 
     return grain_ids, average_misorientation
 

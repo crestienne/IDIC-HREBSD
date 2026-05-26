@@ -75,6 +75,7 @@ def select_references(
     scan_cols: int,
     strategy: str = "mean",
     kam: np.ndarray = None,
+    iq:  np.ndarray = None,
     interior_erode: int = 2,
     selected_grain_ids: list = None,
 ) -> ReferencePatternSet:
@@ -89,6 +90,10 @@ def select_references(
         Pick the pixel with the lowest in-grain KAM (most orientation-uniform
         local neighbourhood).  Requires ``kam`` — the ``average_misorientation``
         array returned by ``segment.segment_grains``.
+    ``strategy = "iq_max"``
+        Pick the pixel with the highest pattern quality (image quality / IQ)
+        within the grain.  Requires ``iq`` — the IQ column from the .ang
+        file (``ang_data.iq``).
 
     Interior filter
     ---------------
@@ -110,10 +115,14 @@ def select_references(
     Returns:
         ReferencePatternSet with one entry per non-zero grain, sorted by grain_id
     """
-    if strategy not in ("mean", "kam_min"):
-        raise ValueError(f"strategy must be 'mean' or 'kam_min', got {strategy!r}")
+    if strategy not in ("mean", "kam_min", "iq_max"):
+        raise ValueError(
+            f"strategy must be 'mean', 'kam_min', or 'iq_max', got {strategy!r}"
+        )
     if strategy == "kam_min" and kam is None:
         raise ValueError("strategy='kam_min' requires a kam array")
+    if strategy == "iq_max" and iq is None:
+        raise ValueError("strategy='iq_max' requires an iq array")
 
     from scipy.ndimage import binary_erosion
 
@@ -156,12 +165,22 @@ def select_references(
                 strategy_used = "mean"
             else:
                 strategy_used = "kam_min"
+        elif strategy == "iq_max":
+            iq_vals = iq[row_idx, col_idx]
+            # All-NaN / non-finite IQ → fall back to mean.
+            if not np.any(np.isfinite(iq_vals)):
+                strategy_used = "mean"
+            else:
+                strategy_used = "iq_max"
         else:
             strategy_used = "mean"
 
         if strategy_used == "kam_min":
             kam_safe = np.where(np.isnan(kam_vals), np.inf, kam_vals)
             best = int(np.argmin(kam_safe))
+        elif strategy_used == "iq_max":
+            iq_safe = np.where(np.isfinite(iq_vals), iq_vals, -np.inf)
+            best = int(np.argmax(iq_safe))
         else:
             q_mean = grain_quats.mean(axis=0)
             norm   = np.linalg.norm(q_mean)

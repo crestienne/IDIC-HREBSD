@@ -534,7 +534,7 @@ class ScanGeometryPage(QWizardPage):
         self._strategy_combo.setCurrentIndex(0)
         strategy_layout.addWidget(self._strategy_combo)
 
-        self._apply_pc_correction = QCheckBox("Apply pattern centre drift correction")
+        self._apply_pc_correction = QCheckBox("Apply pattern center drift correction")
         self._apply_pc_correction.setChecked(True)
         strategy_layout.addSpacing(4)
         strategy_layout.addWidget(self._apply_pc_correction)
@@ -908,10 +908,43 @@ class ROISelectionPage(QWizardPage):
         self._grain_canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
+        # Matplotlib's standard Qt nav toolbar — pan/zoom-rect/home/save.
+        # Click-to-identify still works when no tool is active (the default
+        # state, indicated by no pressed button in the toolbar).
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
+        self._grain_toolbar = NavToolbar(self._grain_canvas, self._grain_dialog)
+        self._grain_toolbar.setStyleSheet(f"""
+            QToolBar {{
+                background-color: {THEME['surface_bg']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 2px;
+                spacing: 2px;
+            }}
+            QToolButton {{
+                background-color: {THEME['surface_bg']};
+                color: {THEME['text']};
+                border: none;
+                border-radius: 3px;
+                padding: 3px;
+            }}
+            QToolButton:hover {{
+                background-color: {THEME['accent']};
+                color: {THEME['accent_text']};
+            }}
+            QToolButton:checked {{
+                background-color: {THEME['accent']};
+                color: {THEME['accent_text']};
+            }}
+            QToolBar QLabel {{
+                color: {THEME['text']};
+            }}
+        """)
         self._grain_status = QLabel("")
         self._grain_status.setStyleSheet("color: gray;")
         self._grain_status.setWordWrap(True)
 
+        grain_vbox.addWidget(self._grain_toolbar)
         grain_vbox.addWidget(self._grain_canvas)
         grain_vbox.addWidget(self._grain_status)
 
@@ -1047,46 +1080,54 @@ class ROISelectionPage(QWizardPage):
 
     def _overlay_grain_boundaries(self, ax, canvas, key, restrict_mask=None,
                                   color=(1.0, 1.0, 1.0), alpha=0.9, linewidth=1.0):
-        """Draw sub-pixel-smooth grain boundaries onto an axis using
-        matplotlib contour iso-lines at half-integer levels of the grain
-        ID field.  Much smoother than the previous binary-pixel overlay.
+        """Draw sub-pixel-smooth grain boundaries onto an axis by contouring
+        each grain's binary mask at level 0.5.  Per-grain (rather than
+        contouring the label field at multiple half-integer levels) so
+        every boundary segment is drawn exactly once at `linewidth` —
+        spatially-adjacent grains whose IDs are non-consecutive used to
+        stack several iso-lines on the same physical boundary, making
+        some lines look thicker than others.
 
         `restrict_mask` (optional bool array, same shape) limits the
-        contour to pixels where the mask is True — non-ROI pixels are
-        masked out so boundaries don't trace into the whited-out area."""
+        contour to pixels where the mask is True."""
         if self._grain_ids is None or not ax.get_visible():
             return
-        # Remove any prior contour collection so successive calls don't stack.
+        # Remove any prior overlay collections.  Stored as a list of
+        # LineCollection objects (one per grain).
         prev = self._boundary_overlays.get(key)
         if prev is not None:
-            try:
-                for coll in getattr(prev, "collections", []):
+            items = prev if isinstance(prev, list) else getattr(prev, "collections", [])
+            for coll in items:
+                try:
                     coll.remove()
-            except Exception:
-                pass
+                except Exception:
+                    pass
             self._boundary_overlays[key] = None
 
-        # Mask out grain-0 (discarded / too-small) pixels so contour at
-        # level 0.5 doesn't trace closed loops around every speckle of
-        # discarded noise.  Combine with the caller's restrict_mask.
-        mask_out = (self._grain_ids == 0)
+        keep = (self._grain_ids != 0)
         if restrict_mask is not None:
-            mask_out |= ~restrict_mask
-        gid = np.ma.masked_where(mask_out, self._grain_ids.astype(np.float32))
+            keep &= restrict_mask
+        if not keep.any():
+            return
 
-        max_g = int(self._grain_ids.max())
-        if max_g < 1:
-            return
-        levels = np.arange(0.5, max_g + 0.5, 1.0)
         rgba = (color[0], color[1], color[2], alpha)
-        try:
-            cs = ax.contour(
-                gid, levels=levels, colors=[rgba],
-                linewidths=linewidth, antialiased=True, zorder=4,
-            )
-        except Exception:
-            return
-        self._boundary_overlays[key] = cs
+        all_colls = []
+        for gid_val in np.unique(self._grain_ids[keep]):
+            if gid_val == 0:
+                continue
+            binary = (self._grain_ids == gid_val).astype(np.float32)
+            if restrict_mask is not None:
+                binary[~restrict_mask] = 0.0
+            try:
+                cs = ax.contour(
+                    binary, levels=[0.5], colors=[rgba],
+                    linewidths=linewidth, antialiased=True, zorder=4,
+                )
+                all_colls.extend(cs.collections)
+            except Exception:
+                continue
+
+        self._boundary_overlays[key] = all_colls
         canvas.draw_idle()
 
     def _on_grain_click(self, event):
@@ -1095,6 +1136,12 @@ class ROISelectionPage(QWizardPage):
         matching box.  Clicking the SAME grain a second time does NOT
         uncheck — only manually toggling the QCheckBox does that."""
         if self._grain_ids is None or event.inaxes is not self._grain_ax:
+            return
+        # Don't grab clicks while the user is panning or rectangle-zooming
+        # through the nav toolbar — matplotlib's toolbar sets `.mode` to
+        # "pan/zoom" or "zoom rect" while one of those buttons is active.
+        tb = getattr(self, "_grain_toolbar", None)
+        if tb is not None and getattr(tb, "mode", ""):
             return
         if event.xdata is None or event.ydata is None:
             return
@@ -1222,8 +1269,6 @@ class ROISelectionPage(QWizardPage):
                 self._roi_rects[0] = None
             self._ipf_ax.clear()
             self._ipf_ax.imshow(ipf_masked, origin="upper", interpolation="nearest")
-            label = self._dir_combo.currentText().split()[0]
-            self._ipf_ax.set_title(f"IPF Map  //  {label}  (ROI only)", fontsize=9)
             self._ipf_ax.axis("off")
             self._ipf_ax.set_visible(True)
             # Boundaries inside the ROI only — drawn in white over the IPF.
@@ -1269,33 +1314,105 @@ class ROISelectionPage(QWizardPage):
         self._grain_dialog.activateWindow()
 
     def _show_kam_map(self):
-        """Open a dialog displaying the KAM map from the latest segmentation."""
+        """Open a dialog displaying the KAM map from the latest segmentation,
+        and — if the .ang file contains an IQ column — a pattern-quality map
+        next to it for direct comparison."""
         if self._kam is None:
             QMessageBox.information(self, "No KAM",
                                     "Run segmentation first to produce a KAM map.")
             return
+        # Pattern quality: read the IQ column out of the cached ang_data.
+        # ANG-file columns are lowercased by utilities.read_ang, so look
+        # for the conventional "iq" field but tolerate alternatives.
+        wiz = self.wizard()
+        ang_data = getattr(wiz, "ang_data", None) if wiz is not None else None
+        pq_map = None
+        if ang_data is not None:
+            for fname in ("iq", "image_quality", "pq", "pattern_quality"):
+                arr = getattr(ang_data, fname, None)
+                if arr is not None and np.asarray(arr).shape == self._kam.shape:
+                    pq_map = np.asarray(arr, dtype=float)
+                    break
+
         dlg = QDialog(self)
         dlg.setWindowTitle("Kernel Average Misorientation (KAM)")
-        dlg.resize(780, 640)
+        dlg.resize(1100 if pq_map is not None else 780, 640)
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
         _bg = THEME["surface_bg"]
         fig = Figure(facecolor=_bg, tight_layout=True)
-        ax  = fig.add_subplot(111)
-        ax.set_facecolor(_bg)
+
+        # KAM panel.
+        kam_ax = fig.add_subplot(1, 2 if pq_map is not None else 1, 1)
+        kam_ax.set_facecolor(_bg)
         finite = self._kam[np.isfinite(self._kam)]
         vmax = float(np.percentile(finite, 98)) if finite.size else 1.0
-        im = ax.imshow(self._kam, cmap="inferno", origin="upper", vmin=0, vmax=vmax)
-        ax.set_title(
+        im = kam_ax.imshow(self._kam, cmap="inferno", origin="upper", vmin=0, vmax=vmax)
+        kam_ax.set_title(
             f"KAM (deg)  —  max shown = {vmax:.3f}°",
             color="white", fontweight="bold",
         )
-        ax.axis("off")
-        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        kam_ax.axis("off")
+        cbar = fig.colorbar(im, ax=kam_ax, fraction=0.046, pad=0.04)
         cbar.ax.tick_params(colors="white")
+
+        # Pattern-quality panel (only if IQ column is present).
+        if pq_map is not None:
+            pq_ax = fig.add_subplot(1, 2, 2)
+            pq_ax.set_facecolor(_bg)
+            finite_pq = pq_map[np.isfinite(pq_map)]
+            if finite_pq.size:
+                vmin_pq = float(np.percentile(finite_pq, 2))
+                vmax_pq = float(np.percentile(finite_pq, 98))
+            else:
+                vmin_pq, vmax_pq = 0.0, 1.0
+            im2 = pq_ax.imshow(pq_map, cmap="gray", origin="upper",
+                               vmin=vmin_pq, vmax=vmax_pq)
+            pq_ax.set_title(
+                "Pattern Quality (IQ from .ang)",
+                color="white", fontweight="bold",
+            )
+            pq_ax.axis("off")
+            cbar2 = fig.colorbar(im2, ax=pq_ax, fraction=0.046, pad=0.04)
+            cbar2.ax.tick_params(colors="white")
+
         canvas = FigureCanvas(fig)
         canvas.setStyleSheet(f"background-color: {_bg};")
+
+        # Same themed nav toolbar used on the grain map / Step-5 IPF —
+        # pan, rectangle-zoom, home, save.
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
+        toolbar = NavToolbar(canvas, dlg)
+        toolbar.setStyleSheet(f"""
+            QToolBar {{
+                background-color: {THEME['surface_bg']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 2px;
+                spacing: 2px;
+            }}
+            QToolButton {{
+                background-color: {THEME['surface_bg']};
+                color: {THEME['text']};
+                border: none;
+                border-radius: 3px;
+                padding: 3px;
+            }}
+            QToolButton:hover {{
+                background-color: {THEME['accent']};
+                color: {THEME['accent_text']};
+            }}
+            QToolButton:checked {{
+                background-color: {THEME['accent']};
+                color: {THEME['accent_text']};
+            }}
+            QToolBar QLabel {{
+                color: {THEME['text']};
+            }}
+        """)
+
         layout = QVBoxLayout(dlg)
+        layout.addWidget(toolbar)
         layout.addWidget(canvas)
         dlg.show()
         # Keep a reference so the dialog isn't garbage-collected immediately.
@@ -1468,16 +1585,34 @@ class ROISelectionPage(QWizardPage):
 
         self._ipf_ax.set_visible(True)
         self._ipf_ax.clear()
-        self._ipf_ax.imshow(rgb_map, origin="upper", interpolation="nearest")
-        self._ipf_ax.set_title(f"IPF Map  //  {label}", fontsize=9)
-        #self._ipf_ax.set_xlabel("Column", fontsize=8)
-        #self._ipf_ax.set_ylabel("Row", fontsize=8)
-        #self._ipf_ax.tick_params(labelsize=7)
+        # If a grain-ROI mask is active, mirror its whiten-outside behaviour
+        # on the new IPF render so switching direction doesn't blow away the
+        # ROI visual.
+        roi_mask = getattr(self, "_roi_mask", None)
+        if (roi_mask is not None and self._grain_ids is not None
+                and roi_mask.shape == self._grain_ids.shape):
+            shown = rgb_map.copy()
+            shown[~roi_mask] = 1.0
+        else:
+            shown = rgb_map
+        self._ipf_ax.imshow(shown, origin="upper", interpolation="nearest")
+        self._ipf_ax.axis("off")
 
         from ipf_map import plot_ipf_triangle
         self._key_ax.set_visible(True)
         self._key_ax.clear()
         plot_ipf_triangle(self._key_ax, n=150)
+
+        # `ax.clear()` above already detached the prior contour collections;
+        # drop the dangling references so _overlay_grain_boundaries doesn't
+        # try to remove them a second time.
+        self._boundary_overlays["ipf"] = None
+        if self._grain_ids is not None:
+            self._overlay_grain_boundaries(
+                self._ipf_ax, self._ipf_canvas, "ipf",
+                restrict_mask=roi_mask,
+                color=(0.0, 0.0, 0.0), alpha=0.9,
+            )
 
         self._roi_rects[0] = None
         self._update_roi_rects()
@@ -1578,10 +1713,17 @@ class ROISelectionPage(QWizardPage):
     def _update_roi_rects(self):
         import matplotlib.patches as mpatches
 
-        # In grain-ROI mode the IPF and grain maps are masked to the
-        # selected grains — drawing a rectangle on top is misleading, so
-        # we suppress the overlay entirely.
-        if self._grain_radio.isChecked():
+        # Suppress the rect overlay whenever a grain-based ROI is in
+        # effect: either the user picked the Grain radio explicitly, or
+        # they hit "Select ROI" in the Grain ID Map dialog (which sets
+        # _roi_mask without flipping the radio).  In both cases the IPF
+        # / grain maps are masked to the selection and a rectangle on
+        # top would be misleading.
+        grain_roi_active = (
+            self._grain_radio.isChecked()
+            or getattr(self, "_roi_mask", None) is not None
+        )
+        if grain_roi_active:
             # Tidy any rects left over from a prior rect-ROI session.
             for idx in (0, 1):
                 if self._roi_rects[idx] is not None:
@@ -1663,7 +1805,8 @@ class SimTunerDialog(QDialog):
 
     def __init__(self, master_path: str, euler_deg: tuple, pc_edax: tuple,
                  det_shape: tuple, det_tilt_deg: float, sample_tilt_deg: float = 70.0,
-                 exp_pat: np.ndarray = None, exp_pat_proc: np.ndarray = None, parent=None):
+                 exp_pat: np.ndarray = None, exp_pat_proc: np.ndarray = None,
+                 sim_processor=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Simulated Pattern Live Tuner")
         self.setMinimumSize(960, 620)
@@ -1678,6 +1821,16 @@ class SimTunerDialog(QDialog):
         # will see at run time (Step 3 hp / lp / γ / mask / flip).
         self._exp_pat         = exp_pat_proc if exp_pat_proc is not None else exp_pat
         self._worker          = None
+        # Optional callable: (raw_sim_np) -> processed_sim_np.  Used to push
+        # the simulated pattern through the same Step 3 pipeline as the
+        # experimental side so the live checkerboard / flicker compares
+        # like-for-like.
+        self._sim_processor   = sim_processor
+        # Caches: latest raw + processed sim patterns.  _last_sim_pat is
+        # what the canvas draws; we swap between raw and processed when
+        # the "Apply processing" toggle changes.
+        self._last_sim_pat_raw  = None
+        self._last_sim_pat_proc = None
 
         # ── Debounce timer ────────────────────────────────────────────────────
         self._timer = QTimer()
@@ -1771,7 +1924,7 @@ class SimTunerDialog(QDialog):
         cb_sub_layout.setContentsMargins(0, 0, 0, 0)
         self._tile_spin = QSpinBox()
         self._tile_spin.setRange(4, 128)
-        self._tile_spin.setValue(40)
+        self._tile_spin.setValue(60)
         self._tile_spin.setSuffix(" px")
         self._tile_spin.setToolTip("Size of each checkerboard tile in pixels.")
         self._tile_spin.valueChanged.connect(self._on_value_changed)
@@ -1876,8 +2029,16 @@ class SimTunerDialog(QDialog):
 
     def _on_proc_toggled(self, checked: bool):
         self._exp_pat = self._exp_pat_proc if checked else self._exp_pat_raw
-        # Redraw checkerboard with the newly active experimental pattern.
-        self._timer.start()
+        # Swap the cached sim to match the toggle so both sides of the
+        # checkerboard use the same pipeline.  If a processed version
+        # hasn't been computed yet we'll fall back to raw inside
+        # _redraw_view.
+        if checked and self._last_sim_pat_proc is not None:
+            self._last_sim_pat = self._last_sim_pat_proc
+        elif self._last_sim_pat_raw is not None:
+            self._last_sim_pat = self._last_sim_pat_raw
+        # Redraw checkerboard with the newly active patterns.
+        self._redraw_view()
 
     def _generate(self):
         # Silently drop the previous worker's result if it's still running
@@ -1907,7 +2068,20 @@ class SimTunerDialog(QDialog):
     def _on_done(self, pat_np: np.ndarray):
         # Cache the latest sim so view-mode toggling and flicker ticks can
         # redraw without re-running the worker.
-        self._last_sim_pat = pat_np
+        self._last_sim_pat_raw  = pat_np
+        self._last_sim_pat_proc = None
+        if self._sim_processor is not None:
+            try:
+                self._last_sim_pat_proc = self._sim_processor(pat_np)
+            except Exception as exc:
+                print(f"[SimTuner] sim_processor failed: {exc}")
+                self._last_sim_pat_proc = None
+        # Pick raw vs processed to match the current "Apply processing"
+        # toggle so the checkerboard always compares like-for-like.
+        if self._proc_chk.isChecked() and self._last_sim_pat_proc is not None:
+            self._last_sim_pat = self._last_sim_pat_proc
+        else:
+            self._last_sim_pat = self._last_sim_pat_raw
         self._redraw_view()
         self._status.setText(f"Done — {pat_np.shape[0]}×{pat_np.shape[1]} px.")
         self._status.setStyleSheet(f"color: {THEME['success']}; font-size: 11px;")
@@ -2202,6 +2376,10 @@ class ReferencePatternPage(QWizardPage):
         self._sim_worker    = None
         self._refine_worker = None
         self._ref_pattern_set: ReferencePatternSet = None
+        # Undo stack of per-grain reference moves.  Each entry is a tuple
+        # (grain_id, prev_row, prev_col, prev_pat_idx, prev_euler) captured
+        # *before* the move; popping it restores the grain to that state.
+        self._pergrain_undo_stack: list = []
         self._sim_pat_array = None   # last generated simulated pattern
         # Gate for the Sim-vs-Exp comparison dialog: only set True by the
         # explicit "Compare" button click.  Auto-regenerations (IPF clicks,
@@ -2281,17 +2459,17 @@ class ReferencePatternPage(QWizardPage):
         count_group  = QGroupBox("Reference Pattern Count")
         count_layout = QHBoxLayout()
         self._count_switch = _ToggleSwitch(
-            left_label="Single",
-            right_label="Multiple",
+            left_label="Single Ref for Whole Map",
+            right_label="Per Grain Reference",
             parent=self,
         )
         self._count_switch.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         self._count_switch.setToolTip(
-            "Single — one reference pattern for the whole ROI.\n"
-            "Multiple — one reference pattern per grain selected on Step 4.\n"
-            "Multiple requires a grain ROI selection on Step 4."
+            "Single Ref for Whole Map — one reference pattern for the whole ROI.\n"
+            "Per Grain Reference — one reference pattern per grain selected on Step 4.\n"
+            "Per Grain Reference requires a grain ROI selection on Step 4."
         )
         count_layout.addWidget(self._count_switch)
         count_layout.addStretch()
@@ -2368,6 +2546,13 @@ class ReferencePatternPage(QWizardPage):
 
         # Per-grain info group (hidden in single mode)
         self._grain_info_group  = QGroupBox("Per-Grain References")
+        # Cap the group's width so long combo items
+        # ("Grain N  (row=…, col=…)") don't widen the left column when the
+        # user flips into per-grain mode.
+        self._grain_info_group.setMaximumWidth(320)
+        self._grain_info_group.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+        )
         grain_info_layout = QVBoxLayout()
         self._grain_count_lbl = QLabel("No segmentation found — proceed to Step 4 first.")
         self._grain_count_lbl.setWordWrap(True)
@@ -2380,23 +2565,37 @@ class ReferencePatternPage(QWizardPage):
         self._ref_strategy_combo.addItems([
             "Closest to mean orientation",
             "Lowest KAM (most uniform)",
+            "Highest pattern quality (IQ)",
         ])
         self._ref_strategy_combo.setToolTip(
             "How to choose the representative pixel within each grain.\n"
             "• Closest to mean orientation — uses the arithmetic-mean quaternion.\n"
             "• Lowest KAM — uses the in-grain kernel-average misorientation\n"
             "  computed during segmentation.  Boundary pixels (high KAM) are\n"
-            "  excluded by the interior filter.\n\n"
-            "Both strategies erode each grain by 2 px before picking, to keep\n"
+            "  excluded by the interior filter.\n"
+            "• Highest pattern quality (IQ) — picks the pixel with the\n"
+            "  strongest pattern quality from the .ang IQ column.\n\n"
+            "All strategies erode each grain by 2 px before picking, to keep\n"
             "the reference away from grain boundaries / scan edges."
         )
         self._ref_strategy_combo.currentIndexChanged.connect(
             lambda _i: self._auto_select_references()
         )
+        # Long item text would otherwise stretch the column.
+        self._ref_strategy_combo.setMaximumWidth(220)
+        self._ref_strategy_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         _strategy_row.addWidget(self._ref_strategy_combo, stretch=1)
 
         self._active_grain_lbl = QLabel("Active grain for override:")
         self._grain_combo = QComboBox()
+        # Items can grow to "Grain N  (row=…, col=…)" — let the combo
+        # elide rather than expanding the column.
+        self._grain_combo.setMaximumWidth(280)
+        self._grain_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         # Refresh the reference-pattern preview whenever the active grain
         # changes so the "Grain N" badge in the viewer status line stays
         # in sync with which grain the user is editing.
@@ -2406,10 +2605,23 @@ class ReferencePatternPage(QWizardPage):
         self._grain_combo.currentIndexChanged.connect(
             lambda _i: self._highlight_active_grain()
         )
-        grain_info_layout.addWidget(self._grain_count_lbl)
+        # _grain_count_lbl is kept as an invisible stub so the various
+        # setText() callers downstream don't have to be touched.  Its
+        # status text is redundant with the IPF map / grain combo and
+        # used to crowd the top of this group.
+        self._grain_count_lbl.setVisible(False)
         grain_info_layout.addLayout(_strategy_row)
         grain_info_layout.addWidget(self._active_grain_lbl)
         grain_info_layout.addWidget(self._grain_combo)
+        # Undo: pops the previous per-grain reference position off the stack
+        # and restores the relevant grain to it.
+        self._undo_ref_btn = QPushButton("Undo Last Reference Move")
+        self._undo_ref_btn.setToolTip(
+            "Revert the most recent per-grain reference click on the IPF."
+        )
+        self._undo_ref_btn.setEnabled(False)
+        self._undo_ref_btn.clicked.connect(self._undo_pergrain_ref)
+        grain_info_layout.addWidget(self._undo_ref_btn)
         grain_info_layout.addWidget(_note(
             "Click on the IPF map to move the selected grain's reference point."
         ))
@@ -2662,10 +2874,44 @@ class ReferencePatternPage(QWizardPage):
         self._ipf_canvas.setMinimumSize(320, 320)
         self._ipf_canvas.mpl_connect("button_press_event", self._on_ipf_click)
 
+        # Pan / rectangle-zoom / home toolbar.  Click-to-set-reference is
+        # suppressed in `_on_ipf_click` while one of the toolbar tools is
+        # active so the two interactions don't fight each other.
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
+        self._ipf_toolbar = NavToolbar(self._ipf_canvas, self)
+        self._ipf_toolbar.setStyleSheet(f"""
+            QToolBar {{
+                background-color: {THEME['surface_bg']};
+                border: 1px solid {THEME['border']};
+                border-radius: 4px;
+                padding: 2px;
+                spacing: 2px;
+            }}
+            QToolButton {{
+                background-color: {THEME['surface_bg']};
+                color: {THEME['text']};
+                border: none;
+                border-radius: 3px;
+                padding: 3px;
+            }}
+            QToolButton:hover {{
+                background-color: {THEME['accent']};
+                color: {THEME['accent_text']};
+            }}
+            QToolButton:checked {{
+                background-color: {THEME['accent']};
+                color: {THEME['accent_text']};
+            }}
+            QToolBar QLabel {{
+                color: {THEME['text']};
+            }}
+        """)
+
         self._ipf_status = QLabel("Loading IPF map…")
         self._ipf_status.setStyleSheet("color: gray;")
         self._ipf_status.setWordWrap(True)
 
+        ipf_layout.addWidget(self._ipf_toolbar)
         ipf_layout.addWidget(self._ipf_canvas, stretch=1)
         ipf_layout.addWidget(self._ipf_status)
         right_layout.addWidget(count_group)
@@ -2832,12 +3078,12 @@ class ReferencePatternPage(QWizardPage):
     def _on_mode_changed(self, btn_id: int, checked: bool):
         if not checked:
             return
-        # Reference Position is always shown — the row/col spinboxes are
-        # the single source of truth for "where the reference is selected",
-        # regardless of mode.  In sim mode, the spinboxes additionally
-        # drive the Euler-angle auto-load via _on_ref_position_changed.
-        self._pos_group.setVisible(True)
-        self._grain_info_group.setVisible(btn_id == 1)
+        is_pergrain = (btn_id == 1)
+        # Ref-position spinboxes + the black "+" cursor on the IPF only
+        # make sense in single-reference mode.  Hide both in per-grain
+        # mode — the per-grain markers (one per grain) take over.
+        self._pos_group.setVisible(not is_pergrain)
+        self._grain_info_group.setVisible(is_pergrain)
         if btn_id == 2:
             # Pull Euler from .ang at the currently-selected ref position
             # BEFORE opening the dialog — _open_sim_settings auto-triggers
@@ -2847,12 +3093,17 @@ class ReferencePatternPage(QWizardPage):
             self._open_sim_settings()
         else:
             self._sim_settings_dialog.hide()
-        if btn_id == 1:
+        if is_pergrain:
             self._auto_select_references()
-        elif btn_id == 0:
-            self._clear_grain_markers()
-            self._clear_active_grain_highlight()
-            self._update_ref_marker()
+            # Tear down the single-ref black "+" marker so it doesn't
+            # linger on top of the per-grain coloured markers.
+            if self._ref_marker is not None:
+                try:
+                    self._ref_marker.remove()
+                except Exception:
+                    pass
+                self._ref_marker = None
+                self._ipf_canvas.draw_idle()
         else:
             self._clear_grain_markers()
             self._clear_active_grain_highlight()
@@ -2866,6 +3117,12 @@ class ReferencePatternPage(QWizardPage):
         wiz = self.wizard()
         grain_ids = getattr(wiz.roi_page, "_grain_ids", None)
         ang_data  = wiz.ang_data
+
+        # Rebuilding the reference set throws away any previous per-grain
+        # moves — clear the undo stack so it doesn't reference stale state.
+        self._pergrain_undo_stack.clear()
+        if hasattr(self, "_undo_ref_btn"):
+            self._undo_ref_btn.setEnabled(False)
 
         if grain_ids is None:
             self._grain_count_lbl.setText(
@@ -2881,13 +3138,26 @@ class ReferencePatternPage(QWizardPage):
             return
 
         geom = wiz.geometry_page.get_params()
-        strategy = ("kam_min" if self._ref_strategy_combo.currentIndex() == 1
-                    else "mean")
+        _idx = self._ref_strategy_combo.currentIndex()
+        strategy = {0: "mean", 1: "kam_min", 2: "iq_max"}.get(_idx, "mean")
         kam = getattr(wiz.roi_page, "_kam", None)
         if strategy == "kam_min" and kam is None:
             # Fall back to mean if segmentation didn't store a KAM (e.g. older
             # cached run).  The UI hint also tells the user to re-segment.
             strategy = "mean"
+        # Pull IQ off ang_data when the user selected Highest pattern quality.
+        iq_map = None
+        if strategy == "iq_max":
+            for fname in ("iq", "image_quality", "pq", "pattern_quality"):
+                arr = getattr(ang_data, fname, None)
+                if arr is not None and np.asarray(arr).shape == grain_ids.shape:
+                    iq_map = np.asarray(arr, dtype=float)
+                    break
+            if iq_map is None:
+                # No IQ column → silent fallback to "mean".  Tooltip already
+                # warns the user; the status line below names the strategy
+                # that was actually used.
+                strategy = "mean"
         # Restrict to the user's Step-4 grain selection when one exists, so
         # "Multiple" reference mode lines up exactly with the ROI grains.
         selected_gids = getattr(wiz.roi_page, "_roi_selected_grain_ids", None)
@@ -2895,13 +3165,17 @@ class ReferencePatternPage(QWizardPage):
             grain_ids, ang_data, geom["cols"],
             strategy=strategy,
             kam=kam,
+            iq=iq_map,
             interior_erode=2,
             selected_grain_ids=selected_gids if selected_gids else None,
         )
 
         n = len(self._ref_pattern_set)
-        _strat_label = ("lowest KAM" if strategy == "kam_min"
-                        else "closest to mean orientation")
+        _strat_label = {
+            "kam_min": "lowest KAM",
+            "iq_max":  "highest pattern quality",
+            "mean":    "closest to mean orientation",
+        }.get(strategy, "closest to mean orientation")
         _filter_note = (
             f" (filtered to {len(selected_gids)} ROI grain{'s' if len(selected_gids) != 1 else ''})"
             if selected_gids else ""
@@ -2951,27 +3225,80 @@ class ReferencePatternPage(QWizardPage):
 
     def _draw_grain_markers(self):
         """Place one '+' marker per grain on the IPF map, coloured to
-        match each grain's Step-4 palette colour for easy identification."""
+        match each grain's Step-4 palette colour, and stamp a matching
+        legend below the IPF so the user can pair each colour with the
+        grain boundary it outlines."""
+        from matplotlib.patches import Patch
         self._clear_grain_markers()
+        # Drop any prior legend so reruns don't stack.
+        prev_leg = getattr(self, "_grain_legend_artist", None)
+        if prev_leg is not None:
+            try:
+                prev_leg.remove()
+            except Exception:
+                pass
+            self._grain_legend_artist = None
         if not self._ipf_ax.get_visible() or self._ref_pattern_set is None:
             return
         # Fallback palette used only when segmentation/colour LUT isn't
         # available — shouldn't trigger in normal per-grain workflow.
         fallback = ["#fdca40", "#f38ba8", "#a6e3a1", "#89dceb", "#cba6f7",
                     "#fab387", "#89b4fa", "#eba0ac", "#94e2d5", "#b4befe"]
+        legend_handles = []
         for i, entry in enumerate(self._ref_pattern_set):
             color = self._grain_color_for(entry.grain_id)
             if color is None:
                 color = fallback[i % len(fallback)]
             # Stamp the marker with a thin dark halo so it stays visible
             # even when the grain colour itself is light on the IPF.
-            marker, = self._ipf_ax.plot(
+            self._ipf_ax.plot(
                 entry.ref_col, entry.ref_row,
                 marker="+", color=color,
                 markersize=16, markeredgewidth=2.8, zorder=10, linestyle="none",
                 path_effects=self._stroke_effects(),
             )
-            self._grain_markers.append(marker)
+            # The plot returns a Line2D ref; keep just enough to remove later.
+            self._grain_markers.append(self._ipf_ax.lines[-1])
+            # Legend uses a coloured *swatch* (Patch) rather than the "+"
+            # marker so each grain's colour is easy to read at a glance.
+            legend_handles.append(Patch(
+                facecolor=color, edgecolor="black", linewidth=0.6,
+                label=f"Grain {entry.grain_id}",
+            ))
+
+        # Build a compact legend below the IPF.  Multi-column when there
+        # are lots of grains so the legend doesn't grow taller than the
+        # plot itself.
+        if legend_handles:
+            n = len(legend_handles)
+            ncol = min(n, 8 if n <= 16 else 6)
+            self._grain_legend_artist = self._ipf_ax.legend(
+                handles=legend_handles,
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.02),
+                bbox_transform=self._ipf_ax.transAxes,
+                fontsize=7,
+                ncol=ncol,
+                framealpha=0.85,
+                facecolor="#101418",
+                edgecolor="#404040",
+                labelcolor="white",
+                handlelength=1.2,
+                handleheight=1.2,
+                handletextpad=0.5,
+                borderpad=0.4,
+                columnspacing=0.9,
+                labelspacing=0.4,
+            )
+            self._grain_legend_artist.set_zorder(9)
+            # Reserve room at the bottom of the figure so the legend isn't
+            # clipped — tight_layout doesn't account for legends placed
+            # outside the axes via bbox_to_anchor.
+            try:
+                self._ipf_fig.subplots_adjust(bottom=0.22)
+            except Exception:
+                pass
+
         # The active-grain highlight lives on the same axis — repaint it
         # so it sits on top of (and survives the clear preceding) markers.
         self._highlight_active_grain()
@@ -3045,6 +3372,20 @@ class ReferencePatternPage(QWizardPage):
             except Exception:
                 pass
         self._grain_markers.clear()
+        # Drop the per-grain legend too — it's drawn alongside the markers.
+        leg = getattr(self, "_grain_legend_artist", None)
+        if leg is not None:
+            try:
+                leg.remove()
+            except Exception:
+                pass
+            self._grain_legend_artist = None
+            # Reclaim the bottom margin we reserved for the legend so the
+            # IPF expands back to fill the figure in single-ref mode.
+            try:
+                self._ipf_fig.tight_layout(pad=0.5)
+            except Exception:
+                pass
         self._ipf_canvas.draw_idle()
 
     # ── IPF map ───────────────────────────────────────────────────────────────
@@ -3076,34 +3417,45 @@ class ReferencePatternPage(QWizardPage):
             return
         roi_mask = getattr(roi_page, "_roi_mask", None) if roi_page else None
 
-        # Wipe any previous contour overlay on this axis.
+        # Wipe any previous contour overlay on this axis.  Stored as a
+        # list of LineCollection objects (one per grain).
         prev = getattr(self, "_ipf_boundary_overlay", None)
         if prev is not None:
-            try:
-                for coll in getattr(prev, "collections", []):
+            items = prev if isinstance(prev, list) else getattr(prev, "collections", [])
+            for coll in items:
+                try:
                     coll.remove()
-            except Exception:
-                pass
+                except Exception:
+                    pass
             self._ipf_boundary_overlay = None
 
-        # Mask out grain-0 (discarded) plus anything outside the ROI so the
-        # contour doesn't outline noise speckles.
-        mask_out = (grain_ids == 0)
+        keep = (grain_ids != 0)
         if roi_mask is not None and roi_mask.shape == grain_ids.shape:
-            mask_out |= ~roi_mask
-        gid = np.ma.masked_where(mask_out, grain_ids.astype(np.float32))
-        max_g = int(grain_ids.max())
-        if max_g < 1:
+            keep &= roi_mask
+        if not keep.any():
             return
-        levels = np.arange(0.5, max_g + 0.5, 1.0)
-        try:
-            cs = self._ipf_ax.contour(
-                gid, levels=levels, colors=[(0.0, 0.0, 0.0, 0.9)],
-                linewidths=1.0, antialiased=True, zorder=4,
-            )
-        except Exception:
-            return
-        self._ipf_boundary_overlay = cs
+
+        rgba = (0.0, 0.0, 0.0, 0.9)
+        all_colls = []
+        # Per-grain contour at level 0.5 — avoids the "stacked iso-lines"
+        # artefact that contouring the label field at multiple
+        # half-integer levels produced for non-consecutive grain IDs
+        # (some boundary segments looked thicker than others).
+        for gid_val in np.unique(grain_ids[keep]):
+            if gid_val == 0:
+                continue
+            binary = (grain_ids == gid_val).astype(np.float32)
+            if roi_mask is not None and roi_mask.shape == grain_ids.shape:
+                binary[~roi_mask] = 0.0
+            try:
+                cs = self._ipf_ax.contour(
+                    binary, levels=[0.5], colors=[rgba],
+                    linewidths=1.0, antialiased=True, zorder=4,
+                )
+                all_colls.extend(cs.collections)
+            except Exception:
+                continue
+        self._ipf_boundary_overlay = all_colls
         self._ipf_canvas.draw_idle()
 
     def _on_ipf_done(self, rgb_map, error: str):
@@ -3178,6 +3530,15 @@ class ReferencePatternPage(QWizardPage):
             gid = self._grain_combo.currentData()
             if gid is None or self._ref_pattern_set is None:
                 return
+            # Capture the grain's current state BEFORE the move so the user
+            # can undo back to it.
+            prev = self._ref_pattern_set.by_grain(int(gid))
+            if prev is not None:
+                self._pergrain_undo_stack.append((
+                    int(gid), int(prev.ref_row), int(prev.ref_col),
+                    int(prev.ref_pat_idx), tuple(prev.euler) if prev.euler is not None else None,
+                ))
+                self._undo_ref_btn.setEnabled(True)
             pat_idx = row * geom["cols"] + col
             ang_data = wiz.ang_data
             euler = None
@@ -3189,17 +3550,46 @@ class ReferencePatternPage(QWizardPage):
             self._grain_combo.setItemText(idx, f"Grain {gid}  (row={row + 1}, col={col + 1})")
             self._draw_grain_markers()
 
+    def _undo_pergrain_ref(self):
+        """Pop the most recent per-grain reference move off the undo stack
+        and restore the affected grain to that state."""
+        if not self._pergrain_undo_stack or self._ref_pattern_set is None:
+            return
+        gid, row, col, pat_idx, euler = self._pergrain_undo_stack.pop()
+        try:
+            self._ref_pattern_set.update_ref(gid, row, col, pat_idx, euler)
+        except KeyError:
+            # Grain may have been removed from the set since (auto-select
+            # rerun, ROI change, etc.).  Silently skip.
+            pass
+        # Sync the combo label of the affected grain back to the restored
+        # row/col so the user sees the rollback.
+        for i in range(self._grain_combo.count()):
+            if self._grain_combo.itemData(i) == gid:
+                self._grain_combo.setItemText(
+                    i, f"Grain {gid}  (row={row + 1}, col={col + 1})"
+                )
+                break
+        self._undo_ref_btn.setEnabled(bool(self._pergrain_undo_stack))
+        self._draw_grain_markers()
+        self._load_ref_pattern_preview()
+
     def _on_ipf_click(self, event):
         if event.inaxes is not self._ipf_ax or not self._ipf_ax.get_visible():
+            return
+        # Suppress reference-set clicks while the user is panning or
+        # rectangle-zooming via the nav toolbar.
+        tb = getattr(self, "_ipf_toolbar", None)
+        if tb is not None and getattr(tb, "mode", ""):
             return
         self._apply_ipf_click(int(round(event.ydata)), int(round(event.xdata)))
 
     # _on_sim_ipf_click was retired with the sim-dialog IPF.
 
     def _update_ref_marker(self):
-        """Reference-position marker on the main IPF.  Now used in both
-        real-pattern and simulated-pattern modes (the spinboxes drive the
-        marker regardless of which radio is active)."""
+        """Reference-position marker on the main IPF.  Drawn in single-ref
+        modes only (real or simulated); skipped entirely in per-grain mode
+        where the coloured per-grain markers carry the same information."""
         if not self._ipf_ax.get_visible():
             return
         if self._ref_marker is not None:
@@ -3208,6 +3598,9 @@ class ReferencePatternPage(QWizardPage):
             except Exception:
                 pass
             self._ref_marker = None
+        if self._pergrain_radio.isChecked():
+            self._ipf_canvas.draw_idle()
+            return
         row = self.ref_row.value()
         col = self.ref_col.value()
         self._ref_marker, = self._ipf_ax.plot(
@@ -3920,6 +4313,17 @@ class ReferencePatternPage(QWizardPage):
             except Exception:
                 pass
 
+        wiz = self.wizard()
+        up2_path_for_proc = wiz.field("up2_path") if wiz else ""
+        # Push raw sim patterns through the same Step 3 processing the
+        # optimizer will see at runtime so the checkerboard's sim side is
+        # comparable to the processed experimental side.
+        sim_processor = (
+            (lambda raw, _u=up2_path_for_proc:
+                self._apply_step3_processing(raw, _u))
+            if up2_path_for_proc else None
+        )
+
         dlg = SimTunerDialog(
             master_path     = mp_path,
             euler_deg       = euler_deg,
@@ -3929,6 +4333,7 @@ class ReferencePatternPage(QWizardPage):
             sample_tilt_deg = geom["tilt"],
             exp_pat         = self._sim_exp_pat,
             exp_pat_proc    = exp_pat_proc,
+            sim_processor   = sim_processor,
             parent          = self,
         )
         dlg.applied_signal.connect(self._on_tuner_applied)
