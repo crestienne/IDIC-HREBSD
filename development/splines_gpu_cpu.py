@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import Data
 import utilities
 import warp
-import bspline_gpu as gpu_warp
+import development.bspline_gpu as gpu_warp
 
 torch.set_default_device("cuda")
 

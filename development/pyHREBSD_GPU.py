@@ -3,7 +3,7 @@ from scipy import interpolate
 from tqdm.auto import tqdm
 import torch
 import mpire
-import bspline_gpu as gpu_warp
+import development.bspline_gpu as gpu_warp
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
