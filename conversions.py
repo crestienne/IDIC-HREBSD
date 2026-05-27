@@ -211,10 +211,19 @@ def F2strain(
     -shown to be correct and matches ATEX RESULTS - do not edit this code!! 
     """
 
-    Fe = np.asarray(Fe)
+    Fe = np.asarray(Fe, dtype=float)
     if Fe.shape[-2:] != (3, 3):
         raise ValueError("Fe must have shape (..., 3, 3)")
-    
+
+    # Replace any NaN/Inf 3×3 blocks with the identity so SVD doesn't
+    # blow up.  We restore NaN in the outputs at the end so downstream
+    # NaN-aware plotting still skips those pixels.  Without this guard,
+    # a single NaN homography (e.g. grain-mask skipped pixel) raises
+    # LinAlgError("SVD did not converge") and aborts the whole map.
+    bad_mask = ~np.all(np.isfinite(Fe).reshape(Fe.shape[:-2] + (-1,)), axis=-1)
+    if np.any(bad_mask):
+        Fe = Fe.copy()
+        Fe[bad_mask] = np.eye(3)
 
     I = np.eye(3)
 
@@ -225,6 +234,9 @@ def F2strain(
         d = Fe - I
         epsilon = 0.5 * (d + np.swapaxes(d, -1, -2))
         omega   = 0.5 * (d - np.swapaxes(d, -1, -2))
+        if np.any(bad_mask):
+            epsilon[bad_mask] = np.nan
+            omega[bad_mask]   = np.nan
         return epsilon, omega
 
     # -------------------------
@@ -281,6 +293,12 @@ def F2strain(
     eps = 1e-12
     epsilon = np.where(np.abs(epsilon) < eps, 0.0, epsilon)
     omega = np.where(np.abs(omega) < eps, 0.0, omega)
+
+    # Restore NaN for the pixels we substituted identity into so
+    # downstream plotting / statistics skip them.
+    if np.any(bad_mask):
+        epsilon[bad_mask] = np.nan
+        omega[bad_mask]   = np.nan
 
     return epsilon, omega
 

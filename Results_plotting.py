@@ -157,7 +157,41 @@ def compute_tfbc(results: dict, params: dict) -> dict:
         print(f"[TFBC] Using single Euler override (Bunge, °): "
               f"φ₁={eu_deg[0]:.3f}  Φ={eu_deg[1]:.3f}  φ₂={eu_deg[2]:.3f}")
     else:
-        base_quats = results["base_quats"]     # (N, 4)
+        base_quats = np.asarray(results["base_quats"])
+        # Strain fields are stored at ROI bbox resolution (rows × cols), but
+        # base_quats may still be the full scan if the visualizer wasn't
+        # given a roi_slice or used a key-mismatched ang_path lookup.  Align
+        # the two so the broadcast against C_rot[:, ...] works.
+        if base_quats.shape[0] != N:
+            roi_slice = params.get("roi_slice", None)
+            sliced = False
+            if roi_slice is not None:
+                full_r = params.get("full_rows", 0)
+                full_c = params.get("full_cols", 0)
+                if full_r and full_c and base_quats.shape[0] == full_r * full_c:
+                    bq2d = base_quats.reshape(int(full_r), int(full_c), -1)
+                    base_quats = bq2d[roi_slice[0], roi_slice[1], :].reshape(-1, 4)
+                    sliced = True
+            if not sliced:
+                # Last-resort: clip to N (only correct if the strain field
+                # is the first rows×cols chunk of the scan, which is true
+                # only when ROI starts at (0, 0)).  Logged so the user
+                # knows the alignment may be off.
+                if base_quats.shape[0] >= N:
+                    print(
+                        f"[TFBC] WARNING: base_quats has {base_quats.shape[0]} entries "
+                        f"but strain field has {N}.  No roi_slice in params — "
+                        f"clipping quats to the first {N} entries.  Pass "
+                        f"`roi_slice` (and `full_rows`/`full_cols`) into the "
+                        f"visualizer params for a correct slice."
+                    )
+                    base_quats = base_quats[:N]
+                else:
+                    raise ValueError(
+                        f"base_quats has {base_quats.shape[0]} entries but the "
+                        f"strain field requires {N}.  Pass `roi_slice` + "
+                        f"`full_rows`/`full_cols` so compute_tfbc can align them."
+                    )
 
     # ── Rotate stiffness tensor to sample frame for each pattern ──────────────
     # Use the .ang quaternion directly: the IC-GN rotation is the difference

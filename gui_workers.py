@@ -467,6 +467,15 @@ class PipelineWorker(QThread):
                 (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
                  pat_obj.mask_type) = saved
 
+        # Build the in-bbox grain mask once so the optimizer can skip
+        # non-grain pixels entirely (instead of running them and NaN'ing
+        # the result afterwards).
+        roi_pixel_mask = None
+        gm_full = p.get("_roi_grain_mask")
+        if gm_full is not None and p.get("roi_slice") is not None:
+            rs = p["roi_slice"]
+            roi_pixel_mask = np.asarray(gm_full)[rs[0], rs[1]]
+
         optimize_params = dict(
             init_type=p["init_type"],
             crop_fraction=p["crop_fraction"],
@@ -475,6 +484,7 @@ class PipelineWorker(QThread):
             n_jobs=p["n_jobs"],
             verbose=True,
             roi_slice=p.get("roi_slice", None),
+            roi_pixel_mask=roi_pixel_mask,
             scan_shape=ang_data.shape,
             mask=pat_obj.get_mask(),
             use_simulated_reference=False,
@@ -528,8 +538,10 @@ class PipelineWorker(QThread):
             else:
                 eff_rows, eff_cols = ang_data.shape
 
-        # NaN out pixels inside the bounding box that don't belong to the
-        # selected grain (only applies when grain ROI mode is active)
+        # Grain-mask post-process is no longer needed — the optimizer
+        # now receives roi_pixel_mask and skips non-grain pixels entirely
+        # (their slots in the output stay NaN).  Just log how many
+        # patterns actually got optimized vs the bbox total.
         grain_mask_full = p.get("_roi_grain_mask")
         if grain_mask_full is not None:
             roi_slice = p.get("roi_slice", None)
@@ -537,16 +549,10 @@ class PipelineWorker(QThread):
                 bbox_mask = grain_mask_full[roi_slice[0], roi_slice[1]].ravel()
             else:
                 bbox_mask = grain_mask_full.ravel()
-            non_grain = ~bbox_mask
-            h[non_grain]          = np.nan
-            iterations[non_grain] = np.nan
-            residuals[non_grain]  = np.nan
-            dp_norms[non_grain]   = np.nan
-            if h_guess is not None:
-                h_guess[non_grain] = np.nan
             n_kept = int(bbox_mask.sum())
             self.log_signal.emit(
-                f"Grain mask applied — {n_kept}/{len(bbox_mask)} pixels kept."
+                f"Grain mask applied — {n_kept}/{len(bbox_mask)} pixels "
+                f"in grain (optimizer skipped the rest)."
             )
 
         return h, h_guess, iterations, residuals, dp_norms, eff_rows, eff_cols
@@ -580,6 +586,14 @@ class PipelineWorker(QThread):
             f"xo={tuple(np.round(pc_xo, 4))}"
         )
 
+        # Match the real-reference path: skip non-grain pixels in the
+        # optimizer when a grain mask is active.
+        roi_pixel_mask = None
+        gm_full = p.get("_roi_grain_mask")
+        if gm_full is not None and p.get("roi_slice") is not None:
+            rs = p["roi_slice"]
+            roi_pixel_mask = np.asarray(gm_full)[rs[0], rs[1]]
+
         optimize_params = dict(
             init_type            = p["init_type"],
             crop_fraction        = p["crop_fraction"],
@@ -588,6 +602,7 @@ class PipelineWorker(QThread):
             n_jobs               = p["n_jobs"],
             verbose              = True,
             roi_slice            = p.get("roi_slice", None),
+            roi_pixel_mask       = roi_pixel_mask,
             scan_shape           = ang_data.shape,
             mask                 = pat_obj.get_mask(),
             use_simulated_reference = True,
@@ -713,10 +728,16 @@ class PipelineWorker(QThread):
             euler_ref = np.array(entry.euler) if entry.euler is not None \
                 else ang_data.eulers[entry.ref_row, entry.ref_col]
 
+            # Only process pixels that actually belong to this grain;
+            # the rest of the bounding box stays NaN.  This matches the
+            # behavior of the single-ref grain ROI path.
+            grain_pixel_mask = grain_mask[rmin:rmax + 1, cmin:cmax + 1]
+
             t0     = time.perf_counter()
             result = core.optimize(
                 pat_obj, entry.ref_pat_idx,
                 roi_slice=roi_slice,
+                roi_pixel_mask=grain_pixel_mask,
                 euler_angles_ref=euler_ref,
                 **common_opt,
             )
@@ -964,21 +985,18 @@ class VisWorker(QThread):
             "F_flat": F,          # (N, 3, 3) — needed for TFBC polar decomposition
         }
 
-        # Load per-pattern base orientations from .ang file if provided
-        ang_path = p.get("ang_path", "")
+        # Load per-pattern base orientations from .ang file if provided.
+        # Accept either "ang_path" (legacy) or "ang" (pipeline-finish vis params).
+        # Always emit full-scan quats — compute_tfbc handles the ROI alignment
+        # via roi_slice + full_rows/full_cols.  Pre-slicing here breaks
+        # per-grain mode, whose saved strain field is full-scan-shaped while
+        # the run's roi_slice is the (smaller) Step-4 ROI bbox.
+        ang_path = p.get("ang_path", "") or p.get("ang", "")
         if ang_path and os.path.isfile(ang_path):
             ang_data = p.get("_ang_data") or utilities.read_ang(
                 ang_path, patshape, segment_grain_threshold=None
             )
-            full_r, full_c = ang_data.shape   # full scan shape from the ang file itself
-            # Reshape to 2-D so we can slice the ROI out cleanly
-            quats_2d  = ang_data.quats.reshape(full_r, full_c, 4)
-            roi_slice = p.get("roi_slice", None)
-            if roi_slice is not None:
-                quats_roi = quats_2d[roi_slice[0], roi_slice[1], :]
-            else:
-                quats_roi = quats_2d
-            result["base_quats"] = quats_roi.reshape(-1, 4)
+            result["base_quats"] = ang_data.quats.reshape(-1, 4)
 
         return result
 
@@ -1007,21 +1025,20 @@ class VisWorker(QThread):
         # Older runs may have phi1/Phi/phi2 fields saved — ignore them, the
         # results viewer no longer plots Euler angles.
 
-        # Load base orientations from .ang if provided (needed for TFBC)
-        ang_path = p.get("ang_path", "")
+        # Load base orientations from .ang if provided (needed for TFBC).
+        # Accept either key — pipeline-finish vis params use "ang", older
+        # standalone-vis params use "ang_path".
+        # Always emit full-scan quats — compute_tfbc handles the ROI alignment
+        # via roi_slice + full_rows/full_cols.  Pre-slicing here breaks
+        # per-grain mode, whose saved strain field is full-scan-shaped while
+        # the run's roi_slice is the (smaller) Step-4 ROI bbox.
+        ang_path = p.get("ang_path", "") or p.get("ang", "")
         if ang_path and os.path.isfile(ang_path):
-            patshape       = (p.get("pat_h", 512), p.get("pat_w", 512))
-            ang_data       = p.get("_ang_data") or utilities.read_ang(
+            patshape = (p.get("pat_h", 512), p.get("pat_w", 512))
+            ang_data = p.get("_ang_data") or utilities.read_ang(
                 ang_path, patshape, segment_grain_threshold=None
             )
-            full_r, full_c = ang_data.shape
-            quats_2d       = ang_data.quats.reshape(full_r, full_c, 4)
-            roi_slice      = p.get("roi_slice", None)
-            if roi_slice is not None:
-                quats_roi = quats_2d[roi_slice[0], roi_slice[1], :]
-            else:
-                quats_roi = quats_2d[:rows, :cols, :]
-            result["base_quats"] = quats_roi.reshape(-1, 4)
+            result["base_quats"] = ang_data.quats.reshape(-1, 4)
 
         return result
 

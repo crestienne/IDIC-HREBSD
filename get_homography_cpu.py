@@ -256,6 +256,7 @@ def optimize(
     progress_callback: Callable = None,
     debug_gradients: bool = False,
     subset_shape_kind: str = "rect",
+    roi_pixel_mask: np.ndarray = None,
 ) -> np.ndarray:
     """Routine for running the inverse composition gauss-newton algorithm.
 
@@ -308,6 +309,7 @@ def optimize(
         n_jobs = os.cpu_count() - 1
 
     # Prepare the patterns
+    out_positions = None   # bbox-flat positions for scattering results
     if type(pats) == Data.UP2:
         if roi_slice is not None:
             if scan_shape is None:
@@ -320,6 +322,24 @@ def optimize(
             N = roi_nrows * roi_ncols
             out_shape = (roi_nrows, roi_ncols)   # results reshaped to (roi_rows, roi_cols)
             roi_indices = roi_indices_from_rect(roi_slice, scan_shape)
+
+            # Optional grain mask within the ROI bounding box: only run the
+            # optimizer on True pixels; the rest stay NaN in the output.
+            if roi_pixel_mask is not None:
+                mask_arr = np.asarray(roi_pixel_mask, dtype=bool)
+                if mask_arr.shape != (roi_nrows, roi_ncols):
+                    raise ValueError(
+                        f"roi_pixel_mask shape {mask_arr.shape} doesn't match "
+                        f"ROI bbox shape {(roi_nrows, roi_ncols)}."
+                    )
+                mask_flat = mask_arr.ravel()
+                roi_indices = roi_indices.ravel()[mask_flat]
+                out_positions = np.where(mask_flat)[0]
+                print(
+                    f"roi_pixel_mask active: optimizing "
+                    f"{int(mask_flat.sum())} / {N} ROI patterns "
+                    f"(skipped {int((~mask_flat).sum())})."
+                )
 
         else:
             roi_indices = None
@@ -628,6 +648,11 @@ def optimize(
         r_fft = np.fft.fftshift(np.fft.fft2(r_init))
         r_fmt, _ = FMT(r_fft, X_fmt, Y_fmt, x_fmt, y_fmt)
     idx_list = roi_indices if roi_indices is not None else range(N)
+    # Iteration count differs from N when a grain mask filters idx_list
+    # down to just the in-grain pixels.  tqdm + progress callback should
+    # track the actual work, not the bbox size.
+    n_iter = (len(idx_list) if hasattr(idx_list, "__len__")
+              else (idx_list.size if hasattr(idx_list, "size") else N))
 
     # tqdm subclass that also emits a callback on every update — used to
     # surface per-pattern progress to the Qt GUI while joblib's Parallel
@@ -652,7 +677,7 @@ def optimize(
     # when verbose=False.
     if True:
         with tqdm_joblib(_ProgressTqdm(
-                total=N, desc="Patterns optimized",
+                total=n_iter, desc="Patterns optimized",
                 progress_cb=progress_callback,
                 disable=not verbose,
         )) as progress_bar:
@@ -681,19 +706,28 @@ def optimize(
                 for idx in idx_list
             )
 
-    # Unpack results
-    homographies = np.zeros((N, 8), dtype=float)
-    homographies_guess = np.zeros((N, 8), dtype=float)
-    iterations = np.zeros(N, dtype=int)
-    residuals = np.zeros(N, dtype=float)
-    dp_norms = np.zeros(N, dtype=float)
+    # Unpack results.  When a roi_pixel_mask filtered idx_list down to a
+    # subset of the bbox, scatter the results into the bbox-flat array at
+    # `out_positions`; the remaining (skipped) positions stay NaN so
+    # downstream code can ignore them via np.isnan().  When no mask was
+    # used, positions[k] == k so this behaves like the old in-order fill.
+    homographies = np.full((N, 8), np.nan, dtype=float)
+    homographies_guess = np.full((N, 8), np.nan, dtype=float)
+    iterations = np.full(N, -1, dtype=int)   # sentinel for "skipped"
+    residuals = np.full(N, np.nan, dtype=float)
+    dp_norms = np.full(N, np.nan, dtype=float)
 
-    for idx, (h, p_guess, num_iter, residual, dp_norm) in enumerate(results):
-        homographies[idx] = h
-        homographies_guess[idx] = p_guess
-        iterations[idx] = num_iter
-        residuals[idx] = float(residual)
-        dp_norms[idx] = float(dp_norm)
+    if out_positions is None:
+        positions_iter = range(len(results))
+    else:
+        positions_iter = out_positions
+    for k, (h, p_guess, num_iter, residual, dp_norm) in enumerate(results):
+        pos = positions_iter[k]
+        homographies[pos] = h
+        homographies_guess[pos] = p_guess
+        iterations[pos] = num_iter
+        residuals[pos] = float(residual)
+        dp_norms[pos] = float(dp_norm)
         # progress_callback now fires inside _ProgressTqdm.update() during
         # the joblib loop — no need to call it again post-aggregation.
 

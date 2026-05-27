@@ -776,22 +776,22 @@ class ROISelectionPage(QWizardPage):
         roi_layout = QFormLayout()
         self._roi_form_layout = roi_layout
 
-        # Mode: rectangle vs grain
+        # Rect vs Grain radios were removed — the ROI is now driven
+        # implicitly: rectangle spinboxes by default, switches to the
+        # grain mask the moment the user clicks "Select Region of
+        # Interest" in the Grain ID Map dialog.  The QRadioButton
+        # instances are kept as hidden stubs so existing references
+        # (`_grain_radio.isChecked()`, `_grain_radio.setEnabled(...)`)
+        # keep working with constant-False semantics.
         self._rect_radio  = QRadioButton("Rectangle")
         self._grain_radio = QRadioButton("Grain")
         self._rect_radio.setChecked(True)
-        self._grain_radio.setEnabled(False)   # enabled after segmentation runs
-
+        self._grain_radio.setEnabled(False)
+        self._rect_radio.setVisible(False)
+        self._grain_radio.setVisible(False)
         self._roi_mode_grp = QButtonGroup(self)
         self._roi_mode_grp.addButton(self._rect_radio,  0)
         self._roi_mode_grp.addButton(self._grain_radio, 1)
-        self._roi_mode_grp.idToggled.connect(self._on_roi_mode_changed)
-
-        mode_w = QWidget(); mh = QHBoxLayout(mode_w); mh.setContentsMargins(0, 0, 0, 0)
-        mh.addWidget(self._rect_radio)
-        mh.addWidget(self._grain_radio)
-        mh.addStretch()
-        roi_layout.addRow("ROI mode:", mode_w)
 
         # Grain dropdown was removed — grain ROI is now driven by clicking
         # on the interactive grain ID map (see Grain ID Map dialog).
@@ -803,6 +803,15 @@ class ROISelectionPage(QWizardPage):
         self._roi_selected_grains_lbl.setVisible(False)
         roi_layout.addRow("Grains:", self._roi_selected_grains_lbl)
 
+        # Only shown when a grain ROI is active — tracks how many pixels
+        # fall in BOTH the grain mask and the current rectangle (the set
+        # the optimizer will actually touch).
+        self._roi_intersection_lbl = QLabel("")
+        self._roi_intersection_lbl.setWordWrap(True)
+        self._roi_intersection_lbl.setStyleSheet("color: gray;")
+        self._roi_intersection_lbl.setVisible(False)
+        roi_layout.addRow("Final ROI:", self._roi_intersection_lbl)
+
         self.roi_row_start = _OneIndexedSpinBox(); self.roi_row_start.setRange(0, 9999); self.roi_row_start.setValue(0)
         self.roi_row_stop  = QSpinBox(); self.roi_row_stop.setRange(1, 10000); self.roi_row_stop.setValue(10)
         self.roi_col_start = _OneIndexedSpinBox(); self.roi_col_start.setRange(0, 9999); self.roi_col_start.setValue(0)
@@ -811,6 +820,7 @@ class ROISelectionPage(QWizardPage):
         for sb in (self.roi_row_start, self.roi_row_stop,
                    self.roi_col_start, self.roi_col_stop):
             sb.valueChanged.connect(self._update_roi_rects)
+            sb.valueChanged.connect(self._update_roi_intersection_lbl)
 
         self._roi_row_w = QWidget(); rh = QHBoxLayout(self._roi_row_w); rh.setContentsMargins(0, 0, 0, 0)
         rh.addWidget(QLabel("start")); rh.addWidget(self.roi_row_start)
@@ -1322,9 +1332,10 @@ class ROISelectionPage(QWizardPage):
             )
             self._ipf_canvas.draw_idle()
 
-        # Compute the union bbox so the downstream ROI math still has rows/cols.
-        # We skip _update_roi_rects() — the rect overlay is meaningless when
-        # the IPF/grain views are already masked to the selection.
+        # Seed the rect spinboxes with the union bbox of the selected
+        # grains — a starting point the user can narrow.  Block signals
+        # so the rect overlay / intersection label refresh below run
+        # exactly once at the end.
         rows_idx, cols_idx = np.where(mask_keep)
         if rows_idx.size > 0:
             for sb in (self.roi_row_start, self.roi_row_stop,
@@ -1340,14 +1351,24 @@ class ROISelectionPage(QWizardPage):
 
         # Cache and display.
         self._roi_selected_grain_ids = sorted(selected)
+        n_pix = int(mask_keep.sum())
         self._roi_selected_grains_lbl.setText(
-            "Selected grains: " + ", ".join(str(g) for g in sorted(selected))
+            f"Selected grains ({n_pix} px): "
+            + ", ".join(str(g) for g in sorted(selected))
         )
+        # Surface the label now that there's an active grain ROI — the
+        # old Rect/Grain radio used to gate visibility on `is_grain`.
+        self._roi_selected_grains_lbl.setVisible(True)
         self._roi_selected_grains_lbl.setStyleSheet("color: white;")
         self._grain_status.setText(
-            f"ROI = {len(selected)} grain(s): "
+            f"ROI = {len(selected)} grain(s), {n_pix} px: "
             f"{', '.join(str(g) for g in sorted(selected))}."
         )
+
+        # Draw the rect overlay on top of the masked maps and surface
+        # the intersection count.
+        self._update_roi_rects()
+        self._update_roi_intersection_lbl()
 
     def _show_grain_dialog(self):
         """Re-open the Grain ID Map dialog if it was previously closed."""
@@ -1667,19 +1688,10 @@ class ROISelectionPage(QWizardPage):
     # ── Grain ROI helpers ─────────────────────────────────────────────────────
 
     def _on_roi_mode_changed(self, btn_id: int, checked: bool):
-        if not checked:
-            return
-        is_grain = (btn_id == 1)
-        self._roi_selected_grains_lbl.setVisible(is_grain)
-        show_rect = not is_grain
-        for w in (self._roi_row_w, self._roi_col_w, self._roi_note):
-            w.setVisible(show_rect)
-            layout = self._roi_form_layout
-            row, _ = layout.getWidgetPosition(w)
-            if row >= 0:
-                label_item = layout.itemAt(row, layout.ItemRole.LabelRole)
-                if label_item and label_item.widget():
-                    label_item.widget().setVisible(show_rect)
+        # Retired — Rect / Grain radios are no longer in the UI.  The ROI
+        # is now: rectangle by default, grain mask once the user picks
+        # one in the Grain ID Map dialog.
+        return
 
     def _populate_grain_combo(self):
         """Rebuild the grain dropdown after segmentation finishes.
@@ -1750,32 +1762,35 @@ class ROISelectionPage(QWizardPage):
 
     # ── ROI rectangle ─────────────────────────────────────────────────────────
 
+    def _update_roi_intersection_lbl(self):
+        """When a grain ROI is active, show how many pixels fall in
+        both the grain mask AND the current rectangle — that's the
+        actual set the optimizer will process."""
+        roi_mask = getattr(self, "_roi_mask", None)
+        if roi_mask is None:
+            self._roi_intersection_lbl.setVisible(False)
+            return
+        rows, cols = roi_mask.shape
+        r0 = max(0, min(self.roi_row_start.value(), rows))
+        r1 = max(r0, min(self.roi_row_stop.value(),  rows))
+        c0 = max(0, min(self.roi_col_start.value(), cols))
+        c1 = max(c0, min(self.roi_col_stop.value(),  cols))
+        n_intersect = int(roi_mask[r0:r1, c0:c1].sum())
+        n_grain     = int(roi_mask.sum())
+        self._roi_intersection_lbl.setText(
+            f"{n_intersect} px in grains ∩ rectangle  "
+            f"(of {n_grain} px in selected grains)"
+        )
+        self._roi_intersection_lbl.setStyleSheet("color: white;")
+        self._roi_intersection_lbl.setVisible(True)
+
     def _update_roi_rects(self):
         import matplotlib.patches as mpatches
 
-        # Suppress the rect overlay whenever a grain-based ROI is in
-        # effect: either the user picked the Grain radio explicitly, or
-        # they hit "Select ROI" in the Grain ID Map dialog (which sets
-        # _roi_mask without flipping the radio).  In both cases the IPF
-        # / grain maps are masked to the selection and a rectangle on
-        # top would be misleading.
-        grain_roi_active = (
-            self._grain_radio.isChecked()
-            or getattr(self, "_roi_mask", None) is not None
-        )
-        if grain_roi_active:
-            # Tidy any rects left over from a prior rect-ROI session.
-            for idx in (0, 1):
-                if self._roi_rects[idx] is not None:
-                    try:
-                        self._roi_rects[idx].remove()
-                    except Exception:
-                        pass
-                    self._roi_rects[idx] = None
-            self._ipf_canvas.draw_idle()
-            self._grain_canvas.draw_idle()
-            return
-
+        # The rect overlay is always drawn — when a grain ROI is also
+        # active, the rect acts as an additional crop so the user can
+        # see which subset of the selected grains will actually be
+        # processed (intersection count is shown in the side panel).
         axes_canvas = [
             (self._ipf_ax,   self._ipf_canvas,   0),
             (self._grain_ax, self._grain_canvas,  1),
@@ -1813,13 +1828,21 @@ class ROISelectionPage(QWizardPage):
                 slice(self.roi_col_start.value(), self.roi_col_stop.value()),
             ]
         }
-        if self._grain_radio.isChecked():
-            # Grain ROI is now driven by the interactive map.  Expose both
-            # the full list and the first id for backward compatibility
-            # with downstream code that expects a single grain.
-            if self._roi_selected_grain_ids:
-                result["_roi_grain_ids"] = list(self._roi_selected_grain_ids)
-                result["_roi_grain_id"]  = self._roi_selected_grain_ids[0]
+        # A grain-based ROI is active whenever the user pressed "Select
+        # Region of Interest" in the Grain ID Map dialog — _roi_mask
+        # holds the exact union mask of the selected grains.  Note: the
+        # Grain radio button isn't necessarily flipped (the dialog can
+        # be used directly from rect mode), so we key off _roi_mask
+        # being populated, not the radio state.
+        roi_mask = getattr(self, "_roi_mask", None)
+        if roi_mask is not None and self._roi_selected_grain_ids:
+            result["_roi_grain_ids"] = list(self._roi_selected_grain_ids)
+            result["_roi_grain_id"]  = self._roi_selected_grain_ids[0]
+            # Pass the exact pixel mask straight through — the run page
+            # used to rebuild a single-grain mask from _roi_grain_id, which
+            # was wrong for multi-grain ROI selections (extra non-grain
+            # pixels inside the bounding box leaked into the optimization).
+            result["_roi_grain_mask"] = np.asarray(roi_mask, dtype=bool)
         return result
 
 
@@ -5131,6 +5154,31 @@ class OptimizationRunPage(QWizardPage):
 
     def _start_run(self):
         wiz    = self.wizard()
+        # ── Pre-flight validation: required Step-1 fields ────────────────
+        # The pipeline writes homographies / logs / plots into output_dir,
+        # so an empty value will crash deep inside the worker.  Surface a
+        # clear message here before any expensive setup runs.
+        out_dir  = (wiz.field("output_dir") or "").strip()
+        run_name = (wiz.field("run_name") or "").strip()
+        up2_path = (wiz.field("up2_path") or "").strip()
+        ang_path = (wiz.field("ang_path") or "").strip()
+        missing = []
+        if not out_dir:
+            missing.append("Save location (output folder)")
+        if not run_name:
+            missing.append("Run name")
+        if not up2_path:
+            missing.append("UP2 pattern file")
+        if not ang_path:
+            missing.append("ANG orientation file")
+        if missing:
+            QMessageBox.warning(
+                self, "Missing required inputs",
+                "Cannot start the pipeline — please go back to Step 1 and "
+                "fill in:\n\n  • " + "\n  • ".join(missing)
+            )
+            return
+
         params = {}
         params.update(wiz.geometry_page.get_params())
         params.update(wiz.reference_page.get_params())
@@ -5160,12 +5208,19 @@ class OptimizationRunPage(QWizardPage):
         if params.get("ref_mode") == "per_grain":
             params["_grain_ids"] = getattr(wiz.roi_page, "_grain_ids", None)
 
-        # Single-reference grain ROI: build exact pixel mask so non-grain pixels
-        # inside the bounding box are NaN'd out after optimization
-        if params.get("_roi_grain_id") is not None:
-            grain_ids = getattr(wiz.roi_page, "_grain_ids", None)
-            if grain_ids is not None:
-                params["_roi_grain_mask"] = (grain_ids == params["_roi_grain_id"])
+        # Grain-based ROI: ensure _roi_grain_mask is populated so non-grain
+        # pixels inside the bounding box are NaN'd out after optimization.
+        # ROISelectionPage.get_params() now passes the exact union mask
+        # straight through; this path is a fallback for older code that
+        # only sent the grain ID list (or a single id).
+        if params.get("_roi_grain_mask") is None:
+            grain_ids_arr = getattr(wiz.roi_page, "_grain_ids", None)
+            if grain_ids_arr is not None:
+                gids = params.get("_roi_grain_ids")
+                if gids:
+                    params["_roi_grain_mask"] = np.isin(grain_ids_arr, gids)
+                elif params.get("_roi_grain_id") is not None:
+                    params["_roi_grain_mask"] = (grain_ids_arr == params["_roi_grain_id"])
 
         self._run_params = params   # keep for the vis dialog
 
