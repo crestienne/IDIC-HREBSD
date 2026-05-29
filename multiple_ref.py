@@ -17,6 +17,7 @@ class ReferenceEntry:
     ref_pat_idx: int                         # flat index into UP2
     pc:          Tuple[float, float, float]
     euler:       Tuple[float, float, float]  # radians (phi1, Phi, phi2)
+    refined:     bool = False                # set True once PC/Euler refinement applied
 
 
 class ReferencePatternSet:
@@ -57,7 +58,11 @@ class ReferencePatternSet:
         ref_pat_idx: int,
         euler:       Tuple[float, float, float] = None,
     ):
-        """Override the reference position for a specific grain."""
+        """Override the reference position for a specific grain.
+
+        Moving the ref pixel discards any prior PC/Euler refinement for
+        that grain — the refined values were anchored to the old pixel.
+        """
         for e in self._entries:
             if e.grain_id == grain_id:
                 e.ref_row     = ref_row
@@ -65,6 +70,24 @@ class ReferencePatternSet:
                 e.ref_pat_idx = ref_pat_idx
                 if euler is not None:
                     e.euler = euler
+                e.refined = False
+                return
+        raise KeyError(f"Grain {grain_id} not found in ReferencePatternSet")
+
+    def update_refined(
+        self,
+        grain_id: int,
+        euler:    Tuple[float, float, float],
+        pc:       Tuple[float, float, float],
+    ):
+        """Write the result of a PC/Euler refinement (or manual tuner apply)
+        to a specific grain's entry and mark it refined.  Used by per-grain
+        simulated mode."""
+        for e in self._entries:
+            if e.grain_id == grain_id:
+                e.euler   = tuple(float(x) for x in euler)
+                e.pc      = tuple(float(x) for x in pc)
+                e.refined = True
                 return
         raise KeyError(f"Grain {grain_id} not found in ReferencePatternSet")
 
@@ -78,6 +101,7 @@ def select_references(
     iq:  np.ndarray = None,
     interior_erode: int = 2,
     selected_grain_ids: list = None,
+    default_pc: Tuple[float, float, float] = None,
 ) -> ReferencePatternSet:
     """For each grain label > 0, pick a representative reference pixel.
 
@@ -128,7 +152,10 @@ def select_references(
 
     quats  = ang_data.quats    # (rows, cols, 4)
     eulers = ang_data.eulers   # (rows, cols, 3)
-    pc     = ang_data.pc       # single PC for the whole scan
+    # Seed every entry's PC from the caller's value (geometry-page PC)
+    # when supplied; fall back to the .ang header otherwise.  Per-grain
+    # simulated mode then refines from this baseline.
+    pc     = tuple(default_pc) if default_pc is not None else tuple(ang_data.pc)
 
     # If the caller passed an explicit list of grain IDs (e.g. the user's
     # interactive Step 4 selection), only build entries for those grains.
@@ -198,7 +225,7 @@ def select_references(
             ref_row=ref_row,
             ref_col=ref_col,
             ref_pat_idx=ref_row * scan_cols + ref_col,
-            pc=tuple(pc),
+            pc=pc,
             euler=tuple(eulers[ref_row, ref_col]),
         ))
 

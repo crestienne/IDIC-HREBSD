@@ -2490,23 +2490,42 @@ class ReferencePatternPage(QWizardPage):
         # parent widget (None) and never added to a layout — they exist
         # only to fire the QButtonGroup idToggled signal that downstream
         # handlers listen to.
-        self._single_radio   = QRadioButton(); self._single_radio.setVisible(False)
-        self._sim_radio      = QRadioButton(); self._sim_radio.setVisible(False)
-        self._pergrain_radio = QRadioButton(); self._pergrain_radio.setVisible(False)
+        #
+        # Mode IDs are the 2×2 combination of (count, type):
+        #   0 = single   + real        (_single_radio)
+        #   1 = per-grain + real       (_pergrain_radio)
+        #   2 = single   + simulated   (_sim_radio)
+        #   3 = per-grain + simulated  (_pergrain_sim_radio)
+        self._single_radio       = QRadioButton(); self._single_radio.setVisible(False)
+        self._sim_radio          = QRadioButton(); self._sim_radio.setVisible(False)
+        self._pergrain_radio     = QRadioButton(); self._pergrain_radio.setVisible(False)
+        self._pergrain_sim_radio = QRadioButton(); self._pergrain_sim_radio.setVisible(False)
         self._single_radio.setChecked(True)
         self._mode_grp = QButtonGroup(self)
-        self._mode_grp.addButton(self._single_radio,   0)
-        self._mode_grp.addButton(self._sim_radio,      2)
-        self._mode_grp.addButton(self._pergrain_radio, 1)
+        self._mode_grp.addButton(self._single_radio,       0)
+        self._mode_grp.addButton(self._pergrain_radio,     1)
+        self._mode_grp.addButton(self._sim_radio,          2)
+        self._mode_grp.addButton(self._pergrain_sim_radio, 3)
         self._mode_grp.idToggled.connect(self._on_mode_changed)
 
-        # Connect the switch → radio drivers so the existing handler runs.
-        def _switch_to_radio(checked: bool):
-            if checked:
+        def _assert_combined_mode():
+            """Pick the radio whose (count, type) matches the two switches.
+            Both switches are orthogonal: count = left/right, type = left/right."""
+            is_pergrain = self._count_switch.isChecked()
+            is_sim      = self._mode_switch.isChecked()
+            if is_pergrain and is_sim:
+                self._pergrain_sim_radio.setChecked(True)
+            elif is_pergrain:
+                self._pergrain_radio.setChecked(True)
+            elif is_sim:
                 self._sim_radio.setChecked(True)
             else:
                 self._single_radio.setChecked(True)
-        self._mode_switch.toggled.connect(_switch_to_radio)
+        # Held on self so the count-switch handler below can reuse it.
+        self._assert_combined_mode = _assert_combined_mode
+
+        # Connect the type switch → assert the matching combined mode.
+        self._mode_switch.toggled.connect(lambda _checked: _assert_combined_mode())
 
         # ── Left panel (1/3): position controls + pattern preview ─────────────
         left        = QWidget()
@@ -2531,7 +2550,11 @@ class ReferencePatternPage(QWizardPage):
         )
         self._count_switch.setToolTip(
             "Single Ref for Whole Map — one reference pattern for the whole ROI.\n"
-            "Per Grain Reference — one reference pattern per grain selected on Step 4.\n"
+            "Per Grain Reference — one reference pattern per grain selected on Step 4.\n\n"
+            "Combine with the Reference Pattern Type switch:\n"
+            "  • Per-Grain + Real      → use the experimental pattern at each grain's ref pixel.\n"
+            "  • Per-Grain + Simulated → simulate one pattern per grain (each with its own\n"
+            "    Euler + PC, individually refinable).\n\n"
             "Per Grain Reference requires a grain ROI selection on Step 4."
         )
         count_layout.addWidget(self._count_switch)
@@ -2542,13 +2565,11 @@ class ReferencePatternPage(QWizardPage):
         # right column on top of the IPF map (see right_layout below).
         left_layout.addWidget(mode_group)
 
-        # Wire the count switch through the existing _mode_grp by flipping
-        # the hidden _pergrain_radio when Multiple is on.  When the switch
-        # goes back to Single we re-assert whichever Real/Simulated radio
-        # was last active.
+        # Wire the count switch through the same combined-mode resolver as
+        # the type switch — both are now fully orthogonal.  Refuse the
+        # flip to Per-Grain if no grains were selected on Step 4.
         def _count_to_radio(multiple: bool):
             if multiple:
-                # Refuse the switch if no grains were picked on Step 4.
                 wiz = self.wizard()
                 roi_page = getattr(wiz, "roi_page", None) if wiz else None
                 gids = (getattr(roi_page, "_roi_selected_grain_ids", None)
@@ -2557,19 +2578,13 @@ class ReferencePatternPage(QWizardPage):
                     QMessageBox.information(
                         self, "No grain ROI",
                         "Pick at least one grain on Step 4 (Grain ROI → "
-                        "Select Region of Interest) before enabling Multiple."
+                        "Select Region of Interest) before enabling Per-Grain."
                     )
                     self._count_switch.blockSignals(True)
                     self._count_switch.setChecked(False)
                     self._count_switch.blockSignals(False)
                     return
-                self._pergrain_radio.setChecked(True)
-            else:
-                # Revert to whichever Real/Simulated state the type-toggle says.
-                if self._mode_switch.isChecked():
-                    self._sim_radio.setChecked(True)
-                else:
-                    self._single_radio.setChecked(True)
+            self._assert_combined_mode()
         self._count_switch.toggled.connect(_count_to_radio)
 
         # When the user flips Real ↔ Simulated while in Multiple mode, we
@@ -2668,6 +2683,9 @@ class ReferencePatternPage(QWizardPage):
         self._grain_combo.currentIndexChanged.connect(
             lambda _i: self._highlight_active_grain()
         )
+        self._grain_combo.currentIndexChanged.connect(
+            lambda _i: self._sync_sim_panel_to_active_grain()
+        )
         # _grain_count_lbl is kept as an invisible stub so the various
         # setText() callers downstream don't have to be touched.  Its
         # status text is redundant with the IPF map / grain combo and
@@ -2711,6 +2729,55 @@ class ReferencePatternPage(QWizardPage):
         sim_layout.addRow("Euler (Bunge):", self._sim_euler_lbl)
         sim_layout.addRow(_note("Click the IPF map to update from scan orientation."))
 
+        # ── Per-grain-sim panel ────────────────────────────────────────────
+        # Visible only when Count=Per-Grain AND Type=Simulated.  Shows the
+        # active grain (from _grain_combo above), its current PC (editable),
+        # and a refined/unrefined indicator.  All Compare / Tune / Refine
+        # actions below operate on this active entry's (euler, pc) instead
+        # of the global _sim_euler_deg / geom-page PC.
+        self._pgs_panel = QWidget()
+        _pgs_form = QFormLayout(self._pgs_panel)
+        _pgs_form.setContentsMargins(0, 0, 0, 0)
+
+        self._pgs_active_lbl = QLabel("(no grain selected)")
+        self._pgs_active_lbl.setTextFormat(Qt.TextFormat.RichText)
+        _pgs_form.addRow("Active grain:", self._pgs_active_lbl)
+
+        self._pgs_status_lbl = QLabel("unrefined")
+        self._pgs_status_lbl.setStyleSheet("color: gray;")
+        _pgs_form.addRow("Status:", self._pgs_status_lbl)
+
+        # Tally across all entries — updated by _sync_sim_panel_to_active_grain.
+        self._pgs_tally_lbl = QLabel("0 / 0 grains refined")
+        self._pgs_tally_lbl.setStyleSheet("color: gray; font-size: 11px;")
+        _pgs_form.addRow("Tally:", self._pgs_tally_lbl)
+
+        # PC spinboxes for the active grain.  Edits write straight to
+        # entry.pc (no Apply button) so a quick tweak takes effect on the
+        # next Compare / Refine.  Range matches the geometry-page PC
+        # spinboxes for consistency.
+        self._pgs_pc_x = QDoubleSpinBox(); self._pgs_pc_x.setRange(0.0, 1.0); self._pgs_pc_x.setDecimals(5); self._pgs_pc_x.setSingleStep(0.001)
+        self._pgs_pc_y = QDoubleSpinBox(); self._pgs_pc_y.setRange(0.0, 1.0); self._pgs_pc_y.setDecimals(5); self._pgs_pc_y.setSingleStep(0.001)
+        self._pgs_pc_z = QDoubleSpinBox(); self._pgs_pc_z.setRange(0.01, 3.0); self._pgs_pc_z.setDecimals(5); self._pgs_pc_z.setSingleStep(0.001)
+        _pc_row = QHBoxLayout()
+        for lbl, sb in (("x*", self._pgs_pc_x), ("y*", self._pgs_pc_y), ("z*", self._pgs_pc_z)):
+            _pc_row.addWidget(QLabel(lbl))
+            _pc_row.addWidget(sb)
+        _pc_row_w = QWidget(); _pc_row_w.setLayout(_pc_row)
+        _pgs_form.addRow("PC (EDAX):", _pc_row_w)
+
+        for sb in (self._pgs_pc_x, self._pgs_pc_y, self._pgs_pc_z):
+            sb.valueChanged.connect(self._on_pgs_pc_spin_changed)
+
+        _pgs_form.addRow(_note(
+            "Edits write to this grain's entry immediately.  Use the buttons "
+            "below to Compare / Tune / Auto-Refine; results are stored "
+            "per-grain and won't touch other grains."
+        ))
+
+        self._pgs_panel.setVisible(False)
+        sim_layout.addRow(self._pgs_panel)
+
         # ── Simulated Reference Procedure (action buttons) ───────────────────
         sim_proc_group  = QGroupBox("Simulated Reference Procedure")
         sim_proc_layout = QVBoxLayout()
@@ -2735,6 +2802,17 @@ class ReferencePatternPage(QWizardPage):
         )
         self._refine_btn.clicked.connect(self._open_refine_settings)
         sim_proc_layout.addWidget(self._refine_btn)
+
+        self._sim_aniso_btn = QPushButton("Debug Sim Anisotropy…")
+        self._sim_aniso_btn.setToolTip(
+            "Run debug_sim_y_asymmetry.py with the current sim parameters.\n"
+            "Produces directional-gradient diagnostics + isolation experiments\n"
+            "(master rotated, no obliquity, synthetic isotropic master pattern)\n"
+            "that localise where the y-gradient suppression originates.\n"
+            "Plots are saved to a timestamped folder under the output directory."
+        )
+        self._sim_aniso_btn.clicked.connect(self._run_sim_anisotropy_debug)
+        sim_proc_layout.addWidget(self._sim_aniso_btn)
 
         sim_proc_group.setLayout(sim_proc_layout)
         sim_layout.addRow(sim_proc_group)
@@ -3126,7 +3204,7 @@ class ReferencePatternPage(QWizardPage):
             self._ipf_ax.axis("off")
             self._overlay_step5_boundaries()
             # Reinstate the active markers so they don't get wiped by the clear.
-            if self._single_radio.isChecked() or self._sim_radio.isChecked():
+            if not self._is_per_grain_mode():
                 self._update_ref_marker()
             else:
                 self._draw_grain_markers()
@@ -3141,18 +3219,23 @@ class ReferencePatternPage(QWizardPage):
     def _on_mode_changed(self, btn_id: int, checked: bool):
         if not checked:
             return
-        is_pergrain = (btn_id == 1)
+        is_pergrain = self._is_per_grain_mode()
+        is_sim      = self._is_sim_mode()
         # Ref-position spinboxes + the black "+" cursor on the IPF only
         # make sense in single-reference mode.  Hide both in per-grain
         # mode — the per-grain markers (one per grain) take over.
         self._pos_group.setVisible(not is_pergrain)
         self._grain_info_group.setVisible(is_pergrain)
-        if btn_id == 2:
+        # Per-grain-sim active-grain panel visibility lives on a single flag.
+        self._pgs_panel.setVisible(is_pergrain and is_sim)
+        if is_sim:
             # Pull Euler from .ang at the currently-selected ref position
             # BEFORE opening the dialog — _open_sim_settings auto-triggers
             # pattern generation and we don't want it to run on stale
-            # (0,0,0) angles.
-            self._reload_sim_euler_from_ref_position()
+            # (0,0,0) angles.  Per-grain-sim handles its own per-grain
+            # Euler sync via the grain combo.
+            if not is_pergrain:
+                self._reload_sim_euler_from_ref_position()
             self._open_sim_settings()
         else:
             self._sim_settings_dialog.hide()
@@ -3174,6 +3257,14 @@ class ReferencePatternPage(QWizardPage):
         # Reference-pattern preview is shared between modes — refresh so
         # it shows experimental (real mode) or the cached sim (sim mode).
         self._load_ref_pattern_preview()
+
+    def _is_sim_mode(self) -> bool:
+        """True when the type-toggle is on Simulated (single or per-grain)."""
+        return self._sim_radio.isChecked() or self._pergrain_sim_radio.isChecked()
+
+    def _is_per_grain_mode(self) -> bool:
+        """True when the count-toggle is on Per-Grain (real or simulated)."""
+        return self._pergrain_radio.isChecked() or self._pergrain_sim_radio.isChecked()
 
     def _auto_select_references(self):
         """Build a ReferencePatternSet from the current segmentation result."""
@@ -3231,6 +3322,7 @@ class ReferencePatternPage(QWizardPage):
             iq=iq_map,
             interior_erode=2,
             selected_grain_ids=selected_gids if selected_gids else None,
+            default_pc=geom.get("pc_edax"),
         )
 
         n = len(self._ref_pattern_set)
@@ -3248,14 +3340,11 @@ class ReferencePatternPage(QWizardPage):
             f"auto-selected per grain ({_strat_label}, interior-filtered)."
         )
 
-        self._grain_combo.blockSignals(True)
-        self._grain_combo.clear()
-        for entry in self._ref_pattern_set:
-            self._grain_combo.addItem(
-                f"Grain {entry.grain_id}  (row={entry.ref_row + 1}, col={entry.ref_col + 1})",
-                userData=entry.grain_id,
-            )
-        self._grain_combo.blockSignals(False)
+        self._refresh_grain_combo_text()
+
+        # In per-grain-sim mode, the active-grain panel needs to mirror
+        # whichever entry the combo currently shows.
+        self._sync_sim_panel_to_active_grain()
 
         self._draw_grain_markers()
 
@@ -3314,12 +3403,23 @@ class ReferencePatternPage(QWizardPage):
                 color = fallback[i % len(fallback)]
             # Stamp the marker with a thin dark halo so it stays visible
             # even when the grain colour itself is light on the IPF.
-            self._ipf_ax.plot(
-                entry.ref_col, entry.ref_row,
-                marker="+", color=color,
-                markersize=16, markeredgewidth=2.8, zorder=10, linestyle="none",
-                path_effects=self._stroke_effects(),
-            )
+            # Refined entries get a filled "P" (plus) so they're visually
+            # distinct from the open "+" of unrefined entries — relevant
+            # only in per-grain-sim, but the cue is cheap to always show.
+            if getattr(entry, "refined", False):
+                self._ipf_ax.plot(
+                    entry.ref_col, entry.ref_row,
+                    marker="P", color=color, markerfacecolor=color,
+                    markersize=14, markeredgewidth=1.8, zorder=10, linestyle="none",
+                    path_effects=self._stroke_effects(),
+                )
+            else:
+                self._ipf_ax.plot(
+                    entry.ref_col, entry.ref_row,
+                    marker="+", color=color,
+                    markersize=16, markeredgewidth=2.8, zorder=10, linestyle="none",
+                    path_effects=self._stroke_effects(),
+                )
             # The plot returns a Line2D ref; keep just enough to remove later.
             self._grain_markers.append(self._ipf_ax.lines[-1])
             # Legend uses a coloured *swatch* (Patch) rather than the "+"
@@ -3386,7 +3486,7 @@ class ReferencePatternPage(QWizardPage):
         if not self._ipf_ax.get_visible():
             return
         # Only meaningful in per-grain mode with a populated reference set.
-        if not self._pergrain_radio.isChecked():
+        if not self._is_per_grain_mode():
             return
         if self._ref_pattern_set is None or len(self._ref_pattern_set) == 0:
             return
@@ -3539,7 +3639,7 @@ class ReferencePatternPage(QWizardPage):
             print(f"[Step 4 IPF] tight_layout warning: {exc}")
         self._ref_marker = None
         self._grain_markers.clear()
-        if self._single_radio.isChecked():
+        if not self._is_per_grain_mode():
             self._update_ref_marker()
         else:
             self._draw_grain_markers()
@@ -3580,12 +3680,12 @@ class ReferencePatternPage(QWizardPage):
                 if btn != QMessageBox.StandardButton.Yes:
                     return
 
-        if self._single_radio.isChecked() or self._sim_radio.isChecked():
-            # Both real and simulated modes now write to the SAME spinboxes —
+        if not self._is_per_grain_mode():
+            # Both real and simulated single modes write to the SAME spinboxes —
             # ref_row / ref_col are the single source of truth for "selected
             # scan pixel".  The valueChanged signals fire _update_ref_marker
             # (always) and _on_ref_position_changed (which reloads the Euler
-            # in sim mode), so we don't need to call those directly.
+            # in single-sim mode), so we don't need to call those directly.
             self.ref_row.setValue(row)
             self.ref_col.setValue(col)
         else:
@@ -3661,7 +3761,7 @@ class ReferencePatternPage(QWizardPage):
             except Exception:
                 pass
             self._ref_marker = None
-        if self._pergrain_radio.isChecked():
+        if self._is_per_grain_mode():
             self._ipf_canvas.draw_idle()
             return
         row = self.ref_row.value()
@@ -3714,6 +3814,119 @@ class ReferencePatternPage(QWizardPage):
             f"φ₂ = {self._sim_euler_deg[2]:7.3f}°"
         )
 
+    # ── Per-grain-sim active-grain helpers ────────────────────────────────
+
+    def _active_entry(self):
+        """Return the ReferenceEntry currently selected in _grain_combo, or
+        None if the combo is empty / no ref set has been built yet."""
+        if self._ref_pattern_set is None or len(self._ref_pattern_set) == 0:
+            return None
+        gid = self._grain_combo.currentData()
+        if gid is None:
+            return None
+        return self._ref_pattern_set.by_grain(int(gid))
+
+    def _active_sim_euler_pc(self):
+        """Return (euler_deg, pc_edax) for the *active* sim reference.
+
+        In per-grain-sim mode this is the active grain's entry.
+        In single-sim mode it's the page's _sim_euler_deg + geometry-page PC.
+        """
+        if self._pergrain_sim_radio.isChecked():
+            entry = self._active_entry()
+            if entry is not None:
+                eu_rad = entry.euler
+                euler_deg = (float(np.degrees(eu_rad[0])),
+                             float(np.degrees(eu_rad[1])),
+                             float(np.degrees(eu_rad[2])))
+                return euler_deg, tuple(entry.pc)
+        # Fallback: single-sim or pre-populated state
+        geom = self.wizard().geometry_page.get_params()
+        return tuple(self._sim_euler_deg), tuple(geom["pc_edax"])
+
+    def _sync_sim_panel_to_active_grain(self):
+        """Pull the active entry's euler + pc into the sim Euler label
+        and the per-grain-sim PC spinboxes.  No-op when there's no entry
+        or we're not in per-grain-sim mode."""
+        if not self._pergrain_sim_radio.isChecked():
+            return
+        # Tally is meaningful even when no specific grain is active.
+        if self._ref_pattern_set is not None and len(self._ref_pattern_set) > 0:
+            n_total   = len(self._ref_pattern_set)
+            n_refined = sum(1 for e in self._ref_pattern_set if getattr(e, "refined", False))
+            self._pgs_tally_lbl.setText(f"{n_refined} / {n_total} grains refined")
+            self._pgs_tally_lbl.setStyleSheet(
+                "color: #2ecc71;" if n_refined == n_total else "color: gray; font-size: 11px;"
+            )
+        else:
+            self._pgs_tally_lbl.setText("0 / 0 grains refined")
+        entry = self._active_entry()
+        if entry is None:
+            self._pgs_active_lbl.setText("(no grain selected)")
+            self._pgs_status_lbl.setText("unrefined")
+            self._pgs_status_lbl.setStyleSheet("color: gray;")
+            return
+        # Active-grain banner + status badge
+        self._pgs_active_lbl.setText(self._grain_badge_html(int(entry.grain_id)))
+        if entry.refined:
+            self._pgs_status_lbl.setText("refined ✓")
+            self._pgs_status_lbl.setStyleSheet("color: #2ecc71; font-weight: bold;")
+        else:
+            self._pgs_status_lbl.setText("unrefined")
+            self._pgs_status_lbl.setStyleSheet("color: gray;")
+        # Push entry values into the page state without re-firing edit handlers.
+        eu_rad = entry.euler
+        self._set_sim_euler_deg((float(np.degrees(eu_rad[0])),
+                                 float(np.degrees(eu_rad[1])),
+                                 float(np.degrees(eu_rad[2]))))
+        for sb, v in ((self._pgs_pc_x, entry.pc[0]),
+                      (self._pgs_pc_y, entry.pc[1]),
+                      (self._pgs_pc_z, entry.pc[2])):
+            sb.blockSignals(True)
+            sb.setValue(float(v))
+            sb.blockSignals(False)
+
+    def _on_pgs_pc_spin_changed(self, _value: float = 0.0):
+        """Per-grain-sim PC spinbox edit → write straight to the active
+        entry's pc field.  Marks the grain as refined (the user has
+        manually overridden the default PC)."""
+        if not self._pergrain_sim_radio.isChecked():
+            return
+        entry = self._active_entry()
+        if entry is None:
+            return
+        pc_new = (float(self._pgs_pc_x.value()),
+                  float(self._pgs_pc_y.value()),
+                  float(self._pgs_pc_z.value()))
+        # Write directly to the entry without flipping refined — manual PC
+        # edits without going through the tuner / auto-refine don't carry
+        # the same provenance.  Only Compare/Tune/Refine flip refined=True.
+        entry.pc = pc_new
+
+    def _refresh_grain_combo_text(self):
+        """Re-render each combo item's display text to reflect the latest
+        refined/unrefined status of each entry.  Preserves the current
+        selection."""
+        if self._ref_pattern_set is None:
+            return
+        current_gid = self._grain_combo.currentData()
+        self._grain_combo.blockSignals(True)
+        self._grain_combo.clear()
+        for entry in self._ref_pattern_set:
+            badge = "refined ✓" if entry.refined else "unrefined"
+            self._grain_combo.addItem(
+                f"Grain {entry.grain_id}  (row={entry.ref_row + 1}, "
+                f"col={entry.ref_col + 1}) — {badge}",
+                userData=entry.grain_id,
+            )
+        # Restore the prior selection if still present.
+        if current_gid is not None:
+            for i in range(self._grain_combo.count()):
+                if self._grain_combo.itemData(i) == current_gid:
+                    self._grain_combo.setCurrentIndex(i)
+                    break
+        self._grain_combo.blockSignals(False)
+
     def _grain_badge_html(self, grain_id: int) -> str:
         """Return an inline-HTML "Grain N" badge for the reference-pattern
         viewer's status line — coloured swatch + label, so the user knows
@@ -3745,7 +3958,7 @@ class ReferencePatternPage(QWizardPage):
         # In per-grain mode, the badge identifies which grain this preview
         # belongs to.  Empty string in single / simulated mode.
         badge = ""
-        if (self._pergrain_radio.isChecked()
+        if (self._is_per_grain_mode()
                 and self._ref_pattern_set is not None
                 and len(self._ref_pattern_set) > 0):
             gid = self._grain_combo.currentData()
@@ -3753,7 +3966,7 @@ class ReferencePatternPage(QWizardPage):
                 gid = self._ref_pattern_set[0].grain_id
             badge = self._grain_badge_html(int(gid))
 
-        if self._sim_radio.isChecked():
+        if self._is_sim_mode():
             if self._sim_pat_array is not None:
                 self._ref_pat_ax.clear()
                 self._ref_pat_ax.imshow(self._sim_pat_array, cmap="gray", origin="upper")
@@ -3900,6 +4113,87 @@ class ReferencePatternPage(QWizardPage):
         self._refine_settings_dialog.raise_()
         self._refine_settings_dialog.activateWindow()
 
+    def _run_sim_anisotropy_debug(self):
+        """Launch debug_sim_y_asymmetry.py as a subprocess with the current
+        sim parameters.  Saves plots + a summary.txt under a timestamped
+        folder of the run's output directory and pops a QMessageBox with
+        the path when it finishes.  Subprocess keeps the GUI thread
+        responsive and isolates matplotlib state from the wizard."""
+        import subprocess, sys, time, shlex
+        wiz = self.wizard()
+        if wiz is None:
+            return
+        # Sim params — uses the active sim Euler/PC so per-grain-sim mode
+        # debugs the active grain's entry, not the global state.
+        euler_deg, pc_edax = self._active_sim_euler_pc()
+        mp_path = (wiz.field("master_pattern_path") or "").strip()
+        if not mp_path or not os.path.exists(mp_path):
+            QMessageBox.warning(self, "Missing master pattern",
+                                "Set a valid master pattern path on Step 1 first.")
+            return
+        # Geometry from Step 2 + reference pixel.
+        geom = wiz.geometry_page.get_params()
+        # In per-grain-sim, use the active grain's ref pixel for the real
+        # comparison; otherwise the page-level ref_row/ref_col.
+        if self._pergrain_sim_radio.isChecked():
+            entry = self._active_entry()
+            ref_r = entry.ref_row if entry is not None else self.ref_row.value()
+            ref_c = entry.ref_col if entry is not None else self.ref_col.value()
+        else:
+            ref_r = self.ref_row.value()
+            ref_c = self.ref_col.value()
+        pat_idx = ref_r * geom["cols"] + ref_c
+
+        up2_path = wiz.field("up2_path") or ""
+        p = wiz.processing_page.get_params()
+
+        out_root = wiz.field("output_dir") or os.path.dirname(up2_path) or "."
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.join(out_root, "debug", "anisotropy", ts)
+
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "debug_sim_y_asymmetry.py")
+        cmd = [
+            sys.executable, script,
+            "--master-pattern", mp_path,
+            "--euler-deg", ",".join(f"{x}" for x in euler_deg),
+            "--pc-edax",   ",".join(f"{x}" for x in pc_edax),
+            "--sample-tilt", str(geom["tilt"]),
+            "--det-tilt",    str(geom["det_tilt"]),
+            "--det-shape",   f"{geom['pat_h']},{geom['pat_w']}",
+            "--up2",         up2_path,
+            "--pat-idx",     str(pat_idx),
+            "--low-pass",    str(p["low_pass_sigma"]),
+            "--high-pass",   str(p["high_pass_sigma"]),
+            "--gamma",       str(p.get("gamma", 0.8)),
+            "--mask",        str(p["mask_type"] if p["mask_type"] != "None" else "none"),
+            "--out",         out_dir,
+        ]
+        if p.get("flip_x", False):
+            cmd.append("--flip-x")
+        self._sim_aniso_btn.setEnabled(False)
+        self._sim_status.setText("Sim-anisotropy debug running… (~10–30 s)")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        finally:
+            self._sim_aniso_btn.setEnabled(True)
+        if proc.returncode != 0:
+            QMessageBox.critical(
+                self, "Sim-anisotropy debug failed",
+                f"Exit code {proc.returncode}.\n\n"
+                f"Command:\n  {' '.join(shlex.quote(c) for c in cmd)}\n\n"
+                f"stderr (last 1k chars):\n{proc.stderr[-1000:]}"
+            )
+            return
+        # Surface the summary table in a non-modal info box.
+        summary_path = os.path.join(out_dir, "summary.txt")
+        body = f"Plots saved under:\n  {out_dir}\n\n"
+        if os.path.isfile(summary_path):
+            with open(summary_path) as f:
+                body += f.read()
+        QMessageBox.information(self, "Sim-anisotropy debug — done", body)
+        self._sim_status.setText(f"Sim-anisotropy debug done → {out_dir}")
+
     def _build_refine_settings_dialog(self):
         """Construct the dedicated PC / Euler refinement settings dialog.
         All Nelder-Mead controls (max iters, restarts, σ, RNG seed, symmetry
@@ -4043,15 +4337,33 @@ class ReferencePatternPage(QWizardPage):
         outer.addLayout(btn_row)
 
     def _on_refine_apply(self):
-        """Finish & Apply — push pending refinement results to the
-        reference page and the geometry-page PC fields, then close."""
+        """Finish & Apply — write the pending refinement result.
+
+        In per-grain-sim mode the result lands on the active grain's entry
+        only (PC + Euler), no geometry-page write.  Single-sim retains the
+        old behavior of pushing PC to geom + Euler to the page state.
+        """
         if self._refine_pending_euler_deg is not None:
-            self._set_sim_euler_deg(self._refine_pending_euler_deg)
             pc = self._refine_pending_pc
-            geom_page = self.wizard().geometry_page
-            geom_page.pc_x.setValue(float(pc[0]))
-            geom_page.pc_y.setValue(float(pc[1]))
-            geom_page.pc_z.setValue(float(pc[2]))
+            if self._pergrain_sim_radio.isChecked():
+                entry = self._active_entry()
+                if entry is not None:
+                    eu_deg = self._refine_pending_euler_deg
+                    euler_rad = (float(np.deg2rad(eu_deg[0])),
+                                 float(np.deg2rad(eu_deg[1])),
+                                 float(np.deg2rad(eu_deg[2])))
+                    self._ref_pattern_set.update_refined(
+                        int(entry.grain_id), euler_rad, tuple(pc)
+                    )
+                    self._refresh_grain_combo_text()
+                    self._sync_sim_panel_to_active_grain()
+                    self._draw_grain_markers()
+            else:
+                self._set_sim_euler_deg(self._refine_pending_euler_deg)
+                geom_page = self.wizard().geometry_page
+                geom_page.pc_x.setValue(float(pc[0]))
+                geom_page.pc_y.setValue(float(pc[1]))
+                geom_page.pc_z.setValue(float(pc[2]))
             # Auto-regenerate the sim at the freshly-applied values so the
             # step-4 preview reflects the refined orientation immediately.
             self._generate_sim_pattern()
@@ -4075,9 +4387,24 @@ class ReferencePatternPage(QWizardPage):
 
         wiz  = self.wizard()
         geom = wiz.geometry_page.get_params()
-        pc   = geom["pc_edax"]
         det_shape = (geom["pat_h"], geom["pat_w"])
-        euler_deg = tuple(self._sim_euler_deg)
+
+        # Pick the active (euler, pc) — per-grain entry in per-grain-sim
+        # mode, else single-sim global state.  The experimental pattern
+        # we compare against also follows the active grain's ref position
+        # in per-grain-sim.
+        euler_deg, pc = self._active_sim_euler_pc()
+
+        # Per-grain-sim: use the active grain's ref_row/ref_col for the
+        # experimental comparison pattern, not the single-mode spinboxes.
+        if self._pergrain_sim_radio.isChecked():
+            entry = self._active_entry()
+            if entry is not None:
+                ref_row_for_exp, ref_col_for_exp = entry.ref_row, entry.ref_col
+            else:
+                ref_row_for_exp, ref_col_for_exp = self.ref_row.value(), self.ref_col.value()
+        else:
+            ref_row_for_exp, ref_col_for_exp = self.ref_row.value(), self.ref_col.value()
 
         # Load the experimental pattern at the clicked position for comparison.
         # self._sim_exp_pat is kept as the RAW normalized pattern (SimTuner
@@ -4085,12 +4412,14 @@ class ReferencePatternPage(QWizardPage):
         # version used for display and the ZNSSD residual.
         self._sim_exp_pat      = None
         self._sim_exp_pat_proc = None
+        self._sim_exp_pat_row  = ref_row_for_exp   # remember for _on_sim_done title
+        self._sim_exp_pat_col  = ref_col_for_exp
         up2_path = wiz.field("up2_path")
         if up2_path and os.path.exists(up2_path):
             try:
                 import Data
                 pat_obj = Data.UP2(up2_path)
-                idx = self.ref_row.value() * geom["cols"] + self.ref_col.value()
+                idx = ref_row_for_exp * geom["cols"] + ref_col_for_exp
                 if idx < pat_obj.nPatterns:
                     raw = pat_obj.read_pattern(idx, process=False).astype(np.float32)
                     lo, hi = raw.min(), raw.max()
@@ -4141,9 +4470,11 @@ class ReferencePatternPage(QWizardPage):
         self._sim_pat_ax_exp.clear()
         if exp_proc is not None:
             self._sim_pat_ax_exp.imshow(exp_proc, cmap="gray", origin="upper")
+            _exp_r = getattr(self, "_sim_exp_pat_row", self.ref_row.value())
+            _exp_c = getattr(self, "_sim_exp_pat_col", self.ref_col.value())
             self._sim_pat_ax_exp.set_title(
                 f"Experimental (Step 3 processed)\n"
-                f"row={self.ref_row.value() + 1}, col={self.ref_col.value() + 1}", **_title_kw
+                f"row={_exp_r + 1}, col={_exp_c + 1}", **_title_kw
             )
         else:
             self._sim_pat_ax_exp.text(0.5, 0.5, "No UP2 file\navailable",
@@ -4341,9 +4672,22 @@ class ReferencePatternPage(QWizardPage):
 
         wiz      = self.wizard()
         geom     = wiz.geometry_page.get_params()
-        pc_edax  = geom["pc_edax"]
         det_shape = (geom["pat_h"], geom["pat_w"])
-        euler_deg = tuple(self._sim_euler_deg)
+        # Use the active sim (Euler, PC): per-grain entry in per-grain-sim,
+        # else single-sim global state.  Same source as Compare / Refine
+        # so the three actions stay in sync.
+        euler_deg, pc_edax = self._active_sim_euler_pc()
+
+        # Per-grain-sim: load the experimental pattern at the active grain's
+        # ref position, not the spinbox values (which are hidden in this mode).
+        if self._pergrain_sim_radio.isChecked():
+            entry = self._active_entry()
+            if entry is not None:
+                ref_r, ref_c = entry.ref_row, entry.ref_col
+            else:
+                ref_r, ref_c = self.ref_row.value(), self.ref_col.value()
+        else:
+            ref_r, ref_c = self.ref_row.value(), self.ref_col.value()
 
         # Load raw and processed experimental patterns if not already cached
         exp_pat_proc = None
@@ -4352,7 +4696,7 @@ class ReferencePatternPage(QWizardPage):
             try:
                 import Data
                 pat_obj = Data.UP2(up2_path)
-                idx = self.ref_row.value() * geom["cols"] + self.ref_col.value()
+                idx = ref_r * geom["cols"] + ref_c
                 if idx < pat_obj.nPatterns:
                     if self._sim_exp_pat is None:
                         raw = pat_obj.read_pattern(idx, process=False).astype(np.float32)
@@ -4403,7 +4747,32 @@ class ReferencePatternPage(QWizardPage):
         dlg.show()
 
     def _on_tuner_applied(self, euler_deg: tuple, pc_edax: tuple, tilt_deg: float):
-        """Push values from the tuner back into the reference page."""
+        """Push values from the tuner back into the reference page.
+
+        In per-grain-sim mode the tuner write targets just the active
+        grain's entry (PC + Euler), not the global geometry-page state.
+        Single-sim keeps the original behavior of updating the geom page.
+        """
+        if self._pergrain_sim_radio.isChecked():
+            entry = self._active_entry()
+            if entry is not None:
+                euler_rad = (float(np.deg2rad(euler_deg[0])),
+                             float(np.deg2rad(euler_deg[1])),
+                             float(np.deg2rad(euler_deg[2])))
+                self._ref_pattern_set.update_refined(
+                    int(entry.grain_id), euler_rad, tuple(pc_edax)
+                )
+                self._refresh_grain_combo_text()
+                self._sync_sim_panel_to_active_grain()
+                self._sim_status.setText(
+                    f"Tuner applied to Grain {entry.grain_id} — "
+                    f"φ₁={euler_deg[0]:.2f}°  Φ={euler_deg[1]:.2f}°  "
+                    f"φ₂={euler_deg[2]:.2f}°  |  PC: "
+                    f"({pc_edax[0]:.4f}, {pc_edax[1]:.4f}, {pc_edax[2]:.4f})"
+                )
+                self._draw_grain_markers()  # refresh refined/unrefined markers
+                return
+        # Single-sim path: write to the global page state + geom-page PC.
         self._set_sim_euler_deg(euler_deg)
         geom_page = self.wizard().geometry_page
         geom_page.pc_x.setValue(pc_edax[0])
@@ -4436,9 +4805,21 @@ class ReferencePatternPage(QWizardPage):
         geom = wiz.geometry_page.get_params()
         p    = wiz.processing_page.get_params()
 
-        pat_idx    = self.ref_row.value() * geom["cols"] + self.ref_col.value()
-        euler_init = np.deg2rad(list(self._sim_euler_deg))
-        pc_init    = tuple(geom["pc_edax"])
+        # Pick (pat_idx, euler_init, pc_init) from the active grain in
+        # per-grain-sim mode; fall back to the single-sim global state.
+        if self._pergrain_sim_radio.isChecked():
+            entry = self._active_entry()
+            if entry is None:
+                QMessageBox.warning(self, "No active grain",
+                                    "Pick a grain from the Active grain dropdown first.")
+                return
+            pat_idx    = int(entry.ref_pat_idx)
+            euler_init = np.asarray(entry.euler, dtype=float)  # already radians
+            pc_init    = tuple(entry.pc)
+        else:
+            pat_idx    = self.ref_row.value() * geom["cols"] + self.ref_col.value()
+            euler_init = np.deg2rad(list(self._sim_euler_deg))
+            pc_init    = tuple(geom["pc_edax"])
 
         save_dir = os.path.join(os.path.dirname(up2_path), "pc_euler_refine")
 
@@ -4518,7 +4899,7 @@ class ReferencePatternPage(QWizardPage):
         # references they're silently zeroed so the toggles in the dialog
         # have no effect on those runs.  rotate_patterns_90 was removed from
         # the UI but the key is retained at its default False.
-        is_sim = self._sim_radio.isChecked()
+        is_sim = self._is_sim_mode()
         common = {
             "spectral_match_ref":         (
                 self._spectral_match_ref.isChecked() if is_sim else False
@@ -4529,10 +4910,19 @@ class ReferencePatternPage(QWizardPage):
             ),
             "rotate_patterns_90":         self._rotate_patterns_90.isChecked(),
         }
-        if self._single_radio.isChecked():
+        if self._pergrain_sim_radio.isChecked():
             return {
-                "ref_mode":     "single",
-                "ref_position": (self.ref_row.value(), self.ref_col.value()),
+                "ref_mode":            "per_grain",
+                "per_grain_simulated": True,
+                "ref_pattern_set":     self._ref_pattern_set,
+                "master_pattern_path": (self.wizard().field("master_pattern_path") or "").strip(),
+                **common,
+            }
+        if self._pergrain_radio.isChecked():
+            return {
+                "ref_mode":            "per_grain",
+                "per_grain_simulated": False,
+                "ref_pattern_set":     self._ref_pattern_set,
                 **common,
             }
         if self._sim_radio.isChecked():
@@ -4544,8 +4934,8 @@ class ReferencePatternPage(QWizardPage):
                 **common,
             }
         return {
-            "ref_mode":         "per_grain",
-            "ref_pattern_set":  self._ref_pattern_set,
+            "ref_mode":     "single",
+            "ref_position": (self.ref_row.value(), self.ref_col.value()),
             **common,
         }
 

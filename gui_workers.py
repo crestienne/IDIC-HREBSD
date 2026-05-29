@@ -179,7 +179,11 @@ class PipelineWorker(QThread):
         else:
             self.log_signal.emit("Using cached ANG data.")
 
-        pc_ref = ang_data.pc
+        # Prefer the geometry-page PC (which the user may have tuned or
+        # refined via PC/Euler refinement); fall back to the .ang header
+        # value if it's missing.  This applies to drift correction and
+        # the strain-step h2F, which both read pc_ref below.
+        pc_ref = tuple(p.get("pc_edax", ang_data.pc))
         self.log_signal.emit(f"PC: {pc_ref}")
 
         # Frame transforms (used for strain frame conversion)
@@ -306,6 +310,38 @@ class PipelineWorker(QThread):
                     f"(plane order: {pc_plane.get('order', 'linear')})."
                 )
 
+            # Per-grain simulated mode: stamp each grain's pixels with its
+            # own PC and pass the grid to correct_homographies.  Refined
+            # grains carry their refined PC; unrefined ones keep the
+            # default geom-page PC (which the entries were seeded with).
+            if (ref_mode == "per_grain" and p.get("per_grain_simulated", False)
+                    and pc_grid_override is None):
+                grain_ids_full = p.get("_grain_ids")
+                rps_for_grid   = p.get("ref_pattern_set")
+                if grain_ids_full is not None and rps_for_grid is not None:
+                    full_rows, full_cols = ang_data.shape
+                    default_pc = np.asarray(
+                        p.get("pc_edax", ang_data.pc), dtype=float
+                    )
+                    pc_grid_full = np.empty((full_rows, full_cols, 3), dtype=float)
+                    pc_grid_full[...] = default_pc
+                    n_refined = 0
+                    for _entry in rps_for_grid:
+                        _gid_mask = (grain_ids_full == _entry.grain_id)
+                        pc_grid_full[_gid_mask] = np.asarray(_entry.pc, dtype=float)
+                        if getattr(_entry, "refined", False):
+                            n_refined += 1
+                    _roi = p.get("roi_slice", None)
+                    if _roi is not None:
+                        pc_grid_override = pc_grid_full[_roi[0], _roi[1]]
+                    else:
+                        pc_grid_override = pc_grid_full
+                    self.log_signal.emit(
+                        f"Per-grain PC grid built — {n_refined}/{len(rps_for_grid)} "
+                        f"grains refined; unrefined grains use the default PC "
+                        f"{tuple(np.round(default_pc, 5))}."
+                    )
+
             h, _ = correct_homographies(
                 h=h,
                 scan_shape=(eff_rows, eff_cols),
@@ -426,7 +462,11 @@ class PipelineWorker(QThread):
         )
 
         euler_angles_ref = ang_data.eulers[np.unravel_index(x0, ang_data.shape)]
-        pc_ref           = ang_data.pc
+        # Euler stays on the .ang per-pixel value (intentional — refined Euler
+        # isn't propagated to the real-experimental path).  PC, on the other
+        # hand, prefers the geometry-page value so PC/Euler refinement and
+        # manual PC tweaks take effect for real references too.
+        pc_ref = tuple(p.get("pc_edax", ang_data.pc))
 
         # PC vector needed by the FULL initial-guess path (xyt2h)
         pc_edax_arr = np.asarray(pc_ref, dtype=float)
@@ -676,16 +716,40 @@ class PipelineWorker(QThread):
         dp_norms_full   = np.full(N,       np.nan, dtype=np.float64)
         has_h_guess     = False
 
-        # PC vector needed by the FULL initial-guess path (xyt2h)
-        _pc_edax_pg   = np.asarray(ang_data.pc, dtype=float)
-        _pc_bruker_pg = conversions.Edax_to_Bruker_PC(_pc_edax_pg)
-        _pc_xo_pg     = conversions.Bruker_to_fractional_PC(_pc_bruker_pg, pat_obj.patshape)
-        self.log_signal.emit(
-            f"[init guess / per-grain]  PC chain  "
-            f"EDAX={tuple(np.round(_pc_edax_pg, 4))}  →  "
-            f"Bruker={tuple(np.round(_pc_bruker_pg, 4))}  →  "
-            f"xo={tuple(np.round(_pc_xo_pg, 4))}"
-        )
+        # Per-grain simulated mode = same outer loop, but each iteration
+        # uses the entry's (euler, pc) and runs the optimizer against a
+        # simulated reference instead of the experimental pattern at
+        # entry.ref_pat_idx.
+        use_sim = bool(p.get("per_grain_simulated", False))
+        master_pattern_path = (p.get("master_pattern_path") or "") if use_sim else None
+        if use_sim and (not master_pattern_path or not os.path.isfile(master_pattern_path)):
+            raise RuntimeError(
+                "Per-grain simulated mode requires a master pattern path "
+                "(set on Step 1)."
+            )
+
+        # Log a brief banner for sanity-check + record what each entry will
+        # bring to its iteration.
+        if use_sim:
+            self.log_signal.emit(
+                f"[per-grain / simulated]  master pattern = "
+                f"{os.path.basename(master_pattern_path)}.  "
+                f"Each grain uses its own (Euler, PC); refined grains "
+                f"override the page defaults."
+            )
+        else:
+            # Log the default-PC chain once for real per-grain runs (sim
+            # mode logs per-grain inside the loop instead).
+            _pc_pg        = p.get("pc_edax", ang_data.pc)
+            _pc_edax_pg   = np.asarray(_pc_pg, dtype=float)
+            _pc_bruker_pg = conversions.Edax_to_Bruker_PC(_pc_edax_pg)
+            _pc_xo_pg     = conversions.Bruker_to_fractional_PC(_pc_bruker_pg, pat_obj.patshape)
+            self.log_signal.emit(
+                f"[init guess / per-grain]  PC chain  "
+                f"EDAX={tuple(np.round(_pc_edax_pg, 4))}  →  "
+                f"Bruker={tuple(np.round(_pc_bruker_pg, 4))}  →  "
+                f"xo={tuple(np.round(_pc_xo_pg, 4))}"
+            )
 
         common_opt = dict(
             init_type=p["init_type"],
@@ -696,10 +760,6 @@ class PipelineWorker(QThread):
             verbose=True,
             scan_shape=ang_data.shape,
             mask=pat_obj.get_mask(),
-            use_simulated_reference=False,
-            master_pattern_path=None,
-            pc_ref=ang_data.pc,
-            pc_xo=_pc_xo_pg,
             tilt_deg=p["tilt"],
             spectral_match_ref=p.get("spectral_match_ref", False),
             perspective_regularization=p.get("perspective_regularization", 0.0),
@@ -708,15 +768,15 @@ class PipelineWorker(QThread):
             subset_shape_kind=("circle" if p.get("mask_type") == "circular" else "rect"),
             progress_callback=lambda i, n: self.progress_signal.emit(int(i), int(n)),
         )
+        if use_sim:
+            # detector_tilt_deg is only required by the simulated path
+            # (master-pattern projection).  Real-ref mode doesn't read it.
+            common_opt["detector_tilt_deg"] = p.get("det_tilt", 0.0)
 
         t_total = time.perf_counter()
 
         for gi, entry in enumerate(rps):
             gid = entry.grain_id
-            self.log_signal.emit(
-                f"Grain {gid}  ({gi+1}/{len(rps)})  —  "
-                f"ref at row={entry.ref_row}, col={entry.ref_col}"
-            )
 
             # Pixel mask for this grain and its bounding box
             grain_mask = (grain_ids == gid)
@@ -727,6 +787,22 @@ class PipelineWorker(QThread):
 
             euler_ref = np.array(entry.euler) if entry.euler is not None \
                 else ang_data.eulers[entry.ref_row, entry.ref_col]
+
+            # Per-entry PC chain — refined per-grain entries carry their
+            # own PC; unrefined ones inherit the geom-page default
+            # (set by select_references via default_pc).
+            _pc_entry        = np.asarray(entry.pc, dtype=float)
+            _pc_bruker_entry = conversions.Edax_to_Bruker_PC(_pc_entry)
+            _pc_xo_entry     = conversions.Bruker_to_fractional_PC(
+                _pc_bruker_entry, pat_obj.patshape
+            )
+
+            refined_tag = "refined" if getattr(entry, "refined", False) else "default"
+            self.log_signal.emit(
+                f"Grain {gid}  ({gi+1}/{len(rps)})  —  "
+                f"ref at row={entry.ref_row}, col={entry.ref_col}  |  "
+                f"PC ({refined_tag}) = {tuple(np.round(_pc_entry, 5))}"
+            )
 
             # Only process pixels that actually belong to this grain;
             # the rest of the bounding box stays NaN.  This matches the
@@ -739,6 +815,10 @@ class PipelineWorker(QThread):
                 roi_slice=roi_slice,
                 roi_pixel_mask=grain_pixel_mask,
                 euler_angles_ref=euler_ref,
+                pc_ref=tuple(_pc_entry),
+                pc_xo=_pc_xo_entry,
+                use_simulated_reference=use_sim,
+                master_pattern_path=master_pattern_path,
                 **common_opt,
             )
             if len(result) == 5:
