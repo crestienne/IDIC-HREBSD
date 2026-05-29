@@ -2204,7 +2204,7 @@ def project_HREBSD_pattern_energy_weighted(
     e_min_idx: int = 0,
     e_max_idx: Optional[int] = None,
     signal_mask: Optional[Tensor] = None,
-    interp_mode: str = "bilinear",
+    interp_mode: str = "bicubic",
 ) -> Tensor:
     """
     Energy-resolved EBSD pattern projection, matching EMsoft's
@@ -2230,8 +2230,13 @@ def project_HREBSD_pattern_energy_weighted(
         signal_mask: Optional 1D bool mask of length n_rows*n_cols selecting
             which detector pixels to project. Same convention as the existing
             HREBSD.py functions.
-        interp_mode: 'bilinear' (matches EMsoft) or 'bicubic'. Default
-            'bilinear'.
+        interp_mode: 'bicubic' (default) or 'bilinear' (matches EMsoft
+            CalcEBSDPatternSingleFull_).  Bicubic preserves sharper band
+            edges than bilinear when the detector y-axis maps to a denser
+            angular range than the Lambert grid's sampling step — relevant
+            at high sample tilts where the diagnostic plot in
+            debug_sim_y_asymmetry.py shows the sim under-resolving
+            high-frequency y-gradient.
 
     Returns:
         Energy-integrated patterns. Shape (n_orientations, n_det_pixels) where
@@ -2372,7 +2377,7 @@ def project_HREBSD_pattern_energy_weighted_1d(
     master_pattern_MSLSH: Tensor,   # (nE, H, W)
     energy_weights: Tensor,         # (nE,)
     signal_mask: Optional[Tensor] = None,
-    interp_mode: str = "bilinear",
+    interp_mode: str = "bicubic",
 ) -> Tensor:
     """
     Approximate energy weighting using a single 1D weight vector. Equivalent
