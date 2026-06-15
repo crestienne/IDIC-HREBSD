@@ -63,9 +63,6 @@ crop_fraction       = 0.8             # must match optimize() call
 low_pass_sigma      = 1.0             # GUI: "Low-pass sigma"
 high_pass_sigma     = 10.0            # GUI: "High-pass sigma"
 mask_type           = "none"          # GUI: "Mask type"  ("none", "circular", "center_cross")
-clahe_kernel        = (5, 5)          # GUI: "CLAHE kernel"  (enter as a square side, e.g. 5 → (5,5))
-clahe_clip          = 0.01            # GUI: "CLAHE clip limit"
-use_clahe           = False           # GUI: "Use CLAHE" checkbox
 gamma_correction    = 0.80            # GUI: "Gamma"  (1.0 = off)
 flip_x              = False           # GUI: "Flip patterns vertically" checkbox
 
@@ -136,10 +133,6 @@ pat_obj.set_processing(
     truncate_std_scale=3.0,
     mask_type=mask_type,
     center_cross_half_width=6,
-    clahe_kernel=clahe_kernel,
-    clahe_clip=clahe_clip,
-    clahe_nbins=256,
-    use_clahe=use_clahe,
     gamma=gamma_correction,
     flip_x=flip_x,
 )
@@ -471,9 +464,8 @@ ax.hist(real_pat.ravel(), bins=bins, alpha=0.6, label="Real", color="steelblue",
 ax.hist(sim_pat.ravel(),  bins=bins, alpha=0.6, label="Simulated", color="tomato", density=True)
 ax.set_xlabel("Intensity (normalised)")
 ax.set_ylabel("Density")
-_clahe_note = "biased CLAHE / truncation" if use_clahe else "biased truncation (CLAHE off)"
 ax.set_title(f"Intensity histogram after preprocessing\n"
-             f"Large mismatch → different local contrast → {_clahe_note}",
+             f"Large mismatch → different local contrast → biased truncation",
              fontsize=10)
 ax.legend()
 plt.tight_layout()
@@ -769,7 +761,6 @@ print("  Fig 6 (radial residual): Non-zero slope → residual PC error (tweak z*
 print("  Fig 7 (slices):          Width of Kikuchi bands → PSF blur mismatch")
 print("  Fig 8 (gradient lines):  Localises worst gradient mismatch spatially;"
       " peaks at band crossings → freq/PSF issue; smooth offset → DC bias")
-if not use_clahe:
-    print("\n  NOTE: CLAHE is OFF — intensity histogram mismatch is driven by high-pass")
-    print("        filter and truncation only.  If sim/real histograms still diverge,")
-    print("        adjust high_pass_sigma or sim_high_pass_sigma_override.")
+print("\n  NOTE: intensity histogram mismatch is driven by the high-pass")
+print("        filter and truncation.  If sim/real histograms still diverge,")
+print("        adjust high_pass_sigma or sim_high_pass_sigma_override.")
