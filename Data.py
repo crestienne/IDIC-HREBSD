@@ -5,11 +5,24 @@ from skimage import io
 from scipy import ndimage
 import numpy as np
 from sympy import gamma
-from skimage import exposure
 import matplotlib.pyplot as plt
 
 
+'''
+The following dataset handles anything related to reading in and processing experimental EBSD patterns
+
+This includes all functions related to reading in .up2 files 
+All functions related to pre processing the patterns 
+All function related to masks (ie such that patterns from the EDAX Clarity detector can be read)
+
+'''
+
+
 def _circular_mask(shape, radius=None, center=None):
+    ''' 
+    Adds circular mask that blocks out any pixels on the edges that are not within the circle
+    
+    '''
     H, W = shape
     if center is None:
         cy, cx = H // 2, W // 2
@@ -22,6 +35,9 @@ def _circular_mask(shape, radius=None, center=None):
 
 
 def _center_cross_mask(shape, half_width):
+    '''
+    Masks out a 6 pixel wide region in both the horizontal and vertical directions, specifically to enable the EDAX clarity detector to be utilized
+    '''
     H, W = shape
     cy, cx = H // 2, W // 2
     mask = np.ones((H, W), dtype=bool)
@@ -85,11 +101,7 @@ class UP2:
         truncate_std_scale: float = 3.0,
         mask_type: str = "none",
         center_cross_half_width: int = 5,
-        clahe_kernel: tuple = (5, 5),
-        clahe_clip: float = 0.005,
-        clahe_nbins: int = 256,
         flip_x: bool = False,
-        use_clahe: bool = False,
         rescale_to_uint16: bool = False,
         unsharp_sigma: float = 0.0,
         unsharp_strength: float = 1.0,
@@ -109,15 +121,11 @@ class UP2:
             truncate_std_scale (float): The number of standard deviations to truncate. 3.0 is a good value.
             mask_type (str): "circular", "center_cross", or None (no mask). Controls which mask is applied in process_pattern.
             center_cross_half_width (int): Half-width of the cross arms in pixels when mask_type="center_cross" (default 5 → 10 px total).
-            clahe_kernel (tuple): Kernel size for CLAHE. Smaller = more local contrast. Default (5, 5).
-            clahe_clip (float): Clip limit for CLAHE. Higher = more contrast. Default 0.005.
-            clahe_nbins (int): Number of histogram bins for CLAHE. Default 256.
-            use_clahe (bool): Set False to skip CLAHE entirely. Default True.
             rescale_to_uint16 (bool): If True, linearly rescale each raw pattern so
                 its minimum maps to 0 and its maximum maps to 65535 before any other
                 processing. Useful when the detector does not fill the full uint16
                 dynamic range. Default False.
-            unsharp_sigma (float): Sigma for unsharp masking applied after CLAHE.
+            unsharp_sigma (float): Sigma for unsharp masking applied after background removal.
                 Sharpens band edges by subtracting a blurred copy.
                 0.0 disables the step. Good starting range: 1.0–3.0 pixels. Default 0.0.
             unsharp_strength (float): Weight of the sharpening term. Higher = sharper
@@ -131,11 +139,7 @@ class UP2:
         self.truncate_std_scale = truncate_std_scale
         self.mask_type = mask_type
         self.center_cross_half_width = center_cross_half_width
-        self.clahe_kernel = clahe_kernel
-        self.clahe_clip = clahe_clip
-        self.clahe_nbins = clahe_nbins
         self.flip_x = flip_x
-        self.use_clahe = use_clahe
         self.rescale_to_uint16 = rescale_to_uint16
         self.unsharp_sigma = unsharp_sigma
         self.unsharp_strength = unsharp_strength
@@ -277,28 +281,8 @@ class UP2:
 
         img_highpass = to_uint8(img, mask)
 
-        # ---- adaptive histogram equalization ----
-        # Applied immediately after background removal so CLAHE sees the sharpest
-        # possible image. Running it after the low-pass would mean enhancing already-
-        # blurred data, which wastes the contrast gain on smoothed band edges.
-        # CLAHE has no native mask support, so inpaint the masked region with
-        # Gaussian-interpolated values from valid neighbours before running it,
-        # then zero it out again afterwards.
-        if self.use_clahe:
-            img_clahe_in = masked_gaussian(img, mask, sigma=max(self.clahe_kernel))
-            img_clahe_in[mask] = img[mask]  # leave valid pixels unchanged
-            img = exposure.equalize_adapthist(
-                img_clahe_in,
-                kernel_size=self.clahe_kernel,
-                clip_limit=self.clahe_clip,
-                nbins=self.clahe_nbins,
-            ).astype(np.float32)
-            img[~mask] = 0.0
-
-        img_CLAHE = to_uint8(img, mask)
-
-        # Low-pass filter (noise smoothing) — applied *after* background removal and
-        # CLAHE, per Ernould et al. A small radius (1–2 px) reduces high-frequency
+        # Low-pass filter (noise smoothing) — applied *after* background removal,
+        # per Ernould et al. A small radius (1–2 px) reduces high-frequency
         # noise and improves IC-GN convergence speed without loss of accuracy.
         if self.low_pass_sigma > 0:
             img = masked_gaussian(img, mask, self.low_pass_sigma)
@@ -308,7 +292,7 @@ class UP2:
 
         # Unsharp masking — enhances band edges by amplifying fine detail
         # sharpened = img + strength * (img - gaussian(img, sigma))
-        # Applied after CLAHE so contrast is already equalised before sharpening.
+        # Applied after background removal so contrast is already set before sharpening.
         if self.unsharp_sigma > 0:
             blurred = masked_gaussian(img, mask, self.unsharp_sigma)
             img[mask] = img[mask] + self.unsharp_strength * (img[mask] - blurred[mask])
@@ -348,107 +332,7 @@ class UP2:
         else:
             img[mask] = 0.0
         img[~mask] = 0.0
-
-        # -------------------------
-        # Save all steps as subplots
-        # -------------------------
-        # images = [
-        #     img_noprocessing,
-        #     img_lowpass,
-        #     img_highpass,
-        #     img_CLAHE,
-        #     img_truncated,
-        #     img_renorm,
-        #     img_gamma,
-        #     mask.astype(np.uint8) * 255,
-        # ]
-
-        # titles = [
-        #     "Normalized Input",
-        #     f"Low-pass\nsigma={self.low_pass_sigma}",
-        #     f"High-pass\nsigma={self.high_pass_sigma}",
-        #     f"CLAHE\nkernel={clahe_kernel}, clip={clahe_clip}",
-        #     f"Truncate\nstd scale={self.truncate_std_scale}",
-        #     "Re-normalized",
-        #     f"Gamma Corrected\ngamma={gamma_val}",
-        #     "Circular Mask",
-        # ]
-
-        # fig, axes = plt.subplots(2, 4, figsize=(16, 8))
-        # axes = axes.ravel()
-
-        # for i, (image_step, title) in enumerate(zip(images, titles)):
-        #     axes[i].imshow(image_step, cmap="gray")
-        #     axes[i].set_title(title)
-        #     axes[i].axis("off")
-
-        # plt.tight_layout()
-        # plt.savefig("debug/pattern_processing_steps.png", dpi=300, bbox_inches="tight")
-        # plt.close(fig)
-
         return img
-
-    def plot_parameter_sweep(
-        self,
-        pattern_idx: int = 0,
-        high_pass_sigmas: list = None,
-        clahe_kernels: list = None,
-        save_dir: str = "debug",
-    ):
-        """Process one pattern across all combinations of high_pass_sigma and clahe_kernel
-        and save a single grid JPG to save_dir.
-
-        Layout: rows = clahe_kernel, columns = high_pass_sigma.
-        Row labels on the left, column labels on top.
-
-        Args:
-            pattern_idx (int): Index of the pattern to use for the sweep.
-            high_pass_sigmas (list): Sigma values (columns). Defaults to [5, 10, 20, 30, 50, 80].
-            clahe_kernels (list): Kernel sizes (rows). Defaults to [(3,3),(5,5),(8,8),(12,12),(16,16),(24,24)].
-            save_dir (str): Directory to save the output JPG. Default "debug".
-        """
-        if high_pass_sigmas is None:
-            high_pass_sigmas = [5, 10, 20, 30, 50, 80]
-        if clahe_kernels is None:
-            clahe_kernels = [(3, 3), (5, 5), (8, 8), (12, 12), (16, 16), (24, 24)]
-
-        os.makedirs(save_dir, exist_ok=True)
-        raw = self.read_pattern(pattern_idx, process=False)
-
-        def _process(img, high_pass_sigma, clahe_kernel):
-            orig_hp = self.high_pass_sigma
-            orig_ck = self.clahe_kernel
-            self.high_pass_sigma = high_pass_sigma
-            self.clahe_kernel = clahe_kernel
-            result = self.process_pattern(img.copy())
-            self.high_pass_sigma = orig_hp
-            self.clahe_kernel = orig_ck
-            return result
-
-        nrows = len(clahe_kernels)
-        ncols = len(high_pass_sigmas)
-        fig, axes = plt.subplots(nrows, ncols, figsize=(3 * ncols, 3 * nrows))
-        axes = np.array(axes).reshape(nrows, ncols)
-
-        for r, kernel in enumerate(clahe_kernels):
-            for c, sigma in enumerate(high_pass_sigmas):
-                result = _process(raw, sigma, kernel)
-                axes[r, c].imshow(result, cmap="gray", vmin=0, vmax=1)
-                axes[r, c].axis("off")
-                if r == 0:
-                    axes[r, c].set_title(f"hp_sigma={sigma}", fontsize=20, fontweight="bold")
-            axes[r, 0].text(
-                -0.05, 0.5, f"clahe={kernel}",
-                fontsize=20, fontweight="bold", transform=axes[r, 0].transAxes,
-                ha="right", va="center", rotation=90,
-            )
-
-        fig.suptitle(f"Parameter sweep  |  pattern {pattern_idx}", fontsize=20, fontweight="bold")
-        plt.tight_layout()
-        out_path = f"{save_dir}/sweep_combined.jpg"
-        plt.savefig(out_path, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Saved {out_path}")
 
 #------ New clasee to read a region of interest from UP2 files -------
 
