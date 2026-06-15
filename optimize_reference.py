@@ -3,7 +3,7 @@ Optimize pattern center (PC) and Euler angles so that the simulated reference
 pattern best matches the experimental one, measured via normalized cross-
 correlation (ZNSSD).
 
-Preprocessing (bandpass filter, CLAHE, etc.) is applied with the same mask
+Preprocessing (bandpass filter, gamma, etc.) is applied with the same mask
 settings as the rest of the pipeline.  The ZNSSD is then computed over all
 pixels so that the full detector area contributes to the metric.
 
@@ -383,7 +383,7 @@ def optimize_preprocessing_params(
     """Find the high_pass_sigma, low_pass_sigma, and gamma that minimise ZNSSD
     between a real and simulated EBSD pattern.
 
-    CLAHE is disabled; the mask is suppressed on both patterns so detector
+    The mask is suppressed on both patterns so detector
     artefacts (direct beam, shadow) do not penalise the ZNSSD.  All other
     pat_obj pipeline settings (truncation, unsharp masking) stay fixed.
 
@@ -426,17 +426,16 @@ def optimize_preprocessing_params(
     # ── helper: temporarily override hp / lp / gamma, restore on exit ────────
     def _proc(raw, hp, lp, g):
         saved = (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
-                 pat_obj.mask_type, pat_obj.use_clahe)
+                 pat_obj.mask_type)
         pat_obj.high_pass_sigma = float(hp)
         pat_obj.low_pass_sigma  = float(lp)
         pat_obj.gamma           = float(g)
         pat_obj.mask_type       = None
-        pat_obj.use_clahe       = False
         try:
             return pat_obj.process_pattern(raw.copy().astype(np.float32))
         finally:
             (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
-             pat_obj.mask_type, pat_obj.use_clahe) = saved
+             pat_obj.mask_type) = saved
 
     # ── baseline ──────────────────────────────────────────────────────────────
     real_init = _proc(real_pat_raw, init_hp, init_lp, init_gamma)
@@ -648,7 +647,7 @@ def optimize_preprocessing_params_independent(
     patterns to have *independent* high_pass_sigma, low_pass_sigma, and gamma.
 
     Searches over 6 parameters: (hp_r, lp_r, gamma_r, hp_s, lp_s, gamma_s).
-    Both masks and CLAHE are suppressed during evaluation so detector artefacts
+    Masks are suppressed during evaluation so detector artefacts
     do not bias the ZNSSD.  All other pat_obj pipeline settings stay fixed.
 
     Parameters
@@ -678,20 +677,19 @@ def optimize_preprocessing_params_independent(
     init_lp    = pat_obj.low_pass_sigma
     init_gamma = pat_obj.gamma
 
-    # ── helpers: each pattern gets its own params; mask + CLAHE suppressed ────
+    # ── helpers: each pattern gets its own params; mask suppressed ────────────
     def _proc_real(raw, hp, lp, g):
         saved = (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
-                 pat_obj.mask_type, pat_obj.use_clahe)
+                 pat_obj.mask_type)
         pat_obj.high_pass_sigma = float(hp)
         pat_obj.low_pass_sigma  = float(lp)
         pat_obj.gamma           = float(g)
         pat_obj.mask_type       = None
-        pat_obj.use_clahe       = False
         try:
             return pat_obj.process_pattern(raw.copy().astype(np.float32))
         finally:
             (pat_obj.high_pass_sigma, pat_obj.low_pass_sigma, pat_obj.gamma,
-             pat_obj.mask_type, pat_obj.use_clahe) = saved
+             pat_obj.mask_type) = saved
 
     def _proc_sim(raw, hp, lp, g):
         return _proc_real(raw, hp, lp, g)   # same pipeline, separate param set
