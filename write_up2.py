@@ -1,7 +1,8 @@
 import numpy as np
 from collections import namedtuple
 import struct
-import os
+
+from utilities import read_up2
 
 # from tqdm.auto import tqdm
 # import matplotlib.pyplot as plt
@@ -30,40 +31,6 @@ import os
 # flip = "lr"  # Flip mode, "lr", "ud", or "both"
 
 ######### END USER INPUTS #########
-
-
-def read_up2(up2: str) -> namedtuple:
-    """Read in patterns and a pattern center from an ang file and a pattern file.
-    Only supports a up2 file using the EDAX/TSL convention.
-
-    Args:
-        up2 (str): Path to the pattern file.
-
-    Returns:
-        namedtuple: Pattern file object with fields patshape, filesize, nPatterns, and datafile.
-                    patshape is a tuple of the pattern dimensions.
-                    filesize is the size of the pattern file.
-                    nPatterns is the number of patterns in the file.
-                    datafile is the file object to read the patterns."""
-    # Get patterns
-    upFile = open(up2, "rb")
-    chunk_size = 4
-    tmp = upFile.read(chunk_size)
-    FirstEntryUpFile = struct.unpack("i", tmp)[0]
-    tmp = upFile.read(chunk_size)
-    sz1 = struct.unpack("i", tmp)[0]
-    tmp = upFile.read(chunk_size)
-    sz2 = struct.unpack("i", tmp)[0]
-    tmp = upFile.read(chunk_size)
-    bitsPerPixel = struct.unpack("i", tmp)[0]
-    # print("Header:", FirstEntryUpFile, sz1, sz2, bitsPerPixel)
-    sizeBytes = os.path.getsize(up2) - 16
-    sizeString = str(round(sizeBytes / 1e6, 1)) + " MB"
-    bytesPerPixel = 2
-    nPatternsRecorded = int((sizeBytes / bytesPerPixel) / (sz1 * sz2))
-    out = namedtuple("up2_file", ["patshape", "filesize", "nPatterns", "datafile"])
-    out = out((sz1, sz2), sizeString, nPatternsRecorded, upFile)
-    return out
 
 
 def get_patterns(pat_obj: namedtuple, idx: np.ndarray | list | tuple = None) -> tuple:

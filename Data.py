@@ -4,7 +4,6 @@ import struct
 from skimage import io
 from scipy import ndimage
 import numpy as np
-from sympy import gamma
 import matplotlib.pyplot as plt
 
 

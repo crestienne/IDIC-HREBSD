@@ -5,15 +5,10 @@ The current version of the IDIC-HREBSD GUI does not utilize this file, as the pa
 
 
 '''
-import sys
-import os
 import numpy as np
 import matplotlib.pyplot as plt
 
 import h5py
-
-# Add the parent directory to the Python path
-sys.path.append(os.path.abspath("/Users/crestiennedechaine/Scripts/pyHREBSD/"))
 
 from scipy.interpolate import RectBivariateSpline
 

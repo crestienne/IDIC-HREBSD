@@ -1,7 +1,6 @@
 import os
 from enum import Enum
 from typing import Union, Callable
-import contextlib
 
 import numpy as np
 from scipy import linalg, interpolate, signal, ndimage
@@ -13,6 +12,7 @@ from joblib import Parallel, delayed
 import warp
 import conversions
 import Data
+from utilities import tqdm_joblib
 import matplotlib.pyplot as plt
 import sys as _sys
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,25 +30,6 @@ class InitType(Enum):
     FULL: str = "full"
     PARTIAL: str = "partial"
 
-
-
-# Context manager to patch joblib to report into tqdm progress bar given as argument
-@contextlib.contextmanager
-def tqdm_joblib(tqdm_object):
-    """Context manager to patch joblib to report into tqdm progress bar given as argument"""
-
-    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
-        def __call__(self, *args, **kwargs):
-            tqdm_object.update(n=self.batch_size)
-            return super().__call__(*args, **kwargs)
-
-    old_batch_callback = joblib.parallel.BatchCompletionCallBack
-    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
-    try:
-        yield tqdm_object
-    finally:
-        joblib.parallel.BatchCompletionCallBack = old_batch_callback
-        tqdm_object.close()
 
 
 ### Functions for the inverse composition gauss-newton algorithm
