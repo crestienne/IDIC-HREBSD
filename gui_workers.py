@@ -1124,62 +1124,6 @@ class VisWorker(QThread):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parameter sweep worker
-# ─────────────────────────────────────────────────────────────────────────────
-
-class SweepWorker(QThread):
-    """
-    Processes a single pattern with every combination in *param_list*.
-    Emits progress_signal(idx, total, processed_img, params) after each one,
-    then done_signal when finished.  Call abort() to stop early.
-    """
-    progress_signal = pyqtSignal(int, int, object, dict)
-    done_signal     = pyqtSignal()
-    error_signal    = pyqtSignal(str)
-
-    def __init__(self, up2_path: str, pat_idx: int, param_list: list):
-        super().__init__()
-        self.up2_path   = up2_path
-        self.pat_idx    = pat_idx
-        self.param_list = param_list
-        self._abort     = False
-
-    def abort(self):
-        self._abort = True
-
-    def run(self):
-        try:
-            import Data
-            total = len(self.param_list)
-            for i, params in enumerate(self.param_list):
-                if self._abort:
-                    break
-                pat_obj   = Data.UP2(self.up2_path)
-                mask_type = params["mask_type"]
-                if mask_type == "None":
-                    mask_type = None
-                pat_obj.set_processing(
-                    low_pass_sigma         = params["low_pass_sigma"],
-                    high_pass_sigma        = params["high_pass_sigma"],
-                    truncate_std_scale     = 3.0,
-                    mask_type              = mask_type,
-                    center_cross_half_width= 6,
-                    use_clahe              = params.get("use_clahe", False),
-                    clahe_kernel           = (params["clahe_kernel"], params["clahe_kernel"]),
-                    clahe_clip             = params["clahe_clip"],
-                    clahe_nbins            = 256,
-                    flip_x                 = params["flip_x"],
-                    gamma                  = params.get("gamma", 0.66),
-                )
-                processed = pat_obj.read_pattern(self.pat_idx, process=True)
-                self.progress_signal.emit(i, total, processed, params)
-            if not self._abort:
-                self.done_signal.emit()
-        except Exception:
-            self.error_signal.emit(traceback.format_exc())
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Pattern preview worker
 # ─────────────────────────────────────────────────────────────────────────────
 
