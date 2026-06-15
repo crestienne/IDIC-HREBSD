@@ -97,6 +97,17 @@ class VisualizationDialog(QDialog):
                              "ANG files (*.ang);;All files (*)", "Select .ang file"),
         )
 
+        # .up2 path — only needed for the "Reference & neighbor patterns"
+        # export.  Auto-filled from the finished run; pick manually when the
+        # viewer is opened standalone.
+        self._up2_edit = QLineEdit(run_params.get("up2", run_params.get("up2_path", "")))
+        self._up2_edit.setPlaceholderText("Pattern file — only for reference/neighbor export…")
+        data_layout.addRow(
+            ".up2 file (pattern export):",
+            _make_browse_row(self, self._up2_edit,
+                             "UP2 files (*.up2);;All files (*)", "Select .up2 file"),
+        )
+
         data_group.setLayout(data_layout)
         left_col.addWidget(data_group)
 
@@ -120,10 +131,23 @@ class VisualizationDialog(QDialog):
         self._pat_w.setRange(1, 4096)
         self._pat_w.setValue(run_params.get("pat_w", 512))
 
+        # Reference scan position (0-indexed) — drives the reference/neighbor
+        # pattern export.  Auto-filled from the run's ref_position; the
+        # exported neighbor is the pattern one column to the right (col+1).
+        _refpos = run_params.get("ref_position", (0, 0)) or (0, 0)
+        self._ref_row = QSpinBox()
+        self._ref_row.setRange(0, 99999)
+        self._ref_row.setValue(int(_refpos[0]))
+        self._ref_col = QSpinBox()
+        self._ref_col.setRange(0, 99999)
+        self._ref_col.setValue(int(_refpos[1]))
+
         scan_layout.addRow("Rows:", self._rows)
         scan_layout.addRow("Columns:", self._cols)
         scan_layout.addRow("Pattern height (px):", self._pat_h)
         scan_layout.addRow("Pattern width (px):", self._pat_w)
+        scan_layout.addRow("Reference row (export):", self._ref_row)
+        scan_layout.addRow("Reference col (export):", self._ref_col)
         scan_group.setLayout(scan_layout)
         left_col.addWidget(scan_group)
 
@@ -243,6 +267,16 @@ class VisualizationDialog(QDialog):
             "Tick boxes below to add extra figures."
         ))
 
+        # Master toggle: check/uncheck every optional plot at once.  Sits
+        # above the scroll list so it stays visible.  It is NOT part of
+        # _optional_plot_checks, so it never leaks into plot_options — it
+        # only drives the child checkboxes.  Wired up after the children
+        # are built (see below).
+        self._plot_all_chk = QCheckBox("Plot all optional plots")
+        self._plot_all_chk.setTristate(True)
+        self._plot_all_chk.setChecked(False)
+        opt_group_layout.addWidget(self._plot_all_chk)
+
         # (param key, display label)
         self._optional_plot_specs = [
             ("plot_homography_grid",         "Homography component grid"),
@@ -254,6 +288,7 @@ class VisualizationDialog(QDialog):
             ("plot_hydrostatic_strain",      "Hydrostatic strain map (ε_h)"),
             ("plot_von_mises",                "Von Mises equivalent strain map (ε_VM)"),
             ("plot_tfbc_lines",               "TFBC strain line scan (ε_abs / ε_T / c/a)"),
+            ("export_ref_neighbor",           "Reference & neighbor patterns (JPG + intensity histogram)"),
         ]
         # Build the checkbox list inside a scrollable container so the
         # group can be capped at a comfortable height without squeezing
@@ -268,7 +303,16 @@ class VisualizationDialog(QDialog):
             chk.setChecked(False)
             opt_inner_layout.addWidget(chk)
             self._optional_plot_checks[key] = chk
+            chk.toggled.connect(self._sync_plot_all_check)
         opt_inner_layout.addStretch(1)
+
+        # Master-toggle behaviour:
+        #   • user clicks "Plot all" → force every child on (or off if all
+        #     were already on), and snap the master to that binary state;
+        #   • user toggles a child by hand → _sync_plot_all_check reflects
+        #     the aggregate as checked / unchecked / partially-checked.
+        self._plot_all_chk.clicked.connect(self._on_plot_all_clicked)
+        self._sync_plot_all_check()
 
         opt_scroll = QScrollArea()
         opt_scroll.setWidgetResizable(True)
@@ -463,6 +507,37 @@ class VisualizationDialog(QDialog):
         self._C44.setValue(ec.get("C44", self._C44.value()))
         self._struct_lbl.setText(preset.get("structure", "cubic"))
 
+    def _on_plot_all_clicked(self, _checked: bool = False):
+        """User clicked the master 'Plot all optional plots' box.  Turn every
+        child on, or off if they were already all on.  Signals on the children
+        are blocked so this doesn't re-fire _sync_plot_all_check per box."""
+        checks = list(self._optional_plot_checks.values())
+        turn_on = not all(c.isChecked() for c in checks)
+        for c in checks:
+            c.blockSignals(True)
+            c.setChecked(turn_on)
+            c.blockSignals(False)
+        self._plot_all_chk.blockSignals(True)
+        self._plot_all_chk.setCheckState(
+            Qt.CheckState.Checked if turn_on else Qt.CheckState.Unchecked
+        )
+        self._plot_all_chk.blockSignals(False)
+
+    def _sync_plot_all_check(self, _checked: bool = False):
+        """Reflect the aggregate state of the child checkboxes on the master
+        box: checked (all on), unchecked (all off), or partially-checked."""
+        checks = list(self._optional_plot_checks.values())
+        n_on = sum(1 for c in checks if c.isChecked())
+        if n_on == 0:
+            state = Qt.CheckState.Unchecked
+        elif n_on == len(checks):
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        self._plot_all_chk.blockSignals(True)
+        self._plot_all_chk.setCheckState(state)
+        self._plot_all_chk.blockSignals(False)
+
     def _gather(self) -> dict:
         plot_options = {
             key: chk.isChecked()
@@ -474,6 +549,20 @@ class VisualizationDialog(QDialog):
             "npy_path":          self._npy_edit.text(),
             "ang_path":          self._ang_edit.text(),
             "save_folder":       self._save_edit.text(),
+            "up2_path":          self._up2_edit.text(),
+            "ref_position":      (self._ref_row.value(), self._ref_col.value()),
+            # Step-3 processing (carried from the run) so the reference/neighbor
+            # export reads processed patterns matching the pipeline.
+            "low_pass_sigma":    self._run_params.get("low_pass_sigma", 1.0),
+            "high_pass_sigma":   self._run_params.get("high_pass_sigma", 10.0),
+            "mask_type":         self._run_params.get("mask_type", "none"),
+            "flip_x":            self._run_params.get("flip_x", False),
+            "gamma":             self._run_params.get("gamma", 0.8),
+            # Reference type (carried from the run) so a simulated reference is
+            # regenerated and saved instead of the experimental pattern.
+            "ref_mode":            self._run_params.get("ref_mode", "single"),
+            "master_pattern_path": self._run_params.get("master_pattern_path", ""),
+            "euler_deg":           self._run_params.get("euler_deg", (0.0, 0.0, 0.0)),
             "rows":              self._rows.value(),
             "cols":              self._cols.value(),
             "roi_slice":         self._roi_slice,   # passed silently to VisWorker
