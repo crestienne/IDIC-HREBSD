@@ -562,17 +562,8 @@ def Bruker_to_fractional_PC(bruker_pc, patshape, pixel_size=None, homography_cen
     homography_center : array-like of shape (2,), optional
         Fractional coordinates of the homography center (x, y) relative to the pattern shape. Default is (0.5, 0.5) for centred-pixel format.
     """
-    import sys
-    print(">>> Bruker_to_fractional_PC called", flush=True, file=sys.stderr)
-    print("    Bruker PC (from upper left, fractional):", bruker_pc, flush=True, file=sys.stderr)
-    print("    Homography center (fractional):", homography_center, flush=True, file=sys.stderr)
-    print("    patshape:", patshape, flush=True, file=sys.stderr)
-
-    # xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
-
-    xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])  # vector
-
-    print('    xo (from PC to homography center, in pixels):', xo, flush=True, file=sys.stderr)
+    # Vector from the pattern center to the homography center, in pixels.
+    xo = np.array([(homography_center[0] - bruker_pc[0]) * patshape[0], (homography_center[1] - bruker_pc[1]) * patshape[1], (bruker_pc[2] * patshape[1])])
 
     return xo
 
