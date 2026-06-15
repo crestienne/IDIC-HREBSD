@@ -31,15 +31,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PatternSimulation.SimPatGen import patternSimulation
 
 
-# ---------------------------------------------------------------------------
-# Quaternion helpers for gimbal-lock-free PC/Euler refinement
-# ---------------------------------------------------------------------------
-# These are exact pure-numpy mirrors of HREBSD.bu2qu_emsoft (and its inverse)
-# plus the so(3) exponential and Hamilton product, so the Nelder-Mead loop
-# can parameterise rotation perturbations in a singularity-free tangent
-# space (rotation vector) and still hand a Bunge Euler triple to the
-# existing _simulate(sim, euler, pc, ...) call.
-
 def _bu2qu_emsoft(eu: np.ndarray) -> np.ndarray:
     """Bunge ZXZ Euler (radians, shape (3,)) → quaternion (w, x, y, z),
     matching HREBSD.bu2qu_emsoft term-by-term."""
