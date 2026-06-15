@@ -97,3 +97,44 @@ pip install PyQt6
 ### Important Geometry Instructions
 
 All functions currently run using the EDAX sample frame and a Bruker detector frame. This is the same setup utilized by kikuchipy, so if the reader would like more information regarding these two sample frames, they are highly encouraged to look [there](https://kikuchipy.org/en/stable/tutorials/reference_frames.html).
+
+### Files
+
+- conversions.py - handles all conversions for the pattern center to internal pattern center conventions. The pattern center is defined internally utilizing the Bruker pattern center convention. 
+- Data.py - The following dataset handles anything related to reading in and processing experimental EBSD patterns. This includes the functionalities for reading in .up2 files and also for pre processing the patterns.
+- ErnouldsMethod.py - 
+- get_homography_cpu_reversed.py - an experimental script such the reversiblity of the IC-GN algorithm can be tested
+- get_homography_cpu.py - The primary pipeline for the IC-GN algorithm. Currently contains all code pertaining the IC-GN algorthm
+- gui_help.py - Handles all functions related to the help menu on the gui including descriptions and all formating
+- gui_materials.py - Handles the materials gui which enables additional Materials stiffness tensors to be added
+- gui_pages.py 
+- gui_settings.py - In development, handles the settings gui which enables the font size to be adjusted as well as the theme to be set
+- gui_theme.py 
+- gui_visualization.py 
+- gui_workers.py 
+- homography_validation.py 
+- HREBSD.py - All code related to pattern simulation
+- ipf_map.py - All code related to plotting the IPF map 
+- multiple_ref.py 
+- optimize_ref.py 
+- pc_homography_correction.py
+- pc_plane_fit.py
+- put_sharpness_in_ang.py
+- Results_plotting.py 
+- rotations.py 
+- Run_GUI.py - The main runner file. Handles launching the GUI
+- runner_results_vis.py
+- runner.py 
+- segment.py
+- temp.py 
+- utilities.py
+- viz_samp2detectorATEX.py
+- warp.py 
+- write_up2.py
+
+### Main Todos
+
+- Add support for non cubic materials (specifically regarding the traction free boundary condition and the materials stiffness tensor)
+- Add support for non EDAX files (specfically Oxford)
+
+

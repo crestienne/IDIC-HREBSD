@@ -47,30 +47,6 @@ def tqdm_joblib(tqdm_object):
         tqdm_object.close()
 
 
-def convert_pc(
-    PC: tuple | list | np.ndarray, patshape: tuple | list | np.ndarray
-) -> tuple:
-    """
-    Converts the pattern center from EDAX/TSL standard to the EMsoft standard
-    (xstar, ystar, zstar) -> (xpc, ypc, L)
-
-    Args:
-        PC (array-like): (xstar, ystar, zstar) --OR-- (xpc, ypc, L). If the latter is given, the L parameter needs to be in units of pixels.
-        N (array-like): detector dimensions after binning, aka the pattern dimensions (Nx, Ny)
-        delta (float): the raw detector pixel size before binning
-        b (float): the binning factor
-
-    Returns:
-        PC (tuple): The pattern center (xpc, ypc, L) all in units of pixels.
-        --OR--
-        PC (tuple): The pattern center (xstar, ystar, zstar)."""
-    xpc = PC[0] * patshape[1]
-    ypc = PC[1] * patshape[0]
-    DD = PC[2] * patshape[0]
-    print('note to self convert_pc: has error')
-    return (xpc, ypc, DD)
-
-
 def read_up2(up2: str) -> namedtuple:
     """Read in patterns and a pattern center from an ang file and a pattern file.
     Only supports a up2 file using the EDAX/TSL convention.
