@@ -5694,6 +5694,19 @@ class OptimizationRunPage(QWizardPage):
             "npz_path":            npz_path,
             "npy_path":            npy_path,
             "ang":                 p.get("ang", ""),        # pre-fill ang path (already loaded in step 1)
+            "up2":                 p.get("up2", ""),        # pre-fill .up2 for reference/neighbor export
+            "ref_position":        p.get("ref_position", (0, 0)),  # reference scan position for export
+            # Step-3 processing — so the reference/neighbor export matches the run.
+            "low_pass_sigma":      p.get("low_pass_sigma", 1.0),
+            "high_pass_sigma":     p.get("high_pass_sigma", 10.0),
+            "mask_type":           p.get("mask_type", "none"),
+            "flip_x":              p.get("flip_x", False),
+            "gamma":               p.get("gamma", 0.8),
+            # Reference type — so the export saves the simulated reference image
+            # (regenerated from master + Euler + PC) when the run used one.
+            "ref_mode":            p.get("ref_mode", "single"),
+            "master_pattern_path": p.get("master_pattern_path", ""),
+            "euler_deg":           p.get("euler_deg", (0.0, 0.0, 0.0)),
             "save_folder":         p.get("output_dir", ""),
             "rows":                eff_rows,
             "cols":                eff_cols,
