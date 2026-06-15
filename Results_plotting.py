@@ -266,6 +266,171 @@ def compute_tfbc(results: dict, params: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Reference + neighbor pattern export
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generate_sim_reference(params: dict, pat_obj):
+    """Generate the *simulated* reference pattern from the master pattern +
+    Euler angles + PC (mirrors gui_workers.SimRefWorker), normalise it, and run
+    it through the same Step-3 processing as the experimental patterns so the
+    two are directly comparable.  Returns a float32 (H, W) array, or None if it
+    can't be generated (missing master pattern, sim failure, etc.).
+    """
+    master = (params.get("master_pattern_path") or "").strip()
+    if not master or not os.path.exists(master):
+        print(f"[ref/neighbor export] Simulated reference requested but master "
+              f"pattern not found ({master!r}) — falling back to experimental.")
+        return None
+    try:
+        from PatternSimulation.SimPatGen import patternSimulation
+        import conversions
+
+        euler_deg = params.get("euler_deg", (0.0, 0.0, 0.0))
+        pc_edax   = tuple(params.get("pc_edax", (0.5, 0.5, 0.5)))
+        # Generate at the experimental detector shape so the Step-3 mask lines
+        # up and the histograms compare like-for-like.
+        H, W = pat_obj.patshape
+
+        sim = patternSimulation()
+        sim.detector_height   = H
+        sim.detector_width    = W
+        sim.det_shape         = (H, W)
+        sim.detector_tilt_deg = float(params.get("det_tilt", 10.0))
+        sim.sample_tilt_deg   = float(params.get("tilt", 70.0))
+        sim.mastersetup(master)
+
+        euler_rad = np.deg2rad(euler_deg)
+        pc_bruker = conversions.Edax_to_Bruker_PC(pc_edax)
+        sim.EandPCSet(euler_rad, list(pc_bruker), verbose=False)
+
+        pat = sim.GenPattern()
+        pat_np = pat.detach().cpu().numpy().astype(np.float32).reshape(H, W)
+        lo, hi = pat_np.min(), pat_np.max()
+        pat_np = (pat_np - lo) / (hi - lo + 1e-9)
+        # Step-3 processing so it matches the processed experimental neighbor.
+        return pat_obj.process_pattern(pat_np).astype(np.float32)
+    except Exception as exc:
+        print(f"[ref/neighbor export] Simulated reference generation failed "
+              f"({exc}) — falling back to experimental.")
+        return None
+
+
+def _export_ref_and_neighbor(params: dict):
+    """Save a JPG of the reference pattern, a JPG of the pattern one scan
+    column to its right (col+1), and a single figure overlaying the two
+    intensity distributions.
+
+    The reference image follows what the run actually used:
+      • real / single reference  → the experimental pattern at ref_position;
+      • simulated reference (``ref_mode == "simulated"``)  → the simulated
+        pattern regenerated from the master pattern + Euler + PC.
+    The neighbor (col+1) is always the experimental pattern from the .up2.
+
+    Patterns are read/processed with the run's Step-3 settings (background
+    removal / band-pass / gamma / mask), matching what the pipeline and the
+    Step-4 preview show — not the raw detector counts.  Needs ``up2_path`` (or
+    ``up2``), ``ref_position`` = (ref_row, ref_col), ``full_cols`` (full-scan
+    column count, for the flat pattern index), and ``save_folder``.  The
+    Step-3 settings (``low_pass_sigma``, ``high_pass_sigma``, ``mask_type``,
+    ``flip_x``, ``gamma``) and — for simulated refs — ``ref_mode``,
+    ``master_pattern_path`` and ``euler_deg`` are forwarded from the run;
+    sensible defaults are used when the viewer is opened standalone.
+    """
+    import Data
+
+    up2_path  = (params.get("up2_path") or params.get("up2") or "").strip()
+    ref_pos   = params.get("ref_position", None)
+    full_cols = int(params.get("full_cols") or params.get("cols") or 0)
+    save      = params.get("save_folder", "")
+
+    if not save:
+        print("[ref/neighbor export] No save folder set — nothing written.")
+        return
+    if not up2_path or not os.path.exists(up2_path):
+        print(f"[ref/neighbor export] .up2 not found ({up2_path!r}) — skipped.")
+        return
+    if ref_pos is None:
+        print("[ref/neighbor export] No reference position available — skipped.")
+        return
+    if full_cols <= 0:
+        print("[ref/neighbor export] Unknown scan column count — skipped.")
+        return
+
+    ref_row, ref_col = int(ref_pos[0]), int(ref_pos[1])
+    nbr_col = ref_col + 1
+    if nbr_col >= full_cols:
+        print(f"[ref/neighbor export] Reference is in the last column "
+              f"(col={ref_col}); no neighbor to the right — skipped.")
+        return
+
+    pat_obj = Data.UP2(up2_path)
+    # Apply the same Step-3 processing the run used so the saved patterns and
+    # their histograms match the pipeline / Step-4 preview (not raw counts).
+    pat_obj.set_processing(
+        low_pass_sigma  = float(params.get("low_pass_sigma", 1.0)),
+        high_pass_sigma = float(params.get("high_pass_sigma", 10.0)),
+        truncate_std_scale = 3.0,
+        mask_type       = params.get("mask_type", "none"),
+        center_cross_half_width = 6,
+        flip_x          = bool(params.get("flip_x", False)),
+        gamma           = float(params.get("gamma", 0.8)),
+    )
+    n_pat   = pat_obj.nPatterns
+    ref_idx = ref_row * full_cols + ref_col
+    nbr_idx = ref_row * full_cols + nbr_col
+    if ref_idx >= n_pat or nbr_idx >= n_pat:
+        print(f"[ref/neighbor export] Pattern index out of range "
+              f"(ref={ref_idx}, neighbor={nbr_idx}, nPatterns={n_pat}) — skipped.")
+        return
+
+    # Reference image: simulated (regenerated) if the run used a simulated
+    # reference, otherwise the experimental pattern at ref_position.  Fall back
+    # to experimental if sim generation isn't possible.
+    ref_mode = str(params.get("ref_mode", "single")).lower()
+    ref_src  = "experimental"
+    ref_pat  = None
+    if ref_mode == "simulated":
+        ref_pat = _generate_sim_reference(params, pat_obj)
+        if ref_pat is not None:
+            ref_src = "simulated"
+    if ref_pat is None:
+        ref_pat = pat_obj.read_pattern(ref_idx, process=True).astype(np.float32)
+
+    # Neighbor is always the experimental pattern one column to the right.
+    nbr_pat = pat_obj.read_pattern(nbr_idx, process=True).astype(np.float32)
+    print(f"[ref/neighbor export] reference source: {ref_src}")
+
+    # Grayscale JPGs of the Step-3-processed patterns.
+    ref_jpg = os.path.join(save, "Reference_pattern.jpg")
+    nbr_jpg = os.path.join(save, "Neighbor_pattern_colplus1.jpg")
+    plt.imsave(ref_jpg, ref_pat, cmap="gray")
+    plt.imsave(nbr_jpg, nbr_pat, cmap="gray")
+    print(f"Saved {ref_jpg}")
+    print(f"Saved {nbr_jpg}")
+
+    # Combined intensity-distribution histogram (shared bins, density-normalised
+    # so the two patterns are comparable regardless of any pixel-count mismatch).
+    lo    = float(min(ref_pat.min(), nbr_pat.min()))
+    hi    = float(max(ref_pat.max(), nbr_pat.max()))
+    edges = np.linspace(lo, hi, 256)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(ref_pat.ravel(), bins=edges, color="tab:blue", alpha=0.55, density=True,
+            label=f"Reference [{ref_src}] (row {ref_row + 1}, col {ref_col + 1})")
+    ax.hist(nbr_pat.ravel(), bins=edges, color="tab:orange", alpha=0.55, density=True,
+            label=f"Neighbor +1 col (row {ref_row + 1}, col {nbr_col + 1})")
+    ax.set_xlabel("Pixel intensity (Step-3 processed)")
+    ax.set_ylabel("Probability density")
+    ax.set_title("Intensity distribution — reference vs right-neighbor pattern")
+    ax.legend()
+    ax.grid(True, linestyle="--", alpha=0.4)
+    fig.tight_layout()
+    hist_path = os.path.join(save, "Reference_neighbor_intensity_hist.png")
+    fig.savefig(hist_path, dpi=200, bbox_inches="tight")
+    plt.show(block=False)
+    print(f"Saved {hist_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # High-level: generate all standard figures
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -306,6 +471,13 @@ def plot_all_results(results: dict, params: dict):
     # figure that is *always* rendered is the post-TFBC strain & rotation
     # grid further down.  Everything else is gated by params["plot_options"].
     plot_opts = params.get("plot_options", {}) or {}
+
+    # ── Reference + neighbor pattern export (JPG + intensity histogram) ──────
+    if plot_opts.get("export_ref_neighbor", False):
+        try:
+            _export_ref_and_neighbor(params)
+        except Exception as exc:
+            print(f"[plot_all_results] Reference/neighbor export skipped: {exc}")
 
     # ── Homography components ─────────────────────────────────────────────────
     if plot_opts.get("plot_homography_grid", False):
