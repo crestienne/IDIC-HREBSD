@@ -411,6 +411,8 @@ class VisualizationDialog(QDialog):
             *_results_*.npy        → npz_path     (preferred fast path)
             *_homographies_*.npy   → npy_path     (legacy fallback)
             *_params_*.txt         → parsed and folded into form fields
+                                     (incl. the recorded .ang path, which
+                                      overrides the glob when it exists on disk)
             *.ang (anywhere)       → ang_path     (only if currently empty)
         The folder itself becomes `save_folder`.  Most-recent file wins when
         multiple candidates match.
@@ -461,6 +463,15 @@ class VisualizationDialog(QDialog):
         Silently skips keys that aren't present.  Numeric setters defer to the
         underlying QSpinBox / QDoubleSpinBox to clamp out-of-range values.
         """
+        # .ang path recorded in the run's params .txt (the actual file used).
+        # Prefer it over the folder-glob guess when it still exists on disk —
+        # the .ang usually lives outside the run folder, so the glob finds
+        # nothing and the field would otherwise stay empty.
+        ang_p = p.get("ang") or p.get("ang_path")
+        if isinstance(ang_p, str) and ang_p.strip():
+            if os.path.exists(ang_p) or not self._ang_edit.text().strip():
+                self._ang_edit.setText(ang_p)
+
         if "rows"     in p: self._rows.setValue(int(p["rows"]))
         if "cols"     in p: self._cols.setValue(int(p["cols"]))
         if "pat_h"    in p: self._pat_h.setValue(int(p["pat_h"]))
