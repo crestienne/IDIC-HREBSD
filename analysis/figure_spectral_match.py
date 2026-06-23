@@ -26,6 +26,11 @@ up interactively.
 """
 
 import os
+import sys
+
+# Allow running directly (`python analysis/figure_spectral_match.py`) as well as
+# via `-m`: put the repo root (this file's parent's parent) on sys.path.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -84,6 +89,7 @@ plt.rcParams.update({
     "savefig.dpi":      300,
     "pdf.fonttype":     42,   # editable text in Illustrator/Inkscape
     "ps.fonttype":      42,
+    "svg.fonttype":     "none",  # keep SVG text as editable text, not outlines
 })
 
 DIVERGING = "RdBu_r"
