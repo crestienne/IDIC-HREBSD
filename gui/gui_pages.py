@@ -29,13 +29,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPropertyAnimation, QEasingCurve, pyqtProperty
 
-from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
-from gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker, SimRefWorker, PcEulerRefineWorker
-from gui_visualization import VisualizationDialog
+from gui.gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
+from gui.gui_workers import PipelineWorker, IPFWorker, SegmentWorker, PatternPreviewWorker, AngLoaderWorker, SimRefWorker, PcEulerRefineWorker
+from gui.gui_visualization import VisualizationDialog
 
 
-from gui_materials import _load_material_presets, NewMaterialDialog
-from multiple_ref import ReferencePatternSet, select_references
+from gui.gui_materials import _load_material_presets, NewMaterialDialog
+from core.multiple_ref import ReferencePatternSet, select_references
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ class LoadFilesPage(QWizardPage):
         up2_path = self.up2_edit.text()
         if up2_path and os.path.isfile(up2_path):
             try:
-                import Data
+                from fileio import Data
                 return Data.UP2(up2_path).patshape
             except Exception:
                 pass
@@ -357,7 +357,7 @@ class LoadFilesPage(QWizardPage):
             self._canvas.draw()
             return
         try:
-            import Data
+            from fileio import Data
             pat_obj = Data.UP2(path)
             pat = pat_obj.read_pattern(0, process=False).astype(np.float32)
             lo, hi = pat.min(), pat.max()
@@ -602,7 +602,7 @@ class ScanGeometryPage(QWizardPage):
         # ── Pattern shape from UP2 ────────────────────────────────────────────
         if up2_path and os.path.exists(up2_path):
             try:
-                import Data
+                from fileio import Data
                 pat_obj = Data.UP2(up2_path)
                 self.pat_h.setValue(pat_obj.patshape[0])
                 self.pat_w.setValue(pat_obj.patshape[1])
@@ -613,7 +613,8 @@ class ScanGeometryPage(QWizardPage):
         # ── Everything else from ANG ──────────────────────────────────────────
         if ang_path and os.path.exists(ang_path):
             try:
-                import Data, utilities
+                from fileio import Data
+                from core import utilities
                 try:
                     pat_obj  = Data.UP2(up2_path)
                     patshape = pat_obj.patshape
@@ -1659,7 +1660,7 @@ class ROISelectionPage(QWizardPage):
         self._ipf_ax.imshow(shown, origin="upper", interpolation="nearest")
         self._ipf_ax.axis("off")
 
-        from ipf_map import plot_ipf_triangle
+        from analysis.ipf_map import plot_ipf_triangle
         self._key_ax.set_visible(True)
         self._key_ax.clear()
         plot_ipf_triangle(self._key_ax, n=150)
@@ -3996,7 +3997,7 @@ class ReferencePatternPage(QWizardPage):
             if row >= geom["rows"] or col >= geom["cols"]:
                 return
             pat_idx = int(np.ravel_multi_index((row, col), (geom["rows"], geom["cols"])))
-            import Data
+            from fileio import Data
             pat_obj = Data.UP2(up2_path)
             # Configure the UP2 to apply the same preprocessing pipeline the
             # IC-GN solver will see (Step 3 high-pass / low-pass / γ / mask
@@ -4049,7 +4050,7 @@ class ReferencePatternPage(QWizardPage):
             lo, hi = arr.min(), arr.max()
             return (arr - lo) / (hi - lo + 1e-9)
         try:
-            import Data
+            from fileio import Data
             wiz = self.wizard()
             p = wiz.processing_page.get_params() if wiz else {}
             pat_obj = Data.UP2(up2_path)
@@ -4417,7 +4418,7 @@ class ReferencePatternPage(QWizardPage):
         up2_path = wiz.field("up2_path")
         if up2_path and os.path.exists(up2_path):
             try:
-                import Data
+                from fileio import Data
                 pat_obj = Data.UP2(up2_path)
                 idx = ref_row_for_exp * geom["cols"] + ref_col_for_exp
                 if idx < pat_obj.nPatterns:
@@ -4694,7 +4695,7 @@ class ReferencePatternPage(QWizardPage):
         up2_path = wiz.field("up2_path")
         if up2_path and os.path.exists(up2_path):
             try:
-                import Data
+                from fileio import Data
                 pat_obj = Data.UP2(up2_path)
                 idx = ref_r * geom["cols"] + ref_c
                 if idx < pat_obj.nPatterns:
@@ -5175,7 +5176,7 @@ class PatternProcessingPage(QWizardPage):
                 return
             self._prev_status.setText("Processing simulated pattern…")
             try:
-                import Data
+                from fileio import Data
                 p = self.get_params()
                 pat_obj = Data.UP2(up2_path) if up2_path and os.path.exists(up2_path) else None
                 if pat_obj is not None:

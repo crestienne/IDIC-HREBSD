@@ -141,7 +141,7 @@ def compute_tfbc(results: dict, params: dict) -> dict:
         'tetragonal_strain'              : 2-D ε_T map  (ε_33 − (ε_11+ε_22)/2)
         'tetragonality_ca'               : 2-D c/a ratio map  (1+ε_33)/(1+(ε_11+ε_22)/2)
     """
-    import utilities, rotations
+    from core import utilities, rotations
 
     rows = results["rows"]
     cols = results["cols"]
@@ -216,9 +216,6 @@ def compute_tfbc(results: dict, params: dict) -> dict:
 
 
     # ── Voigt index: 0=11, 1=22, 2=33, 3=23, 4=13, 5=12 ─────────────────────
-    # σ₃₃ = C₃₁(e11+e33) + C₃₂(e22+e33) + C₃₃e33 + 2C₃₄e23 + 2C₃₅e13 + 2C₃₆e12 = 0
-    # => e33 = -(C₃₁*e11_dev + C₃₂*e22_dev + 2*C₃₄*e23 + 2*C₃₅*e13 + 2*C₃₆*e12)
-    #          / (C₃₁ + C₃₂ + C₃₃)
     C31 = C_rot[:, 2, 0]; C32 = C_rot[:, 2, 1]; C33 = C_rot[:, 2, 2]
     C34 = C_rot[:, 2, 3]; C35 = C_rot[:, 2, 4]; C36 = C_rot[:, 2, 5]
 
@@ -229,13 +226,15 @@ def compute_tfbc(results: dict, params: dict) -> dict:
     e13_f = results["e13"].ravel()
     e23_f = results["e23"].ravel()
 
-    # σ_33 = 0 in sample frame:
+    # Traction-free surface: σ_33 = 0 in the sample frame.
     #   C31·ε_11 + C32·ε_22 + C33·ε_33 + 2·C34·ε_23 + 2·C35·ε_13 + 2·C36·ε_12 = 0
-    # Saved e_ii are deviatoric ε_ii − α (where α is the absolute ε_33).
-    # Substituting ε_ii_abs = saved_e_ii + α and solving for α:
+    # The measured strains use the HR-EBSD "ε_33 = 0" convention (h2F normalises
+    # F_33→1, F2strain divides V by V_33), so ε_11/ε_22 are already the true
+    # in-plane strains and only ε_33 is unknown.  Solving σ_33 = 0 for ε_33:
+    #   ε_33_abs = -(C31·ε_11 + C32·ε_22 + 2·C34·ε_23 + 2·C35·ε_13 + 2·C36·ε_12) / C33
     numerator   = (C31*e11_f + C32*e22_f
                    + 2*C34*e23_f + 2*C35*e13_f + 2*C36*e12_f)
-    denominator = C31 + C32 + C33
+    denominator = C33
     e33_abs_f   = -numerator / denominator
     e11_abs_f   = e11_f
     e22_abs_f   = e22_f
@@ -253,7 +252,7 @@ def compute_tfbc(results: dict, params: dict) -> dict:
 
     # Lattice tetragonality c/a from deformed-lattice spacings:
     #   c/a = (1 + ε_33) / (1 + (ε_11 + ε_22)/2)
-    e_in_plane       = 0.5*e11_abs*e22_abs
+    e_in_plane       = 0.5 * (e11_abs + e22_abs)
     tetragonality_ca = (1.0 + e33_abs) / (1.0 + e_in_plane)
 
     return {
@@ -283,7 +282,7 @@ def _generate_sim_reference(params: dict, pat_obj):
         return None
     try:
         from PatternSimulation.SimPatGen import patternSimulation
-        import conversions
+        from core import conversions
 
         euler_deg = params.get("euler_deg", (0.0, 0.0, 0.0))
         pc_edax   = tuple(params.get("pc_edax", (0.5, 0.5, 0.5)))
@@ -336,7 +335,7 @@ def _export_ref_and_neighbor(params: dict):
     ``master_pattern_path`` and ``euler_deg`` are forwarded from the run;
     sensible defaults are used when the viewer is opened standalone.
     """
-    import Data
+    from fileio import Data
 
     up2_path  = (params.get("up2_path") or params.get("up2") or "").strip()
     ref_pos   = params.get("ref_position", None)
@@ -597,7 +596,7 @@ def plot_all_results(results: dict, params: dict):
     # homographies (h2F → F2strain) along the chosen row.  No rotation, no
     # round-trip — guaranteed to give ε_33_det = 0 by IC-GN's F_33 = 1
     # normalization, regardless of which sample-frame rotation was used.
-    import conversions as _conv
+    from core import conversions as _conv
     h_row = np.stack([
         results["h11"][r], results["h12"][r], results["h13"][r],
         results["h21"][r], results["h22"][r], results["h23"][r],

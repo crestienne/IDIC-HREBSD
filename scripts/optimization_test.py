@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 import sys
 
 # Local imports
-import warp
-from get_homography_cpu import dp_norm, window_and_normalize, FMT
-import conversions
-import ErnouldsMethod
-from Data import process_pattern_no_class
-from conversions import F2h, h2F, F2strain
+from core import warp
+from core.get_homography_cpu import dp_norm, window_and_normalize, FMT
+from core import conversions
+from core import ErnouldsMethod
+from fileio.Data import process_pattern_no_class
+from core.conversions import F2h, h2F, F2strain
 from tabulate import tabulate
 
 

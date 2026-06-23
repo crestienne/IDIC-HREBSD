@@ -26,16 +26,14 @@ up interactively.
 """
 
 import os
-import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from scipy import interpolate
 
-import Data
-import utilities as _utils
+from fileio import Data
+from core import utilities as _utils
 
 
 # ───────── USER INPUTS ──────────────────────────────────────────────────────

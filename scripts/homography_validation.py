@@ -1,8 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.linalg import expm
-import warp
-import conversions
+from core import warp
+from core import conversions
 
 size = (480, 640)
 

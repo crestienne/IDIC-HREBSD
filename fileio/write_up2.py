@@ -2,7 +2,7 @@ import numpy as np
 from collections import namedtuple
 import struct
 
-from utilities import read_up2
+from core.utilities import read_up2
 
 # from tqdm.auto import tqdm
 # import matplotlib.pyplot as plt

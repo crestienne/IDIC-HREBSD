@@ -16,10 +16,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
-from gui_workers import VisWorker
-from gui_materials import _load_material_presets
-from Results_plotting import plot_all_results
+from gui.gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
+from gui.gui_workers import VisWorker
+from gui.gui_materials import _load_material_presets
+from analysis.Results_plotting import plot_all_results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -415,7 +415,7 @@ class VisualizationDialog(QDialog):
         multiple candidates match.
         """
         import glob
-        from gui_workers import _parse_params_txt
+        from gui.gui_workers import _parse_params_txt
 
         def _latest(pattern: str):
             matches = glob.glob(os.path.join(folder, pattern))

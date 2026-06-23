@@ -17,11 +17,11 @@ from joblib import Parallel, delayed
 
 import kornia
 
-import rotations
-import conversions
+from core import rotations
+from core import conversions
 
 # EBSD file I/O lives in ebsd_io.py; re-exported here for backward compatibility.
-from ebsd_io import (
+from fileio.ebsd_io import (
     read_up2,
     read_ang,
     get_scan_data,

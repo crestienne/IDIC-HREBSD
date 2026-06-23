@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-import Data
-import utilities
-import get_homography_cpu as core
+from fileio import Data
+from core import utilities
+from core import get_homography_cpu as core
 import os
 import datetime
 

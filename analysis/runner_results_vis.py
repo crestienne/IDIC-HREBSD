@@ -3,10 +3,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 from skimage import io
 
-import Data
-import utilities
-import get_homography_cpu as core
-import conversions
+from fileio import Data
+from core import utilities
+from core import get_homography_cpu as core
+from core import conversions
 
 # want to calc the difference between the true strain and the calculated strain
 # ----------- Code for reading in the inputted values ------------

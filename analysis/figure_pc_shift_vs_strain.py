@@ -39,15 +39,13 @@ the residual RMS.  Set SHOW = True to also pop it up interactively.
 """
 
 import os
-import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 
-import conversions
-import warp
+from core import conversions
+from core import warp
 
 
 # ───────── USER INPUTS ───────────────────────────────────────────────────────

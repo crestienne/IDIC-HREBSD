@@ -9,7 +9,7 @@ pixels so that the full detector area contributes to the metric.
 
 Usage
 -----
-    from optimize_reference import optimize_pc_and_euler
+    from core.optimize_reference import optimize_pc_and_euler
 
     euler_opt, pc_opt = optimize_pc_and_euler(
         pat_obj=pat_obj,
@@ -22,12 +22,10 @@ Usage
 """
 
 import os
-import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PatternSimulation.SimPatGen import patternSimulation
 
 
@@ -1353,8 +1351,8 @@ def compute_h_landscape(
     dict with keys: h_grid (n_grid, n_grid, 8), resid_grid (n_grid, n_grid),
                     iter_grid (n_grid, n_grid), hp_arr (n_grid,), gamma_arr (n_grid,)
     """
-    import get_homography_cpu as _core
-    from get_homography_cpu import InitType
+    from core import get_homography_cpu as _core
+    from core.get_homography_cpu import InitType
 
     x0_flat  = int(np.ravel_multi_index(ref_idx_yx, ang_data.shape))
     ref_row, ref_col = int(ref_idx_yx[0]), int(ref_idx_yx[1])

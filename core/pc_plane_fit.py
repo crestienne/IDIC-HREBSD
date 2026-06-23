@@ -258,7 +258,7 @@ def _refine_pc_only(sim, exp_pat: np.ndarray, pat_obj, patshape: tuple,
         (pc_opt, znssd_opt) — refined PC (3-vector) and final ZNSSD scalar.
     """
     from scipy.optimize import minimize
-    from optimize_reference import _simulate, _znssd
+    from core.optimize_reference import _simulate, _znssd
 
     pc_init = np.asarray(pc_init, dtype=np.float64)
     euler_fixed = np.asarray(euler_fixed, dtype=np.float64)
@@ -388,7 +388,7 @@ def pc_plane_fit(
         saved_fig_path  : str or None
     """
     # Lazy-import these to keep this module's import cost low.
-    from pc_homography_correction import make_scan_grid, scan_grid_to_pc_grid
+    from core.pc_homography_correction import make_scan_grid, scan_grid_to_pc_grid
     from PatternSimulation.SimPatGen import patternSimulation
 
     pc_ref       = np.asarray(pc_ref, dtype=np.float64)

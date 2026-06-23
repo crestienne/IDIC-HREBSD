@@ -58,11 +58,11 @@ from tqdm.auto import tqdm
 from joblib import Parallel, delayed
 import matplotlib.pyplot as plt
 
-import warp
-import conversions
-import Data
+from core import warp
+from core import conversions
+from fileio import Data
 
-from get_homography_cpu import (
+from core.get_homography_cpu import (
     InitType,
     PATS,
     ARRAY,
@@ -267,7 +267,7 @@ def optimize_reversed(
 
     if spectral_match_ref:
         if isinstance(pats, Data.UP2):
-            import utilities as _utils
+            from core import utilities as _utils
             print("[reversed][spectral_match_ref] computing average exp amplitude spectrum…")
             target_amp = _utils.average_exp_amplitude_spectrum(
                 pats, n_samples=10, exclude_idx=int(x0)

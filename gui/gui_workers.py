@@ -103,7 +103,7 @@ class AngLoaderWorker(QThread):
 
     def run(self):
         try:
-            import utilities
+            from core import utilities
             ang_data = utilities.read_ang(
                 self.ang_path, self.patshape, segment_grain_threshold=None
             )
@@ -137,8 +137,8 @@ class PipelineWorker(QThread):
             sys.stdout = old_stdout
 
     def _run_pipeline(self):
-        import Data
-        import utilities
+        from fileio import Data
+        from core import utilities
 
         p = self.params
 
@@ -147,14 +147,14 @@ class PipelineWorker(QThread):
         # compatible signature for InitType.NONE.
         _opt = p.get("optimizer", "icgn")
         if _opt == "icgn_reversed":
-            import get_homography_cpu_reversed as core
+            from core import get_homography_cpu_reversed as core
             self.log_signal.emit(
                 "Optimizer: IC-GN reversed roles (get_homography_cpu_reversed) — "
                 "per-pattern image plays REFERENCE; designated reference plays "
                 "TARGET.  Returned homographies will be inverted before strain."
             )
         else:
-            import get_homography_cpu as core
+            from core import get_homography_cpu as core
             self.log_signal.emit("Optimizer: IC-GN (homography, get_homography_cpu)")
 
         self.log_signal.emit("Loading UP2 file…")
@@ -235,7 +235,7 @@ class PipelineWorker(QThread):
         # new-target (= former target → former reference).  Invert so PC
         # correction, h2F, and F2strain see the standard convention.
         if _opt == "icgn_reversed":
-            from get_homography_cpu_reversed import invert_homographies
+            from core.get_homography_cpu_reversed import invert_homographies
             self.log_signal.emit(
                 "Inverting reversed-role homographies → standard convention "
                 "(former-ref → former-target) so PC correction and strain "
@@ -251,7 +251,7 @@ class PipelineWorker(QThread):
         # propagate NaN into neighbouring positions, then restore afterwards.
         nan_mask = None
         if p.get("apply_pc_correction", True):
-            from pc_homography_correction import correct_homographies
+            from core.pc_homography_correction import correct_homographies
             self.log_signal.emit("Applying PC drift correction…")
             if ref_mode == "per_grain":
                 nan_mask = np.any(np.isnan(h), axis=1)
@@ -293,7 +293,7 @@ class PipelineWorker(QThread):
             pc_grid_override = None
             pc_plane = p.get("pc_plane", None)
             if pc_plane is not None:
-                from pc_plane_fit import evaluate_plane_grid
+                from core.pc_plane_fit import evaluate_plane_grid
                 # The plane was fitted in FULL-scan (row, col) coordinates.
                 # If we're optimising an ROI, evaluate the plane on the
                 # full grid and slice down to the ROI region used by IC-GN.
@@ -372,7 +372,7 @@ class PipelineWorker(QThread):
 
         # ── Strain / rotation ─────────────────────────────────────────────────
         self.log_signal.emit("Computing strain and rotation tensors…")
-        import conversions
+        from core import conversions
 
         pc_edax        = np.asarray(pc_ref, dtype=float)
         pc_bruker      = conversions.Edax_to_Bruker_PC(pc_edax)
@@ -453,7 +453,7 @@ class PipelineWorker(QThread):
 
     def _run_single(self, p, pat_obj, ang_data, core):
         import time
-        import conversions
+        from core import conversions
 
         x0 = np.ravel_multi_index(p["ref_position"], ang_data.shape)
         self.log_signal.emit(
@@ -601,7 +601,7 @@ class PipelineWorker(QThread):
 
     def _run_simulated(self, p, pat_obj, ang_data, core):
         import time
-        import conversions
+        from core import conversions
 
         euler_rad = np.deg2rad(p["euler_deg"])   # (phi1, Phi, phi2) radians
         # Use geometry-page PC (which the user tuned via spinboxes, live tuner,
@@ -697,7 +697,7 @@ class PipelineWorker(QThread):
 
     def _run_per_grain(self, p, pat_obj, ang_data, core):
         import time
-        import conversions
+        from core import conversions
 
         rps       = p["ref_pattern_set"]
         grain_ids = p.get("_grain_ids")
@@ -883,10 +883,10 @@ class IPFWorker(QThread):
 
     def run(self):
         try:
-            from ipf_map import compute_ipf_colors
+            from analysis.ipf_map import compute_ipf_colors
             ang_data = self.ang_data
             if ang_data is None:
-                import utilities
+                from core import utilities
                 ang_data = utilities.read_ang(
                     self.ang_path, self.patshape, segment_grain_threshold=None
                 )
@@ -915,7 +915,7 @@ class SegmentWorker(QThread):
 
     def run(self):
         try:
-            import utilities, segment
+            from core import utilities, segment
             ang_data = self.ang_data
             if ang_data is None:
                 self.log_signal.emit("Loading .ang file…")
@@ -967,7 +967,7 @@ class VisWorker(QThread):
             self.error_signal.emit(traceback.format_exc())
 
     def _compute(self) -> dict:
-        import conversions, utilities
+        from core import conversions, utilities
         p = self.params
 
         # ── Fast path: load pre-computed results from npy ─────────────────────
@@ -996,7 +996,7 @@ class VisWorker(QThread):
         pc_edax   = np.asarray(p["pc_edax"], dtype=float)
 
         if p.get("apply_pc_correction", False):
-            from pc_homography_correction import correct_homographies
+            from core.pc_homography_correction import correct_homographies
             # ROI-relative ref_position for PC-correction anchor (defaults to
             # (0, 0) if neither ref_position nor a fall-back location was
             # carried into the re-vis params).
@@ -1015,7 +1015,7 @@ class VisWorker(QThread):
             pc_grid_override = None
             pc_plane = p.get("pc_plane", None)
             if pc_plane is not None:
-                from pc_plane_fit import evaluate_plane_grid
+                from core.pc_plane_fit import evaluate_plane_grid
                 pc_grid_override = evaluate_plane_grid(pc_plane, (rows, cols))
 
             h_calc = correct_homographies(
@@ -1082,7 +1082,7 @@ class VisWorker(QThread):
 
     def _load_from_npz(self, npy_path: str, p: dict) -> dict:
         """Load pre-computed strain/rotation results saved by PipelineWorker."""
-        import utilities
+        from core import utilities
         d    = np.load(npy_path, allow_pickle=True).item()
         rows = int(d["rows"])
         cols = int(d["cols"])
@@ -1159,7 +1159,7 @@ class SimRefWorker(QThread):
             print(f"alpha (deg):      {90.0 + (sim.detector_tilt_deg - sim.sample_tilt_deg):.1f} °")
             # ─────────────────────────────────────────────────────────────────
             sim.mastersetup(self.master_path)
-            import conversions
+            from core import conversions
             euler_rad = np.deg2rad(self.euler_deg)
 
             # ── PC convention passed to EandPCSet ─────────────────────────────
@@ -1237,8 +1237,8 @@ class PcEulerRefineWorker(QThread):
         old_stdout = sys.stdout
         sys.stdout = _StdoutCapture(self.log_signal)
         try:
-            import Data
-            from optimize_reference import optimize_pc_and_euler
+            from fileio import Data
+            from core.optimize_reference import optimize_pc_and_euler
 
             p = self.processing_params
             mask_type = p["mask_type"] if p["mask_type"] != "None" else None
@@ -1339,8 +1339,8 @@ class PcPlaneFitWorker(QThread):
         old_stdout = sys.stdout
         sys.stdout = _StdoutCapture(self.log_signal)
         try:
-            import Data
-            from pc_plane_fit import pc_plane_fit
+            from fileio import Data
+            from core.pc_plane_fit import pc_plane_fit
 
             p = self.processing_params
             mask_type = p["mask_type"] if p["mask_type"] != "None" else None
@@ -1400,7 +1400,7 @@ class PatternPreviewWorker(QThread):
 
     def run(self):
         try:
-            import Data
+            from fileio import Data
             p = self.params
             pat_obj = Data.UP2(self.up2_path)
             mask_type = p["mask_type"]

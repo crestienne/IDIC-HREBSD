@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from joblib import Parallel, delayed
 
-import utilities
-import Data
+from core import utilities
+from fileio import Data
 
 
 class ANG:

@@ -9,13 +9,11 @@ from tqdm.auto import tqdm
 import joblib
 from joblib import Parallel, delayed
 
-import warp
-import conversions
-import Data
-from utilities import tqdm_joblib
+from core import warp
+from core import conversions
+from fileio import Data
+from core.utilities import tqdm_joblib
 import matplotlib.pyplot as plt
-import sys as _sys
-_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PatternSimulation.SimPatGen import patternSimulation
 
 
@@ -438,7 +436,7 @@ def optimize(
     # debug_two_patterns.py) that biases ε_22 / ω_32 with sim references.
     if spectral_match_ref:
         if isinstance(pats, Data.UP2):
-            import utilities as _utils
+            from core import utilities as _utils
             print("[spectral_match_ref] computing average exp amplitude spectrum…")
             target_amp = _utils.average_exp_amplitude_spectrum(
                 pats, n_samples=10, exclude_idx=int(x0)

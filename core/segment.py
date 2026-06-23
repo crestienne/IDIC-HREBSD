@@ -7,7 +7,7 @@ from collections import deque
 import numpy as np
 from tqdm import tqdm
 
-import rotations
+from core import rotations
 
 
 # ── Cubic symmetry operators (24 proper rotations of Oh / m-3m) ──────────────
@@ -667,7 +667,7 @@ def load_segmentation(save_dir: str, name: str = "segmentation") -> tuple:
 if __name__ == "__main__":
     import os
     import matplotlib.pyplot as plt
-    import utilities
+    from core import utilities
 
     ang_path  = '/Users/crestiennedechaine/OriginalData/Si_Ge_Dataset/DI_largerRegion/SiGe_dp_10rows132colums_largerRegion.ang'
     patshape  = (512, 512)

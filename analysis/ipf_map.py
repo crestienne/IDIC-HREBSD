@@ -18,16 +18,13 @@ Usage (standalone):
         python ipf_map.py
 
 Or import into another script:
-    from ipf_map import compute_ipf_colors, plot_ipf_map, plot_ipf_triangle
+    from analysis.ipf_map import compute_ipf_colors, plot_ipf_map, plot_ipf_triangle
 """
 
 import os
-import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -78,7 +75,7 @@ def compute_ipf_colors(
     Reference: formula derived from the standard TSL/OIM IPF triangle;
                symmetry reduction follows Nolze & Hielscher (2016).
     """
-    from rotations import eu2om
+    from core.rotations import eu2om
 
     original_shape = eulers.shape  # (..., 3)
     batch_shape    = original_shape[:-1]
@@ -243,7 +240,7 @@ def plot_ipf_map(
     -------
     rgb_map : float array of shape (rows, cols, 3) with values in [0, 1]
     """
-    import utilities
+    from core import utilities
 
     # ── Resolve sample direction ──────────────────────────────────────────────
     if sample_direction is None:

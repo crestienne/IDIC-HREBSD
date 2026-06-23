@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QColor, QPen, QFont
 
-from gui_theme import THEME
+from gui.gui_theme import THEME
 
 
 # ─────────────────────────────────────────────────────────────────────────────

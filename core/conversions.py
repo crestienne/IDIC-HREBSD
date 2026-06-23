@@ -1,6 +1,6 @@
 import itertools
 import numpy as np
-import rotations
+from core import rotations
 from scipy.linalg import polar
 
 

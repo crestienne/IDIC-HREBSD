@@ -2543,7 +2543,7 @@ if __name__ == "__main__":
                    ("ystretch", torch.eye(3, dtype=torch.float32, device=device)[None, :, :].clone())):
         if tag == "ystretch":
             F[:, 1, 1] = 1.05
-        from HREBSD import eu2qu  # self-import for the demo
+        from core.HREBSD import eu2qu  # self-import for the demo
         quats = eu2qu(torch.zeros(1, 3, device=device), "ZXZ")
         patterns = project_HREBSD_pattern(
             pattern_center,

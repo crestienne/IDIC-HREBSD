@@ -1,6 +1,6 @@
 # Description: I/O helpers for reading EBSD pattern (.up2) and orientation (.ang) files.
 # Split out of utilities.py.
-# Author: James Lamb
+# Author: James Lamb, minor edits by CD 
 
 import os
 import re
@@ -9,8 +9,8 @@ from collections import namedtuple
 
 import numpy as np
 
-import segment
-import rotations
+from core import segment
+from core import rotations
 
 
 NUMERIC = r"[-+]?\d*\.\d+|\d+"
