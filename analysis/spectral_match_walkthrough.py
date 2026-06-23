@@ -76,8 +76,11 @@ crop_fraction = 0.80      # subset used for gradient diagnostics (matches IC-GN)
 TARGET_MODE   = "population"
 POP_N_SAMPLES = 10
 
-OUT_PATH = "figures/spectral_match_walkthrough.pdf"
-SAVE_PNG = True
+# Output format is taken from OUT_PATH's extension — ".svg", ".pdf", ".png",
+# ".eps" all work out of the box (matplotlib infers the backend).  SVG and PDF
+# are vector (infinitely scalable, editable in Illustrator/Inkscape).
+OUT_PATH = "figures/spectral_match_walkthrough.svg"
+SAVE_PNG = True          # also drop a raster .png preview next to OUT_PATH
 SHOW     = False
 
 
@@ -92,8 +95,9 @@ plt.rcParams.update({
     "legend.fontsize": 8,
     "figure.dpi":      150,
     "savefig.dpi":     300,
-    "pdf.fonttype":    42,
+    "pdf.fonttype":    42,    # keep PDF text as editable text (TrueType)
     "ps.fonttype":     42,
+    "svg.fonttype":    "none",  # keep SVG text as editable text, not outlines
 })
 
 C_SIM, C_MATCH, C_EXP = "tab:blue", "tab:green", "tab:orange"
