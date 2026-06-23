@@ -43,9 +43,60 @@ class _StdoutCapture(io.TextIOBase):
 
 _SKIP_PARAMS = {"roi_slice", "_ang_data", "_grain_ids", "ref_pattern_set", "_roi_grain_mask", "_roi_grain_id"}   # non-serialisable / not useful to log
 
+def _run_summary_lines(p: dict) -> list:
+    """Human-readable interpretation of the most important run settings.
+
+    Returned without the leading '#'; `_write_params_txt` comments them out so
+    `_parse_params_txt` ignores them (they're a summary, not data).
+    """
+    ref_mode      = str(p.get("ref_mode", "single"))
+    per_grain_sim = bool(p.get("per_grain_simulated", False))
+
+    if ref_mode == "simulated":
+        ref_kind = "SIMULATED  (dynamically simulated from a master pattern)"
+        is_sim = True
+    elif ref_mode == "per_grain":
+        is_sim = per_grain_sim
+        ref_kind = ("SIMULATED  (per-grain: one simulated reference per grain)"
+                    if per_grain_sim else
+                    "EXPERIMENTAL  (per-grain: one measured reference per grain)")
+    else:  # "single" or anything unrecognised
+        ref_kind = "EXPERIMENTAL  (single measured reference pattern)"
+        is_sim = False
+
+    lines = [
+        "──────────────────────────────────────────",
+        " Run summary",
+        "──────────────────────────────────────────",
+        f"Reference pattern source : {ref_kind}",
+    ]
+    if is_sim:
+        lines.append(f"  Master pattern         : {p.get('master_pattern_path') or '(not set)'}")
+        eu = p.get("euler_deg", p.get("tfbc_euler_deg"))
+        if eu is not None:
+            lines.append(f"  Orientation (Euler °)  : {eu}")
+    else:
+        lines.append(f"  Reference position     : {p.get('ref_position')}")
+
+    sm = bool(p.get("spectral_match_ref", False))
+    lines.append(f"Spectral matching of ref : {'ON  (sim amplitude → exp template)' if sm else 'OFF'}")
+    lines.append(f"Optimizer                : {p.get('optimizer', 'icgn')}")
+    lines.append("──────────────────────────────────────────")
+    return lines
+
+
 def _write_params_txt(path: str, params: dict):
-    """Write all GUI run parameters to a human-readable .txt file."""
+    """Write all GUI run parameters to a human-readable .txt file.
+
+    Two sections:
+      • a '#'-commented SUMMARY interpreting the key settings (reference type,
+        spectral matching, optimizer) — skipped by `_parse_params_txt`;
+      • the full, machine-readable key/value dump of every parameter, so the
+        file remains a complete and round-trippable record of the run.
+    """
     lines = ["DIC-HREBSD Run Parameters", "=" * 40, ""]
+    lines += ["# " + s for s in _run_summary_lines(params)]
+    lines += ["", "# ---- all parameters (machine-readable) ----", ""]
     for key, val in sorted(params.items()):
         if key in _SKIP_PARAMS:
             continue
@@ -74,7 +125,8 @@ def _parse_params_txt(path: str) -> dict:
     with open(path) as f:
         for line in f:
             line = line.rstrip()
-            if not line or line.startswith("=") or line.startswith("DIC-HREBSD"):
+            if (not line or line.startswith("=") or line.startswith("#")
+                    or line.startswith("DIC-HREBSD")):
                 continue
             parts = line.split(None, 1)
             if len(parts) < 2:
