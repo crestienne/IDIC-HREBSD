@@ -20,6 +20,7 @@ from gui.gui_theme import THEME, _make_browse_row, _make_browse_dir, _note
 from gui.gui_workers import VisWorker
 from gui.gui_materials import _load_material_presets
 from analysis.Results_plotting import plot_all_results
+from gui.gui_settings import saved_figure_format
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -549,6 +550,7 @@ class VisualizationDialog(QDialog):
             "npy_path":          self._npy_edit.text(),
             "ang_path":          self._ang_edit.text(),
             "save_folder":       self._save_edit.text(),
+            "figure_format":     saved_figure_format(),
             "up2_path":          self._up2_edit.text(),
             "ref_position":      (self._ref_row.value(), self._ref_col.value()),
             # Step-3 processing (carried from the run) so the reference/neighbor

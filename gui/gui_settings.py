@@ -26,6 +26,11 @@ DEFAULT_MODE    = "dark"
 MIN_FONT_PT     = 9
 MAX_FONT_PT     = 22
 
+# Figure export format for saved result plots.  Vector formats (pdf/svg) keep
+# editable text so figures can be relabelled later in Illustrator/Inkscape.
+DEFAULT_FIG_FORMAT = "png"
+FIG_FORMATS        = ("png", "pdf", "svg")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # QSettings helpers
@@ -50,10 +55,19 @@ def saved_theme_mode() -> str:
     return v if v in ("dark", "light") else DEFAULT_MODE
 
 
-def save_settings(font_pt: int, theme_mode: str) -> None:
+def saved_figure_format() -> str:
+    """Return the persisted figure export format ("png" | "pdf" | "svg")."""
+    v = str(_settings().value("figure_format", DEFAULT_FIG_FORMAT)).lower()
+    return v if v in FIG_FORMATS else DEFAULT_FIG_FORMAT
+
+
+def save_settings(font_pt: int, theme_mode: str,
+                  figure_format: str = DEFAULT_FIG_FORMAT) -> None:
     s = _settings()
     s.setValue("font_point_size", int(font_pt))
     s.setValue("theme_mode", theme_mode if theme_mode in ("dark", "light") else DEFAULT_MODE)
+    s.setValue("figure_format",
+               figure_format if figure_format in FIG_FORMATS else DEFAULT_FIG_FORMAT)
     s.sync()
 
 
@@ -112,6 +126,15 @@ class SettingsDialog(QDialog):
         self._theme_combo.setCurrentIndex(idx)
         form.addRow("Colour theme:", self._theme_combo)
 
+        self._fmt_combo = QComboBox()
+        self._fmt_combo.addItem("PNG (raster)",            userData="png")
+        self._fmt_combo.addItem("SVG (vector, editable)",  userData="svg")
+        self._fmt_combo.addItem("PDF (vector, editable)",  userData="pdf")
+        cur_fmt = saved_figure_format()
+        fmt_idx = {"png": 0, "svg": 1, "pdf": 2}.get(cur_fmt, 0)
+        self._fmt_combo.setCurrentIndex(fmt_idx)
+        form.addRow("Saved figure format:", self._fmt_combo)
+
         outer.addLayout(form)
 
         note = QLabel(
@@ -136,7 +159,8 @@ class SettingsDialog(QDialog):
     def _on_save(self) -> None:
         font_pt = int(self._font_spin.value())
         mode    = self._theme_combo.currentData() or DEFAULT_MODE
-        save_settings(font_pt, mode)
+        fig_fmt = self._fmt_combo.currentData() or DEFAULT_FIG_FORMAT
+        save_settings(font_pt, mode, fig_fmt)
         QMessageBox.information(
             self, "Settings saved",
             "Settings have been saved.\n\nRestart the DIC-HREBSD GUI for the "

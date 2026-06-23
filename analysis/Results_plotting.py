@@ -13,8 +13,34 @@ the matplotlib backend before importing this module.
 import os
 
 import numpy as np
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+
+# Keep text in vector exports (PDF/SVG/EPS) as *real, editable text* rather than
+# outlined paths, so figures can be relabelled later in Illustrator/Inkscape.
+# Harmless for raster (PNG/JPG) output.
+mpl.rcParams["pdf.fonttype"] = 42      # TrueType, editable in Illustrator
+mpl.rcParams["ps.fonttype"]  = 42
+mpl.rcParams["svg.fonttype"] = "none"  # emit <text>, not vector outlines
+
+# Vector formats whose extension we may swap a default ".png"/".jpg" name to.
+_VECTOR_FORMATS = ("pdf", "svg", "eps")
+
+
+def _with_format(path, fmt):
+    """Return `path` with its extension replaced by `fmt` (e.g. 'svg').
+
+    `fmt` of None/"" or "png" leaves the path's own extension untouched, so
+    existing callers and non-GUI scripts are unaffected.
+    """
+    if not path or not fmt:
+        return path
+    fmt = str(fmt).lower().lstrip(".")
+    if fmt in ("png", "jpg", "jpeg") and path.lower().endswith("." + fmt):
+        return path
+    root, _ext = os.path.splitext(path)
+    return f"{root}.{fmt}"
 
 
 def _latex_sci(value: float, digits: int = 5) -> str:
@@ -423,7 +449,10 @@ def _export_ref_and_neighbor(params: dict):
     ax.legend()
     ax.grid(True, linestyle="--", alpha=0.4)
     fig.tight_layout()
-    hist_path = os.path.join(save, "Reference_neighbor_intensity_hist.png")
+    hist_path = _with_format(
+        os.path.join(save, "Reference_neighbor_intensity_hist.png"),
+        params.get("figure_format", "png"),
+    )
     fig.savefig(hist_path, dpi=200, bbox_inches="tight")
     plt.show(block=False)
     print(f"Saved {hist_path}")
@@ -455,6 +484,10 @@ def plot_all_results(results: dict, params: dict):
     rv   = params["rot_lim"]
     r    = min(params["linemap_row"], rows - 1)
     save = params.get("save_folder", "")
+    # "png" (default), "pdf", "svg", "eps".  Vector formats keep editable text
+    # (see rcParams at module top).  Filenames below are written with ".png"
+    # literals; _sp swaps the extension to the requested format.
+    fig_fmt = params.get("figure_format", "png")
 
     h11, h12, h13 = results["h11"], results["h12"], results["h13"]
     h21, h22, h23 = results["h21"], results["h22"], results["h23"]
@@ -464,7 +497,7 @@ def plot_all_results(results: dict, params: dict):
     w13, w21, w32 = results["w13"], results["w21"], results["w32"]
 
     def _sp(name):
-        return os.path.join(save, name) if save else None
+        return _with_format(os.path.join(save, name), fig_fmt) if save else None
 
     # The visualization dialog drives which optional plots run; the only
     # figure that is *always* rendered is the post-TFBC strain & rotation
