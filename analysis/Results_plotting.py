@@ -24,23 +24,24 @@ mpl.rcParams["pdf.fonttype"] = 42      # TrueType, editable in Illustrator
 mpl.rcParams["ps.fonttype"]  = 42
 mpl.rcParams["svg.fonttype"] = "none"  # emit <text>, not vector outlines
 
-# Vector formats whose extension we may swap a default ".png"/".jpg" name to.
-_VECTOR_FORMATS = ("pdf", "svg", "eps")
+# Only paths that already carry one of these *figure* extensions get their
+# format swapped — data exports (.csv, .tex, .txt, …) are left untouched.
+_FIGURE_EXTS = (".png", ".jpg", ".jpeg", ".pdf", ".svg", ".eps", ".tif", ".tiff")
 
 
 def _with_format(path, fmt):
-    """Return `path` with its extension replaced by `fmt` (e.g. 'svg').
+    """Return `path` with its (figure) extension replaced by `fmt` (e.g. 'svg').
 
-    `fmt` of None/"" or "png" leaves the path's own extension untouched, so
-    existing callers and non-GUI scripts are unaffected.
+    Only swaps when the path already ends in a known figure/image extension, so
+    CSV / TeX / other data files keep their own extension.  `fmt` of None/"" is
+    a no-op, leaving existing callers and non-GUI scripts unaffected.
     """
     if not path or not fmt:
         return path
-    fmt = str(fmt).lower().lstrip(".")
-    if fmt in ("png", "jpg", "jpeg") and path.lower().endswith("." + fmt):
+    root, ext = os.path.splitext(path)
+    if ext.lower() not in _FIGURE_EXTS:
         return path
-    root, _ext = os.path.splitext(path)
-    return f"{root}.{fmt}"
+    return f"{root}.{str(fmt).lower().lstrip('.')}"
 
 
 def _latex_sci(value: float, digits: int = 5) -> str:

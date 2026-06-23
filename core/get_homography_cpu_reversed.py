@@ -89,6 +89,7 @@ def optimize_reversed(
     roi_slice: tuple[slice, slice] = None,
     scan_shape: tuple = None,
     mask: np.ndarray = None,
+    roi_pixel_mask: np.ndarray = None,
     use_simulated_reference: bool = False,
     master_pattern_path: str = None,
     euler_angles_ref: np.ndarray = None,
@@ -142,6 +143,11 @@ def optimize_reversed(
     if n_jobs == -1:
         n_jobs = os.cpu_count() - 1
 
+    # Default: results fill output cells in order.  A grain mask
+    # (roi_pixel_mask) overrides this with the masked cell positions so the
+    # subset of computed results scatters back into the right cells.
+    out_positions = None
+
     if type(pats) == Data.UP2:
         if roi_slice is not None:
             if scan_shape is None:
@@ -154,6 +160,25 @@ def optimize_reversed(
             N = roi_nrows * roi_ncols
             out_shape = (roi_nrows, roi_ncols)
             roi_indices = roi_indices_from_rect(roi_slice, scan_shape)
+
+            # Optional grain mask within the ROI bounding box: only run the
+            # optimizer on True pixels; skipped pixels stay NaN in the output.
+            # Mirrors get_homography_cpu.optimize.
+            if roi_pixel_mask is not None:
+                mask_arr = np.asarray(roi_pixel_mask, dtype=bool)
+                if mask_arr.shape != (roi_nrows, roi_ncols):
+                    raise ValueError(
+                        f"roi_pixel_mask shape {mask_arr.shape} doesn't match "
+                        f"ROI bbox shape {(roi_nrows, roi_ncols)}."
+                    )
+                mask_flat = mask_arr.ravel()
+                roi_indices = roi_indices.ravel()[mask_flat]
+                out_positions = np.where(mask_flat)[0]
+                print(
+                    f"[reversed] roi_pixel_mask active: optimizing "
+                    f"{int(mask_flat.sum())} / {N} ROI patterns "
+                    f"(skipped {int((~mask_flat).sum())})."
+                )
         else:
             roi_indices = None
             N = pats.nPatterns
@@ -394,18 +419,23 @@ def optimize_reversed(
             for idx in idx_list
         )
 
-    homographies = np.zeros((N, 8), dtype=float)
-    homographies_guess = np.zeros((N, 8), dtype=float)
-    iterations = np.zeros(N, dtype=int)
-    residuals = np.zeros(N, dtype=float)
-    dp_norms = np.zeros(N, dtype=float)
+    # When a roi_pixel_mask filtered idx_list to a subset of the bbox, scatter
+    # the results into the bbox-flat array at `out_positions`; skipped positions
+    # stay NaN.  Without a mask, positions[k] == k (plain in-order fill).
+    homographies = np.full((N, 8), np.nan, dtype=float)
+    homographies_guess = np.full((N, 8), np.nan, dtype=float)
+    iterations = np.full(N, -1, dtype=int)   # sentinel for "skipped"
+    residuals = np.full(N, np.nan, dtype=float)
+    dp_norms = np.full(N, np.nan, dtype=float)
 
-    for idx, (h, p_guess, num_iter, residual, dpn) in enumerate(results):
-        homographies[idx] = h
-        homographies_guess[idx] = p_guess
-        iterations[idx] = num_iter
-        residuals[idx] = float(residual)
-        dp_norms[idx] = float(dpn)
+    positions_iter = range(len(results)) if out_positions is None else out_positions
+    for k, (h, p_guess, num_iter, residual, dpn) in enumerate(results):
+        pos = positions_iter[k]
+        homographies[pos] = h
+        homographies_guess[pos] = p_guess
+        iterations[pos] = num_iter
+        residuals[pos] = float(residual)
+        dp_norms[pos] = float(dpn)
         # progress_callback fires inside _ProgressTqdm.update() during the
         # joblib loop — no second emission needed after aggregation.
 
