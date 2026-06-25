@@ -73,6 +73,19 @@ python Run_GUI.py
 
 A window titled **DIC-HREBSD Pipeline** should appear.
 
+#### Running scripts (non-GUI)
+
+The codebase is organized as packages (`core/`, `fileio/`, `gui/`, `analysis/`,
+`scripts/`). Standalone scripts must be run as modules **from the repo root** so the
+packages resolve, e.g.:
+
+```
+python -m scripts.runner
+python -m analysis.figure_spectral_match
+```
+
+(Running `python scripts/runner.py` directly will not put the repo root on the path.)
+
 ---
 
 These HR-EBSD calculations implement the inverse compositional Gauss-Newton optimization routine for determining the linear homography required to warp a target EBSP to match a reference EBSP in Python. This code follows the HR-EBSD calculations outlined in the [ATEX](http://www.atex-software.eu) EBSD software developed by Jean-Jacques Fundenberger and Benoit Beausir. The code supports both vectorized GPU routines (through the `pytorch` package) and parallelized CPU routines (through the `mpire` package).
@@ -97,3 +110,50 @@ pip install PyQt6
 ### Important Geometry Instructions
 
 All functions currently run using the EDAX sample frame and a Bruker detector frame. This is the same setup utilized by kikuchipy, so if the reader would like more information regarding these two sample frames, they are highly encouraged to look [there](https://kikuchipy.org/en/stable/tutorials/reference_frames.html).
+
+### Layout
+
+`Run_GUI.py` (repo root) is the GUI entry point. Everything else is grouped into
+role-based packages:
+
+**`core/`** — the HR-EBSD engine and shared math:
+- get_homography_cpu.py - The primary pipeline for the IC-GN algorithm. Contains all code pertaining to the IC-GN algorithm
+- get_homography_cpu_reversed.py - an experimental script so the reversibility of the IC-GN algorithm can be tested
+- conversions.py - handles all conversions for the pattern center to internal pattern center conventions. The pattern center is defined internally utilizing the Bruker pattern center convention.
+- HREBSD.py - All code related to pattern simulation
+- warp.py, rotations.py, segment.py - image warping, rotation/quaternion math, grain segmentation
+- optimize_reference.py - pattern-center / Euler reference optimization
+- ErnouldsMethod.py - linear-homography HR-EBSD (EMEBSD-based), not used by the current GUI
+- multiple_ref.py, pc_homography_correction.py, pc_plane_fit.py - multi-reference handling and PC correction helpers
+- utilities.py - shared helpers (processing, plotting, elastic-constant math, Results class)
+
+**`fileio/`** — data I/O:
+- Data.py - reading in and processing experimental EBSD patterns, including .up2 reading and pre-processing
+- ebsd_io.py - low-level .up2 / .ang readers (split out of utilities.py)
+- write_up2.py - writing/binning .up2 files
+
+**`gui/`** — the PyQt6 wizard (plus `Materials/` stiffness-tensor presets):
+- gui_pages.py, gui_workers.py, gui_visualization.py, gui_theme.py
+- gui_help.py - help menu descriptions and formatting
+- gui_materials.py - materials GUI for adding stiffness tensors
+- gui_settings.py - in development; font size and theme settings
+
+**`analysis/`** — results visualization and figures:
+- Results_plotting.py, runner_results_vis.py
+- ipf_map.py - IPF map plotting
+- viz_samp2detectorATEX.py, figure_pc_shift_vs_strain.py, figure_spectral_match.py
+
+**`scripts/`** — standalone runnable scripts (run as `python -m scripts.<name>`):
+- runner.py, optimization_test.py, homography_validation.py
+- fmt_initial_shifts_scan.py, put_sharpness_in_ang.py
+
+**`PatternSimulation/`** — EMsoft master-pattern projection backend (`SimPatGen.py`).
+- warp.py 
+- write_up2.py
+
+### Main Todos
+
+- Add support for non cubic materials (specifically regarding the traction free boundary condition and the materials stiffness tensor)
+- Add support for non EDAX files (specfically Oxford)
+
+

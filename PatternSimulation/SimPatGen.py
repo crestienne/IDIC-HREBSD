@@ -32,7 +32,7 @@ _PARENT_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__fil
 if _PARENT_DIR not in sys.path:
     sys.path.insert(0, _PARENT_DIR)
 
-from HREBSD import (
+from core.HREBSD import (
     bu2qu_emsoft,
     project_HREBSD_pattern_energy_weighted,
     accum_e_to_detector,

@@ -1,37 +1,59 @@
+# Python
 *.pyc
+__pycache__/
+.venv/
+
+# OS
+.DS_Store
+results/.DS_Store
+
+# Data / binary formats (large)
+*.up2
+*.csv
+*.xlsx
 *.png
 *.tif
 *.tiff
 *.npy
 *.gif
 *.pkl
-debug/*
-.DS_Store
-4debsd_joint.py
-results/.DS_Store
-.venv/
-*.up2
-*.csv
-*.xlsx
+
+# Generated output dirs
 results/
-AlteredPC-Jan5/
-AlteredPC-Jan22/
-Feb25-PC/
-Feb24-PC/
-Feb8_PCAnalysis/
-Feb16_PCAnalysis/
-Feb23-PC/
-Feb27-PC/
+figures/
+debug/
+debug_optimization_output/
+fmt_initial_shifts_out/
+
+# Inputs (large local data)
 Inputs/Patterns/
 Inputs/EBSDpattern_Al_July222025.h5
 Inputs/ErnouldMethod_ang.ang
 Inputs/UP2 files/EBSDpattern_Al_July222025.h5
 Inputs/Al_master_July222025.h5
-utility/
+
+# Dated experiment output folders
+AlteredPC-Jan5/
+AlteredPC-Jan22/
+Feb8_PCAnalysis/
+Feb16_PCAnalysis/
+Feb23-PC/
+Feb24-PC/
+Feb25-PC/
+Feb27-PC/
 Mar1-PC/
-runner_scripts/deprecatedRunners/
-PatternSimulation/
+
+# Local-only scripts / scratch (kept untracked by request)
+4debsd_joint.py
+debug_optimization.py
 debug_two_patterns.py
 debug_simulated_reference.py
 fmt_initial_shifts_scan.py
-results/
+figure_pc_shift_vs_strain.py
+figure_spectral_match.py
+debug_scripts/
+
+# Other local dirs
+utility/
+runner_scripts/deprecatedRunners/
+PatternSimulation/

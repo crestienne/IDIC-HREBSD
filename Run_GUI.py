@@ -14,9 +14,6 @@ Module layout
 """
 
 import sys
-import os
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Set the matplotlib backend before any other matplotlib import.
 import matplotlib
@@ -26,8 +23,8 @@ from PyQt6.QtWidgets import QApplication, QWizard
 from PyQt6.QtCore import QPoint
 from PyQt6.QtGui import QFont, QPainter, QColor
 
-from gui_theme import apply_theme, set_theme_mode, THEME
-from gui_pages import (
+from gui.gui_theme import apply_theme, set_theme_mode, THEME
+from gui.gui_pages import (
     LoadFilesPage,
     ScanGeometryPage,
     ROISelectionPage,
@@ -35,8 +32,8 @@ from gui_pages import (
     PatternProcessingPage,
     OptimizationRunPage,
 )
-from gui_help import HelpDialog
-from gui_settings import (
+from gui.gui_help import HelpDialog
+from gui.gui_settings import (
     SettingsDialog, saved_font_pt, saved_theme_mode,
     ORG_NAME, APP_NAME,
 )
@@ -146,7 +143,7 @@ class HREBSDWizard(QWizard):
         from a previous pipeline run."""
         # Lazy import so we don't pay the matplotlib-dialog cost just
         # because the wizard opened.
-        from gui_visualization import VisualizationDialog
+        from gui.gui_visualization import VisualizationDialog
         dlg = VisualizationDialog({}, parent=self)
         dlg.show()
 
